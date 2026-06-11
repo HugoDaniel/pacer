@@ -40,4 +40,39 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
     test_step.dependOn(&run_tests.step);
+
+    // `zig build wasm` — pacer.wasm, the browser driver artifact. The
+    // SJON dependency is resolved a second time for wasm32 (modules
+    // carry their resolved target). Same flags as SJON's own artifacts:
+    // freestanding, no entry, rdynamic, ReleaseSmall.
+    const wasm_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    });
+    const sjon_wasm_dep = b.dependency("sjon", .{
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+        .@"plugin-exec" = false,
+    });
+    const wasm_mod = b.createModule(.{
+        .root_source_file = b.path("src/wasm_entry.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+        .link_libc = false,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_wasm_dep.module("sjon") },
+        },
+    });
+    wasm_mod.addAnonymousImport("pacer_schema", .{
+        .root_source_file = b.path("schema/pacer.sjon"),
+    });
+    const wasm = b.addExecutable(.{
+        .name = "pacer",
+        .root_module = wasm_mod,
+    });
+    wasm.entry = .disabled;
+    wasm.rdynamic = true;
+    const install_wasm = b.addInstallArtifact(wasm, .{});
+    const wasm_step = b.step("wasm", "Build pacer.wasm (browser driver artifact)");
+    wasm_step.dependOn(&install_wasm.step);
 }
