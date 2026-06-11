@@ -1,0 +1,16 @@
+{
+  "name": "pacer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "JS glue for pacer.wasm — deterministic animation driver conducted by an SJON score",
+  "exports": {
+    ".": "./src/index.js",
+    "./clock": "./src/clock.js",
+    "./route": "./src/route.js"
+  },
+  "scripts": {
+    "pretest": "cd ../.. && zig build wasm",
+    "test": "node --test"
+  }
+}

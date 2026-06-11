@@ -1,0 +1,139 @@
+// Smoke tests against the real pacer.wasm artifact (built by the
+// pretest hook: `zig build wasm`). Golden values mirror the Zig-side
+// Eval tests; key-tick values are compared bit-exactly via Math.fround
+// (the structural-landing guarantee survives the WASM boundary).
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { Pacer } from '../src/index.js';
+import { toUniforms, routeWrites } from '../src/route.js';
+import { masterClock } from '../src/clock.js';
+
+const wasmPath = fileURLToPath(new URL('../../../zig-out/bin/pacer.wasm', import.meta.url));
+const wasmModule = new WebAssembly.Module(readFileSync(wasmPath));
+
+const REGISTRIES = [
+  [{ name: 'radius' }, { name: 'tint', ncomp: 3 }],
+  [{ name: 'cutoff' }],
+];
+
+const SCORE = `(transport :bpm 120 :meter [4 4])
+(track :target radius
+  (key :at 0b :value 0.2)
+  (key :at 4b :value 0.8))
+(track :target tint
+  (key :at 0b :value [1 0 0])
+  (key :at 2b :value [0 1 0] :ease in-out-quad))
+(track :target cutoff
+  (key :at 0b :value 200)
+  (key :at 8b :value 8000))`;
+
+const TICKS_PER_BEAT = 180180n; // PPC 720720 / 4 beats per bar
+
+test('clean load: ok, no diagnostics, golden eval values', async () => {
+  const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
+  assert.equal(driver.ok, true);
+  assert.deepEqual(driver.diagnostics, []);
+
+  // Key ticks land bit-exactly on the f32 key values.
+  const atStart = driver.eval(0);
+  assert.equal(atStart.length, 3);
+  assert.equal(atStart[0].value[0], Math.fround(0.2));
+  assert.equal(driver.eval(2.0)[0].value[0], Math.fround(0.8)); // 4 beats
+
+  // Mid-segment linear: 0.2 + 0.6·0.5 = 0.5 (2 beats of 4).
+  assert.equal(driver.eval(1.0)[0].value[0], 0.5);
+
+  // Vector lanes: in-out-quad(0.5) = 0.5 at 1 beat of 2.
+  const tint = driver.eval(0.5)[1];
+  assert.equal(tint.ncomp, 3);
+  assert.ok(Math.abs(tint.value[0] - 0.5) < 1e-6);
+  assert.ok(Math.abs(tint.value[1] - 0.5) < 1e-6);
+  assert.equal(tint.value[3], 0);
+});
+
+test('evalTicks is the tick-domain twin of eval', async () => {
+  const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
+  assert.equal(driver.evalTicks(0n)[0].value[0], Math.fround(0.2));
+  assert.equal(driver.evalTicks(4n * TICKS_PER_BEAT)[0].value[0], Math.fround(0.8));
+  // 1.0 s at 120 bpm 4/4 is exactly 2 beats — same bytes both ways.
+  const bySeconds = driver.eval(1.0)[0].value[0];
+  assert.equal(driver.evalTicks(2n * TICKS_PER_BEAT)[0].value[0], bySeconds);
+});
+
+test('routing: registry split and pngine-style uniforms', async () => {
+  const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
+  const entries = driver.eval(1.0);
+
+  const [visual, audio] = routeWrites(entries, 2);
+  assert.deepEqual(visual.map((e) => e.name), ['radius', 'tint']);
+  assert.deepEqual(audio.map((e) => e.name), ['cutoff']);
+
+  const uniforms = toUniforms(entries, 0);
+  assert.equal(typeof uniforms.radius, 'number');
+  assert.equal(uniforms.tint.length, 3);
+  assert.equal(uniforms.cutoff, undefined);
+  const params = toUniforms(entries, 1);
+  assert.equal(typeof params.cutoff, 'number');
+});
+
+test('diagnostics: pacer + SJON codes with user-coordinate spans', async () => {
+  const badTarget = `(transport :bpm 120)
+(track :target nonexistent (key :at 0b :value 1))`;
+  const driver = await Pacer.load(wasmModule, badTarget, { registries: REGISTRIES });
+  assert.equal(driver.ok, false);
+  assert.equal(driver.eval(0), null);
+  assert.equal(driver.diagnostics.length, 1);
+  const diag = driver.diagnostics[0];
+  assert.equal(diag.source, 'pacer');
+  assert.equal(diag.severity, 'error');
+  assert.equal(badTarget.slice(diag.start, diag.end), 'nonexistent');
+  assert.match(diag.message, /nonexistent/);
+
+  // SJON validation diagnostics ride the same blob: bare position number.
+  const bareNumber = `(transport :bpm 120)
+(track :target radius (key :at 4 :value 1))`;
+  const { ok, diagnostics } = driver.reload(bareNumber);
+  assert.equal(ok, false);
+  const sjonDiag = diagnostics.find((d) => d.source === 'sjon');
+  assert.ok(sjonDiag);
+  assert.equal(bareNumber.slice(sjonDiag.start, sjonDiag.start + 1), '4');
+});
+
+test('reload recovers from a broken score', async () => {
+  const driver = await Pacer.load(wasmModule, '(broken', { registries: REGISTRIES });
+  assert.equal(driver.ok, false);
+  assert.equal(driver.eval(0), null);
+
+  const { ok } = driver.reload(SCORE);
+  assert.equal(ok, true);
+  assert.equal(driver.eval(1.0)[0].value[0], 0.5);
+});
+
+test('determinism: two instances produce byte-identical writes', async () => {
+  const score = `(transport :bpm 97 :meter [7 8] :dur 4bar :end loop)
+(track :target radius
+  (key :at 0b :value 0.1)
+  (key :at 3b :value 0.9 :ease (spring :damping 0.4 :periods 3)))
+(track :target tint
+  (key :at 0b :value [0 0 0])
+  (key :at 2bar :value [1 1 1] :ease in-out-expo))`;
+  const a = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  const b = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  for (const t of [0, 0.123456789, 1.5, 7.25, -2.5, 1e-9, 60.0]) {
+    assert.deepEqual(a.evalBytes(t), b.evalBytes(t), `divergence at t=${t}`);
+  }
+});
+
+test('masterClock: audio masters when playing, falls back otherwise', () => {
+  let playing = false;
+  const audio = { clock: () => ({ seconds: 42, playing }) };
+  const clock = masterClock(audio, () => 7);
+  assert.equal(clock(), 7);
+  playing = true;
+  assert.equal(clock(), 42);
+  const noAudio = masterClock(null, () => 7);
+  assert.equal(noAudio(), 7);
+});
