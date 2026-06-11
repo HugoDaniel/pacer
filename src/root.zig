@@ -40,6 +40,9 @@ pub const TrackTable = @import("TrackTable.zig");
 pub const Eval = @import("Eval.zig");
 /// Packed write-buffer wire format (`'PACW'` header + 20-byte entries).
 pub const Writes = @import("Writes.zig");
+/// WASM boundary blobs: `'PACT'` target-registry list in, `'PACD'`
+/// user-coordinate diagnostics out (`'PACW'` writes live in `Writes`).
+pub const Abi = @import("Abi.zig");
 
 test {
     _ = Compile;
@@ -48,6 +51,7 @@ test {
     _ = TrackTable;
     _ = Eval;
     _ = Writes;
+    _ = Abi;
 }
 
 test "sjon dependency wiring: tick grid + trig kernels reachable" {
