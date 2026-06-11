@@ -1,0 +1,31 @@
+//! pacer — deterministic animation driver conducted by an SJON score.
+//!
+//! The driver is a pure function of time: a host samples its master clock
+//! (audio when playing, `performance.now()` otherwise), passes one f64
+//! seconds value in, and receives a packed `(target, value)` write buffer
+//! out. It never reads a clock, never owns a loop, never touches the GPU
+//! or the audio graph — visual targets are routed by name through
+//! pngine's uniform reflection table, audio targets through the audio
+//! engine's param registry, both joined once at load.
+//!
+//! Memory model follows SJON's (see SJON `src/root.zig`): every public
+//! entry point takes `gpa: std.mem.Allocator` and returns an owned struct
+//! with arena-backed `.deinit()`; the struct never retains the caller's
+//! GPA. Time follows SJON's `Pattern` tick core: `i64` ticks on the
+//! `PPC = 720720` grid, overflow as diagnostics, floor-division cycle
+//! math. Determinism claim: same document + same f64 time → byte-identical
+//! write buffer, native and wasm32.
+
+const std = @import("std");
+const sjon = @import("sjon");
+
+/// Package version. Mirrors `build.zig.zon`.
+pub const version = "0.1.0";
+
+test "sjon dependency wiring: tick grid + trig kernels reachable" {
+    // The two SJON surfaces pacer is built on: the Pattern tick core and
+    // the deterministic math kernels. Reaching both through the module
+    // proves the path dep + re-exports are wired.
+    try std.testing.expectEqual(@as(i64, 0), @rem(sjon.Pattern.PPC, 16));
+    try std.testing.expectEqual(@as(f64, 1.0), sjon.trig.exp64(0.0));
+}

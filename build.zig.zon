@@ -1,0 +1,20 @@
+.{
+    .fingerprint = 0x507a7d3fd872437b,
+    .name = .pacer,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // SJON: schema-driven S-expression format + validator + Expr +
+        // the Pattern tick core and deterministic trig kernels. Path
+        // dependency (sibling repo), the pngine precedent. Consumed with
+        // `plugin-exec=false` (see build.zig) so no libwasmtime link.
+        .sjon = .{
+            .path = "../SJON",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
