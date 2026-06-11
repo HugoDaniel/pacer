@@ -22,8 +22,9 @@ const sjon = @import("sjon");
 /// Package version. Mirrors `build.zig.zon`.
 pub const version = "0.1.0";
 
-/// Score compiler: manifest prepend → `sjon.validateDocument` → (stage 2,
-/// later) the compiled `TrackTable`.
+/// Score compiler: manifest prepend → `sjon.validateDocument` → the
+/// compiled `TrackTable` (targets joined, ticks converted, programs
+/// deduped), with pacer's own wire-stable diagnostic codes.
 pub const Compile = @import("Compile.zig");
 /// Transport math: bpm/meter ↔ ticks/beats/seconds; the one documented
 /// mul+floor f64 seam.
@@ -32,11 +33,21 @@ pub const TimeMap = @import("TimeMap.zig");
 /// deterministic by construction (`sjon.trig` kernels + fixed-count
 /// bezier bisection).
 pub const Easing = @import("Easing.zig");
+/// Compiled score representation the frame path walks (tracks, keys in
+/// ticks, deduped easing programs).
+pub const TrackTable = @import("TrackTable.zig");
+/// Per-frame evaluator: seconds → ticks → packed write entries.
+pub const Eval = @import("Eval.zig");
+/// Packed write-buffer wire format (`'PACW'` header + 20-byte entries).
+pub const Writes = @import("Writes.zig");
 
 test {
     _ = Compile;
     _ = TimeMap;
     _ = Easing;
+    _ = TrackTable;
+    _ = Eval;
+    _ = Writes;
 }
 
 test "sjon dependency wiring: tick grid + trig kernels reachable" {
