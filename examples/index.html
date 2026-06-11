@@ -1,0 +1,119 @@
+<!doctype html>
+<!--
+  pacer — browser demo (driver strand step ④).
+
+  Serve from the repo root so the relative paths resolve:
+
+      zig build wasm
+      python3 -m http.server          # then open /examples/
+
+  The RAF loop samples performance.now() (the perf clock masters until
+  an audio host exists), passes one f64 to drv_eval through the npm
+  glue, and routes the write buffer into a 2D canvas scene. Editing the
+  score recompiles live — diagnostics appear under the editor with
+  spans in the score's own coordinates; the last good table keeps
+  animating until the text is clean again.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>pacer — browser demo</title>
+  <style>
+    body { margin: 0; display: flex; height: 100vh; font: 13px/1.5 ui-monospace, monospace; background: #14151a; color: #d8dbe2; }
+    #left { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 8px; min-width: 0; }
+    #score { flex: 1; background: #1c1e26; color: #d8dbe2; border: 1px solid #2c2f3a; border-radius: 6px; padding: 10px; font: inherit; resize: none; outline: none; white-space: pre; }
+    #score.bad { border-color: #b3475a; }
+    #diags { min-height: 4em; max-height: 10em; overflow: auto; margin: 0; color: #e58a9b; white-space: pre-wrap; }
+    #right { flex: 1; display: flex; align-items: center; justify-content: center; }
+    canvas { background: #0d0e12; border-radius: 8px; }
+    h1 { font-size: 14px; margin: 0; font-weight: 600; }
+    h1 small { color: #7a8094; font-weight: 400; }
+  </style>
+</head>
+<body>
+  <div id="left">
+    <h1>pacer <small>— the score is the UI; edit it</small></h1>
+    <textarea id="score" spellcheck="false">(transport :bpm 120 :meter [4 4] :dur 4bar :end loop)
+
+(track :target circle-radius
+  (key :at 0b  :value 30)
+  (key :at 8b  :value 110 :ease out-cubic)
+  (key :at 16b :value 30  :ease smoothstep))
+
+(track :target circle-y
+  (key :at 0b :value 0.72)
+  (key :at 4b :value 0.30
+    :ease (seq (stage :ease out-cubic   :t 0.4  :v 1.15)
+               (stage :ease in-out-quad :t 0.35 :v -0.18)
+               (stage :ease out-quad    :t 0.25 :v 0.03)))
+  (key :at 8b :value 0.72 :ease (spring :damping 0.45 :periods 3)))
+
+(track :target tint
+  (key :at 0b  :value [0.25 0.55 0.95])
+  (key :at 8b  :value [0.95 0.35 0.45] :ease in-out-sine)
+  (key :at 16b :value [0.25 0.55 0.95] :ease in-out-sine))</textarea>
+    <pre id="diags"></pre>
+  </div>
+  <div id="right"><canvas id="canvas" width="520" height="520"></canvas></div>
+
+  <script type="module">
+    import { Pacer } from '../npm/pacer/src/index.js';
+    import { perfClock } from '../npm/pacer/src/clock.js';
+    import { toUniforms } from '../npm/pacer/src/route.js';
+
+    const scoreEl = document.getElementById('score');
+    const diagsEl = document.getElementById('diags');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // The host registry IS the property space: these names are what the
+    // score may target (with pngine this list comes from the live
+    // uniform reflection table instead).
+    const registries = [[
+      { name: 'circle-radius' },
+      { name: 'circle-y' },
+      { name: 'tint', ncomp: 3 },
+    ]];
+
+    const wasmBytes = await fetch('../zig-out/bin/pacer.wasm').then((r) => r.arrayBuffer());
+    const driver = await Pacer.load(wasmBytes, scoreEl.value, { registries });
+    showDiags();
+
+    let debounce;
+    scoreEl.addEventListener('input', () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        driver.reload(scoreEl.value);
+        showDiags();
+      }, 150);
+    });
+
+    function showDiags() {
+      scoreEl.classList.toggle('bad', !driver.ok);
+      diagsEl.textContent = driver.diagnostics
+        .map((d) => `${d.source}/${d.severity} @${d.start}..${d.end}: ${d.message}`)
+        .join('\n');
+    }
+
+    const clock = perfClock();
+    let uniforms = { 'circle-radius': 30, 'circle-y': 0.72, tint: [0.25, 0.55, 0.95] };
+
+    function frame() {
+      // eval returns null while the score text is broken — the last
+      // good uniforms keep the scene alive (hold-last, like the driver).
+      const entries = driver.eval(clock());
+      if (entries) uniforms = toUniforms(entries, 0);
+
+      const { width: w, height: h } = canvas;
+      ctx.clearRect(0, 0, w, h);
+      const [r, g, b] = uniforms.tint;
+      ctx.fillStyle = `rgb(${r * 255} ${g * 255} ${b * 255})`;
+      ctx.beginPath();
+      ctx.arc(w / 2, uniforms['circle-y'] * h, uniforms['circle-radius'], 0, Math.PI * 2);
+      ctx.fill();
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
