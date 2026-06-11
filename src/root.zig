@@ -28,10 +28,15 @@ pub const Compile = @import("Compile.zig");
 /// Transport math: bpm/meter ↔ ticks/beats/seconds; the one documented
 /// mul+floor f64 seam.
 pub const TimeMap = @import("TimeMap.zig");
+/// Easing programs: flat compiled stage tables (seq/chain/primitives),
+/// deterministic by construction (`sjon.trig` kernels + fixed-count
+/// bezier bisection).
+pub const Easing = @import("Easing.zig");
 
 test {
     _ = Compile;
     _ = TimeMap;
+    _ = Easing;
 }
 
 test "sjon dependency wiring: tick grid + trig kernels reachable" {
