@@ -25,9 +25,13 @@ pub const version = "0.1.0";
 /// Score compiler: manifest prepend → `sjon.validateDocument` → (stage 2,
 /// later) the compiled `TrackTable`.
 pub const Compile = @import("Compile.zig");
+/// Transport math: bpm/meter ↔ ticks/beats/seconds; the one documented
+/// mul+floor f64 seam.
+pub const TimeMap = @import("TimeMap.zig");
 
 test {
     _ = Compile;
+    _ = TimeMap;
 }
 
 test "sjon dependency wiring: tick grid + trig kernels reachable" {
