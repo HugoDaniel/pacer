@@ -22,6 +22,14 @@ const sjon = @import("sjon");
 /// Package version. Mirrors `build.zig.zon`.
 pub const version = "0.1.0";
 
+/// Score compiler: manifest prepend → `sjon.validateDocument` → (stage 2,
+/// later) the compiled `TrackTable`.
+pub const Compile = @import("Compile.zig");
+
+test {
+    _ = Compile;
+}
+
 test "sjon dependency wiring: tick grid + trig kernels reachable" {
     // The two SJON surfaces pacer is built on: the Pattern tick core and
     // the deterministic math kernels. Reaching both through the module

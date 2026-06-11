@@ -1,0 +1,217 @@
+; pacer score schema — MVP slice: transport / track / key plus the easing
+; combinator forms.
+;
+; Single source of truth for what a pacer score may contain. The compiler
+; (`src/Compile.zig`) prepends this manifest to the user source and runs
+; `sjon.validateDocument`, so the data forms below are validated against
+; this plugin with no filesystem (works on wasm32-freestanding). It is
+; `@embedFile`'d via the `pacer_schema` build import — the pngine
+; precedent (`pngine/schema/pngine.sjon`).
+;
+; Deliberate omissions, landing with later build-order steps: `:expr`
+; tracks (Expr embedding), `(scene …)`/cue lists, `(control …)` pins,
+; compose-mode `(target …)` declarations.
+(plugin :name pacer :version "0.1.0"
+
+  ; ---- numeric / time value kinds ----
+  ; Score positions are numbers with a REQUIRED unit so positions read
+  ; like a score: `4b` (beats), `2bar` (bars), `1.5s` (seconds). A bare
+  ; number in a position slot is a validation error with a span, not a
+  ; silently-guessed unit.
+  (value-kind :name time-pos
+    :description "Score position / duration: a number carrying a required unit — b (beats), bar (bars), or s (seconds)."
+    :underlying number
+    :unit (unit-shape :required true :allowed [b bar s]))
+
+  (value-kind :name bpm-value
+    :description "Tempo in beats per minute. Fractional tempi are legal (e.g. 128.5)."
+    :underlying number
+    :numeric (numeric-bounds :min 1 :max 1000)
+    :unit (unit-shape :reject true))
+
+  ; PPC = 720720 subdivides exactly for 1..16, so a meter component in
+  ; that range keeps every beat on an exact integer tick.
+  (value-kind :name meter-component
+    :description "Time-signature component: integer 1..16 (the tick grid subdivides exactly in that range)."
+    :underlying number
+    :numeric (numeric-bounds :min 1 :max 16 :integer true)
+    :unit (unit-shape :reject true))
+  (value-kind :name meter-pair
+    :description "Time signature as [beats-per-bar note-value], e.g. [4 4]."
+    :underlying vector
+    :vector (vector-shape :len 2 :element meter-component))
+
+  (value-kind :name end-behavior
+    :description "What the driver does when the playhead passes :dur."
+    :underlying symbol
+    :members (member-set
+      (member :name loop :description "Wrap the playhead back to 0 (requires :dur).")
+      (member :name hold :description "Clamp at :dur; tracks keep emitting their final values.")))
+
+  ; ---- key values ----
+  (value-kind :name plain-number
+    :description "Unitless number."
+    :underlying number
+    :unit (unit-shape :reject true))
+  (value-kind :name vec-value
+    :description "Vector of 1-4 numbers (vec2/vec3/vec4 targets)."
+    :underlying vector
+    :vector (vector-shape :min-len 1 :max-len 4 :element plain-number))
+  (value-kind :name key-value
+    :description "Keyframe value: a scalar or a 1-4 component vector. Arity is joined against the resolved target at load."
+    :underlying union
+    :union (union-shape :alternatives [plain-number vec-value]))
+
+  ; ---- targets ----
+  ; Deliberately an unconstrained symbol: the animatable property space is
+  ; defined by the hosts at load() (pngine's uniform reflection table, the
+  ; audio engine's param registry), never enumerated here.
+  (value-kind :name target-name
+    :description "Target resolved at load() against the host registries (visual uniforms, audio params)."
+    :underlying symbol)
+
+  ; ---- easing ----
+  ; An easing is a unit map e: [0,1] -> R with e(0)=0, e(1)=1; output may
+  ; leave [0,1] (overshoot) and the keyframe lerp is unclamped. The :ease
+  ; slot is a union: a bare symbol from the closed named set (sugar for a
+  ; one-stage program) or a combinator form compiled to a flat stage table.
+  (value-kind :name ease-name
+    :description "Named easing primitive."
+    :underlying symbol
+    :members (member-set
+      (member :name linear)
+      (member :name hold :description "Step at the segment end: e(u)=0 until u=1.")
+      (member :name smoothstep)
+      (member :name in-quad)
+      (member :name out-quad)
+      (member :name in-out-quad)
+      (member :name in-cubic)
+      (member :name out-cubic)
+      (member :name in-out-cubic)
+      (member :name in-quart)
+      (member :name out-quart)
+      (member :name in-out-quart)
+      (member :name in-sine)
+      (member :name out-sine)
+      (member :name in-out-sine)
+      (member :name in-expo)
+      (member :name out-expo)
+      (member :name in-out-expo)))
+  (value-kind :name ease-form
+    :description "Easing combinator form."
+    :underlying form
+    :heads (head-set :names [seq chain steps cubic-bezier spring]))
+  (value-kind :name ease-spec
+    :description "An easing: a named primitive or a combinator form."
+    :underlying union
+    :union (union-shape :alternatives [ease-name ease-form]))
+
+  (value-kind :name stage-weight
+    :description "Relative weight (normalized once at compile, fixed op order)."
+    :underlying number
+    :numeric (numeric-bounds :min 0)
+    :unit (unit-shape :reject true))
+  (value-kind :name step-count
+    :description "Stair-step count."
+    :underlying number
+    :numeric (numeric-bounds :min 1 :max 64 :integer true)
+    :unit (unit-shape :reject true))
+  (value-kind :name jump-mode
+    :description "Which end of each stair tread jumps (CSS steps() semantics subset)."
+    :underlying symbol
+    :members (member-set
+      (member :name start)
+      (member :name end)))
+  (value-kind :name bezier-points
+    :description "CSS cubic-bezier control points [x1 y1 x2 y2]; x1/x2 must lie in [0,1] (checked at ease compile)."
+    :underlying vector
+    :vector (vector-shape :len 4 :element plain-number))
+  (value-kind :name damping-ratio
+    :description "Spring damping ratio in (0,1]: 1 = critically damped, lower = bouncier. Zero never settles and is rejected at ease compile."
+    :underlying number
+    :numeric (numeric-bounds :min 0 :max 1)
+    :unit (unit-shape :reject true))
+  (value-kind :name period-count
+    :description "Spring oscillation count over the segment."
+    :underlying number
+    :numeric (numeric-bounds :min 0.5 :max 16)
+    :unit (unit-shape :reject true))
+
+  ; ---- positional head-sets ----
+  ; Head-set entries text-match the document's head as written
+  ; (`Validator.zig` matchTyped), so `key` is bare here even though the
+  ; meta-schema also declares a `key` form — no ambiguity arises because
+  ; heads are compared, not resolved.
+  (value-kind :name key-section
+    :description "Keyframe children of (track …)."
+    :underlying form
+    :heads (head-set :names [key]))
+  (value-kind :name stage-section
+    :description "Stage children of (seq …)."
+    :underlying form
+    :heads (head-set :names [stage]))
+
+  ; =====================================================================
+  ; Top-level forms
+  ; =====================================================================
+
+  (form :name transport
+    :description "Global clock: tempo, meter, duration, end behavior. One per score."
+    (key :name bpm :type bpm-value
+      :description "Beats per minute.")
+    (key :name meter :type meter-pair :optional true
+      :description "Time signature; defaults to [4 4]. One bar = one tick-grid cycle.")
+    (key :name dur :type time-pos :optional true
+      :description "Score length. Required when :end is loop.")
+    (key :name end :type end-behavior :optional true
+      :description "Playhead behavior past :dur; defaults to hold."))
+
+  (form :name track
+    :description "One animated target: keyframe children interpolated with easing programs. Hosts receive final values and never interpolate."
+    :positional key-section
+    (key :name target :type target-name
+      :description "Resolved at load() against the ordered host registries; unresolved names are a load diagnostic, not a schema error."))
+
+  (form :name key
+    :description "A keyframe. Before the first key a track holds its first value; after the last, its last."
+    (key :name at :type time-pos
+      :description "Position on the shared tick grid; beats/bars convert exactly, seconds via one documented mul+floor.")
+    (key :name value :type key-value
+      :description "Value reached exactly at :at.")
+    (key :name ease :type ease-spec :optional true
+      :description "Easing applied over the segment ENDING at this key; defaults to linear."))
+
+  ; ---- easing combinator forms ----
+  (form :name seq
+    :description "Stages concatenated in time and value acting as one easing: :t/:v weights are normalized at compile so the program still lands exactly on the key value."
+    :positional stage-section)
+
+  (form :name stage
+    :description "One (seq …) stage."
+    (key :name ease :type ease-spec
+      :description "Easing shaping this stage (nesting depth is capped at compile).")
+    (key :name t :type stage-weight
+      :description "Relative time weight.")
+    (key :name v :type plain-number
+      :description "Relative value span; may be negative (the pull-back of a bounce)."))
+
+  (form :name chain
+    :description "Function composition: (chain E1 E2) evaluates E2(E1(u)). For shaping, e.g. quantizing a spring through steps."
+    :positional ease-spec)
+
+  (form :name steps
+    :description "Stair-step easing."
+    (key :name n :type step-count)
+    (key :name jump :type jump-mode :optional true
+      :description "Defaults to end."))
+
+  (form :name cubic-bezier
+    :description "CSS cubic-bezier(): solved by fixed-count bisection (bit-exact, no epsilon early-exit)."
+    (key :name p :type bezier-points))
+
+  (form :name spring
+    :description "Closed-form damped cosine settling exactly on the key value at u=1."
+    (key :name damping :type damping-ratio)
+    (key :name periods :type period-count :optional true
+      :description "Defaults to 3."))
+)
