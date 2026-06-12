@@ -208,6 +208,20 @@ pub const CompileResult = struct {
         }
         return null;
     }
+
+    /// Live tempo nudge (`drv_setBpm`): rebuild the seconds↔ticks
+    /// projection at the new tempo. A live `Eval.Evaluator` borrowing
+    /// this result picks the change up on its next eval. Musical
+    /// positions are ticks and stay put — including positions authored
+    /// in `s`, which were converted at load with the load-time tempo
+    /// (the standard tempo-nudge semantic). False (no change) when no
+    /// table is loaded or bpm is outside the manifest's 1..1000 bounds.
+    pub fn setBpm(self: *CompileResult, bpm: f64) bool {
+        if (!std.math.isFinite(bpm) or bpm < 1 or bpm > 1000) return false;
+        const tb = if (self.table) |*tb| tb else return false;
+        tb.transport.map = TimeMap.init(bpm, tb.transport.map.beats_per_bar);
+        return true;
+    }
 };
 
 /// Compile a score against the host registries. The frame path needs

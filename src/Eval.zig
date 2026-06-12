@@ -26,6 +26,16 @@
 //! omission keeps the write buffer a pure function of time: whether a
 //! write exists at time t never depends on what was evaluated before.
 //!
+//! Controls are the one deliberate piece of API state: the buffer is a
+//! pure function of (time, control state) — same table, same tick, same
+//! held values ⇒ same bytes. Control writes land AFTER track writes and
+//! consumers apply entries in order, so a pin outranks a track on the
+//! same target. A document control always writes (its `:value` is the
+//! document's authority; `setControl` replaces it until `clearControl`);
+//! a dynamic slot (`registerControl`, editor lifts) writes only while
+//! held. Control values also feed the expr env — a held widget steers
+//! `(* knob (sin beat))` on the same frame.
+//!
 //! Fixed-order float seams, in order of application:
 //!   1. `u = (t - a.at) / (b.at - a.at)` — exact i64→f64 (ticks < 2^53),
 //!      one division;
@@ -51,6 +61,25 @@ pub const Tick = sjon.Pattern.Tick;
 /// path is total once conversion succeeded.
 pub const Error = TimeMap.Error;
 
+/// Dynamic control slots available beyond the document's own
+/// (`registerControl` — editor-lifted literals with no `(control …)`
+/// in the text).
+pub const MAX_DYNAMIC_CONTROLS = 64;
+
+/// Sentinel target id of an env-only document control (writes nothing).
+pub const NO_TARGET: u16 = std.math.maxInt(u16);
+
+/// Runtime state of one control. The index space is document controls
+/// first (table order), then dynamic slots in registration order.
+const ControlSlot = struct {
+    target_id: u16,
+    registry: u8,
+    ncomp: u8,
+    /// Live override (`setControl`); null = idle. Document controls
+    /// fall back to their `:value`; dynamic slots emit nothing.
+    live: ?[4]f32,
+};
+
 /// Frame evaluator over a compiled score. The `CompileResult` is
 /// borrowed whole (expr tracks need its tree + schema, not just the
 /// table), must already sit in its final memory location (it is moved
@@ -72,9 +101,14 @@ pub const Evaluator = struct {
     /// the gpa.
     scratch: []u8,
     /// Control bindings handed to every expr evaluation, one per
-    /// document control (names alias the table). Values are the
-    /// document `:value`s until a live override rewrites them.
+    /// document control (names alias the table). Values are refreshed
+    /// each eval: a live override, else the document `:value`.
     ctl_bindings: []ExprTrack.ControlBinding,
+    /// Control runtime state: `table.controls.len` document slots, then
+    /// `MAX_DYNAMIC_CONTROLS` capacity for dynamic ones.
+    slots: []ControlSlot,
+    /// Live count of registered dynamic slots.
+    dyn_controls: usize = 0,
     /// Lifetime count of expr-track evaluations that failed at runtime
     /// (their writes were omitted). A debugging probe, not semantics.
     expr_failures: u64 = 0,
@@ -87,7 +121,10 @@ pub const Evaluator = struct {
         errdefer arena.deinit();
         const seg_cache = try arena.allocator().alloc(u32, table.tracks.len);
         @memset(seg_cache, 0);
-        const entries = try arena.allocator().alloc(Writes.Entry, table.tracks.len);
+        const entries = try arena.allocator().alloc(
+            Writes.Entry,
+            table.tracks.len + table.controls.len + MAX_DYNAMIC_CONTROLS,
+        );
         var has_expr = false;
         for (table.tracks) |tr| {
             if (tr.source == .expr) has_expr = true;
@@ -100,6 +137,15 @@ pub const Evaluator = struct {
         for (ctl_bindings, table.controls) |*b, ctl| {
             b.* = .{ .name = ctl.id, .value = ctl.value, .ncomp = ctl.ncomp };
         }
+        const slots = try arena.allocator().alloc(ControlSlot, table.controls.len + MAX_DYNAMIC_CONTROLS);
+        for (slots[0..table.controls.len], table.controls) |*s, ctl| {
+            s.* = .{
+                .target_id = if (ctl.target) |tg| tg.id else NO_TARGET,
+                .registry = if (ctl.target) |tg| tg.registry else 0,
+                .ncomp = ctl.ncomp,
+                .live = null,
+            };
+        }
         return .{
             .arena = arena,
             .table = table,
@@ -109,7 +155,47 @@ pub const Evaluator = struct {
             .entries = entries,
             .scratch = scratch,
             .ctl_bindings = ctl_bindings,
+            .slots = slots,
         };
+    }
+
+    /// Hold a live control value (a widget drag). Replaces the document
+    /// authority until `clearControl`. False (no change) on a bad index
+    /// or any non-finite component — control values feed expressions and
+    /// the determinism claim needs canonical floats; host input, so an
+    /// error result, never an assert.
+    pub fn setControl(self: *Evaluator, index: usize, value: [4]f32) bool {
+        if (index >= self.table.controls.len + self.dyn_controls) return false;
+        for (value) |v| {
+            if (!std.math.isFinite(v)) return false;
+        }
+        self.slots[index].live = value;
+        return true;
+    }
+
+    /// Release a held control: a document control returns to its
+    /// `:value`, a dynamic slot falls silent. False on a bad index.
+    pub fn clearControl(self: *Evaluator, index: usize) bool {
+        if (index >= self.table.controls.len + self.dyn_controls) return false;
+        self.slots[index].live = null;
+        return true;
+    }
+
+    /// Register a dynamic control slot for an editor-lifted literal (no
+    /// `(control …)` in the text). The caller supplies the resolved
+    /// join — the table dropped target names at load. Returns the slot's
+    /// index in the shared control index space, or null when the slot
+    /// capacity is exhausted or the join is malformed. Dynamic slots
+    /// write only while held and never enter the expr env (no binding
+    /// name exists for them).
+    pub fn registerControl(self: *Evaluator, target_id: u16, registry: u8, ncomp: u8) ?usize {
+        if (ncomp < 1 or ncomp > 4) return null;
+        if (target_id == NO_TARGET) return null;
+        if (self.dyn_controls == MAX_DYNAMIC_CONTROLS) return null;
+        const index = self.table.controls.len + self.dyn_controls;
+        self.slots[index] = .{ .target_id = target_id, .registry = registry, .ncomp = ncomp, .live = null };
+        self.dyn_controls += 1;
+        return index;
     }
 
     pub fn deinit(self: *Evaluator) void {
@@ -137,6 +223,11 @@ pub const Evaluator = struct {
                 .loop => t = @mod(t, dur),
                 .hold => t = @min(t, dur),
             }
+        }
+        // Effective control values for this frame's expressions: a live
+        // override wins, else the document `:value`.
+        for (self.ctl_bindings, self.slots[0..self.ctl_bindings.len], table.controls) |*b, slot, ctl| {
+            b.value = slot.live orelse ctl.value;
         }
         var n: usize = 0;
         for (table.tracks, 0..) |*track, i| {
@@ -171,6 +262,30 @@ pub const Evaluator = struct {
                     n += 1;
                 },
             }
+        }
+        // Control writes land AFTER track writes — consumers apply
+        // entries in order, so a pin (or a held widget) outranks a
+        // track on the same target. Document controls always write;
+        // dynamic slots only while held.
+        for (self.slots[0..table.controls.len], table.controls) |slot, ctl| {
+            if (slot.target_id == NO_TARGET) continue;
+            self.entries[n] = .{
+                .target_id = slot.target_id,
+                .flags = slot.registry,
+                .ncomp = slot.ncomp,
+                .value = slot.live orelse ctl.value,
+            };
+            n += 1;
+        }
+        for (self.slots[table.controls.len..][0..self.dyn_controls]) |slot| {
+            const live = slot.live orelse continue;
+            self.entries[n] = .{
+                .target_id = slot.target_id,
+                .flags = slot.registry,
+                .ncomp = slot.ncomp,
+                .value = live,
+            };
+            n += 1;
         }
         std.debug.assert(n <= self.entries.len);
         return self.entries[0..n];
@@ -444,6 +559,149 @@ test "expr tracks read document control values" {
     var ev = try Evaluator.init(t_.allocator, &r);
     defer ev.deinit();
     try t_.expectEqual(@as(f32, 1), ev.evalTicks(0)[0].value[0]);
+}
+
+test "document control writes after the track; live override wins; clear restores" {
+    var r = try compileScore(
+        \\(transport :bpm 120)
+        \\(control :id knob :target radius :value 0.4)
+        \\(track :target radius
+        \\  (key :at 0b :value 0.0)
+        \\  (key :at 4b :value 1.0))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+    const at2 = try map.tickFromBeats(2);
+
+    // Track write first (mid-segment 0.5), control write last — the pin
+    // outranks the score for in-order consumers.
+    const idle = ev.evalTicks(at2);
+    try t_.expectEqual(@as(usize, 2), idle.len);
+    try t_.expectEqual(@as(f32, 0.5), idle[0].value[0]);
+    try t_.expectEqual(@as(f32, 0.4), idle[1].value[0]);
+    try t_.expectEqual(@as(u16, 0), idle[1].target_id);
+
+    try t_.expect(ev.setControl(0, .{ 0.9, 0, 0, 0 }));
+    try t_.expectEqual(@as(f32, 0.9), ev.evalTicks(at2)[1].value[0]);
+
+    try t_.expect(ev.clearControl(0));
+    try t_.expectEqual(@as(f32, 0.4), ev.evalTicks(at2)[1].value[0]);
+}
+
+test "env-only controls feed expressions live and write nothing" {
+    var r = try compileScore(
+        \\(transport :bpm 120)
+        \\(control :id sway :value 0.5)
+        \\(track :target radius :expr (* sway 2))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    const idle = ev.evalTicks(0);
+    try t_.expectEqual(@as(usize, 1), idle.len); // no control write entry
+    try t_.expectEqual(@as(f32, 1), idle[0].value[0]);
+
+    try t_.expect(ev.setControl(0, .{ 0.25, 0, 0, 0 }));
+    try t_.expectEqual(@as(f32, 0.5), ev.evalTicks(0)[0].value[0]);
+    try t_.expect(ev.clearControl(0));
+    try t_.expectEqual(@as(f32, 1), ev.evalTicks(0)[0].value[0]);
+}
+
+test "dynamic control slots write only while held" {
+    var r = try compileScore(
+        \\(transport :bpm 120)
+        \\(track :target radius
+        \\  (key :at 0b :value 0.0)
+        \\  (key :at 4b :value 1.0))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    // Lift the tint uniform (target id 1, vec3) without any text pin.
+    const idx = ev.registerControl(1, 0, 3).?;
+    try t_.expectEqual(@as(usize, 1), ev.evalTicks(0).len); // idle: silent
+
+    try t_.expect(ev.setControl(idx, .{ 1, 2, 3, 0 }));
+    const held = ev.evalTicks(0);
+    try t_.expectEqual(@as(usize, 2), held.len);
+    try t_.expectEqual(@as(u16, 1), held[1].target_id);
+    try t_.expectEqual(@as(u8, 3), held[1].ncomp);
+    try t_.expectEqual(@as(f32, 2), held[1].value[1]);
+
+    try t_.expect(ev.clearControl(idx));
+    try t_.expectEqual(@as(usize, 1), ev.evalTicks(0).len);
+}
+
+test "setControl rejects bad indices and non-finite values" {
+    var r = try compileScore(
+        \\(transport :bpm 120)
+        \\(control :id knob :target radius :value 0.4)
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    try t_.expect(!ev.setControl(1, .{ 0, 0, 0, 0 })); // no dynamic slot registered
+    try t_.expect(!ev.setControl(0, .{ std.math.nan(f32), 0, 0, 0 }));
+    try t_.expect(!ev.setControl(0, .{ 0, std.math.inf(f32), 0, 0 }));
+    try t_.expect(!ev.clearControl(7));
+    // The rejected calls changed nothing: the document value still writes.
+    try t_.expectEqual(@as(f32, 0.4), ev.evalTicks(0)[0].value[0]);
+}
+
+test "setBpm rescales the seconds projection; the tick grid stands still" {
+    var r = try compileScore(
+        \\(transport :bpm 120)
+        \\(track :target radius
+        \\  (key :at 0b :value 0.0)
+        \\  (key :at 4b :value 1.0))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    // 1 s at 120 bpm = 2 beats → 0.5.
+    try t_.expectEqual(@as(f32, 0.5), (try ev.evalSeconds(1.0))[0].value[0]);
+    try t_.expect(r.setBpm(60));
+    // 1 s at 60 bpm = 1 beat → 0.25; the borrowed evaluator sees it.
+    try t_.expectEqual(@as(f32, 0.25), (try ev.evalSeconds(1.0))[0].value[0]);
+    // Tick-domain results are tempo-independent.
+    const map = &r.table.?.transport.map;
+    try t_.expectEqual(@as(f32, 0.5), ev.evalTicks(try map.tickFromBeats(2))[0].value[0]);
+
+    try t_.expect(!r.setBpm(0));
+    try t_.expect(!r.setBpm(std.math.nan(f64)));
+    try t_.expectEqual(@as(f64, 60), r.table.?.transport.map.bpm);
+}
+
+test "determinism holds under identical control state" {
+    var r = try compileScore(
+        \\(transport :bpm 97 :meter [7 8])
+        \\(control :id knob :target radius :value 0.4)
+        \\(control :id sway :value 0.3)
+        \\(track :target tint :expr [sway (sin (* sway beat)) phase])
+    );
+    defer r.deinit();
+
+    var buf_a: [Writes.encodedLen(3)]u8 align(4) = undefined;
+    var buf_b: [Writes.encodedLen(3)]u8 align(4) = undefined;
+    for ([_]f64{ 0.0, 1.5, 7.25 }) |s| {
+        var a = try Evaluator.init(t_.allocator, &r);
+        defer a.deinit();
+        var b = try Evaluator.init(t_.allocator, &r);
+        defer b.deinit();
+        try t_.expect(a.setControl(0, .{ 0.7, 0, 0, 0 }));
+        try t_.expect(b.setControl(0, .{ 0.7, 0, 0, 0 }));
+        try t_.expect(a.setControl(1, .{ 0.6, 0, 0, 0 }));
+        try t_.expect(b.setControl(1, .{ 0.6, 0, 0, 0 }));
+        const wa = try Writes.encode(try a.evalSeconds(s), &buf_a);
+        const wb = try Writes.encode(try b.evalSeconds(s), &buf_b);
+        try t_.expectEqualSlices(u8, wa, wb);
+    }
 }
 
 test "segment cache survives scrubbing backwards" {
