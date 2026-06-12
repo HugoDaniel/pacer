@@ -6,6 +6,7 @@
   "description": "JS glue for pacer.wasm — deterministic animation driver conducted by an SJON score",
   "exports": {
     ".": "./src/index.js",
+    "./audio": "./src/audio.js",
     "./clock": "./src/clock.js",
     "./route": "./src/route.js"
   },
