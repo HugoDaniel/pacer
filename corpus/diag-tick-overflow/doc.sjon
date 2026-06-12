@@ -1,0 +1,7 @@
+; ~1e17 beats × 180180 ticks/beat blows the 2^53 tick ceiling — the
+; checked conversion trips the pacer_tick_overflow diagnostic at load.
+(transport :bpm 120 :meter [4 4])
+
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 99999999999999999b :value 1))

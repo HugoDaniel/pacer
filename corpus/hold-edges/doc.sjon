@@ -1,0 +1,8 @@
+; hold semantics at every edge: a negative clock holds the FIRST key's
+; value (no wrap without :end loop), time past :dur clamps to dur, and
+; the gaps before/after the keys hold first/last.
+(transport :bpm 120 :meter [4 4] :dur 1bar)
+
+(track :target level
+  (key :at 1b :value 0.25)
+  (key :at 3b :value 0.75))

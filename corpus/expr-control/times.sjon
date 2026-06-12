@@ -1,0 +1,13 @@
+; one beat = 0.5 s at 120 bpm 4/4. `sway` is env-only (no :target) so
+; it binds into expressions but never writes; `gain` is depth's target
+; and writes every frame, after all track writes.
+(target wave :registry 0)
+(target spike :registry 0)
+(target mod :registry 0)
+(target gain :registry 1)
+(times
+  "0000000000000000" ; beat 0 — wave 0.5, spike 1/(0-1) = -1, mod 0.125
+  "3FD0000000000000" ; beat 0.5 — sin(pi) residue pinned bit-exactly
+  "3FE0000000000000" ; beat 1 — spike divides by zero: write OMITTED
+  "3FE4000000000000" ; beat 1.25 — sin(2.5pi) = 1: wave 1.0, spike 4
+)

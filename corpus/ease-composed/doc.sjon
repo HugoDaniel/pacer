@@ -1,0 +1,21 @@
+; the easing zoo: a (seq …) with overshoot and a negative pull-back
+; stage (the unclamped lerp extrapolates past the key value), a spring
+; (vendored exp64/cos64 kernels), and a chain quantizing a cubic-bezier
+; through steps (fixed-count bisection, no epsilon early-exit).
+(transport :bpm 120 :meter [4 4])
+
+(track :target logo-y
+  (key :at 0b :value 0)
+  (key :at 2b :value 1
+    :ease (seq (stage :ease out-cubic   :t 0.4  :v 1.15)
+               (stage :ease in-out-quad :t 0.35 :v -0.18)
+               (stage :ease out-quad    :t 0.25 :v 0.03))))
+
+(track :target wobble
+  (key :at 0b :value 0)
+  (key :at 4b :value 1 :ease (spring :damping 0.3 :periods 3)))
+
+(track :target swatch
+  (key :at 0b :value 0)
+  (key :at 4b :value 1
+    :ease (chain (cubic-bezier :p [0.4 0 0.2 1]) (steps :n 4 :jump end))))

@@ -1,0 +1,5 @@
+; load fails — the golden pins the 'PACD' record (source pacer, the
+; wire-stable code, user-coordinate span, message text). Times are
+; required by the harness but never evaluated.
+(target radius :registry 0)
+(times "0000000000000000")

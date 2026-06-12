@@ -1,0 +1,14 @@
+; the seq segment spans 2 beats = 1.0 s; spring/chain span 4 beats = 2.0 s.
+(target logo-y :registry 0)
+(target wobble :registry 0)
+(target swatch :registry 0)
+(times
+  "0000000000000000" ; 0.0 s — every easing starts at exactly the key value
+  "3FD0000000000000" ; 0.25 s — seq mid stage 1; spring/chain at u = 0.125
+  "3FD999999999999A" ; 0.4 s — seq stage 1→2 boundary (lands 1.15: overshoot)
+  "3FE0000000000000" ; 0.5 s — seq mid stage 2 (pull-back); spring u = 0.25
+  "3FE6666666666666" ; 0.7 s — seq mid stage 3 (settle)
+  "3FF0000000000000" ; 1.0 s — seq lands exactly 1; spring u = 0.5
+  "3FF8000000000000" ; 1.5 s — spring/chain at u = 0.75
+  "4000000000000000" ; 2.0 s — spring and chain land exactly 1
+)

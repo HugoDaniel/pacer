@@ -1,0 +1,7 @@
+; an SJON validation defect (the key form is missing :value) — pins a
+; source=sjon 'PACD' record: SJON's wire-stable code, the manifest→user
+; span mapping, and the message text, across native and wasm.
+(transport :bpm 120 :meter [4 4])
+
+(track :target radius
+  (key :at 0b))

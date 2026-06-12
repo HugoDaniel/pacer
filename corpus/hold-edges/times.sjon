@@ -1,0 +1,14 @@
+; :dur 1bar = 4 beats = 2.0 s at 120 bpm 4/4. The last three times pin
+; the out-of-range contract: non-finite seconds and a clock beyond the
+; 2^53 tick ceiling produce NO buffer (drv_eval length 0), not garbage.
+(target level :registry 0)
+(times
+  "BFF0000000000000" ; -1.0 s — negative clock: hold the first value (0.25)
+  "0000000000000000" ; 0.0 s — before the first key (0.25)
+  "3FF0000000000000" ; 1.0 s — 2 beats, mid-segment (0.5)
+  "4000000000000000" ; 2.0 s — exactly dur, past the last key (0.75)
+  "4014000000000000" ; 5.0 s — clamped to dur (0.75)
+  "7FF0000000000000" ; +inf — out of range
+  "7FF8000000000000" ; NaN — out of range
+  "7E37E43C8800759C" ; 1e300 s — overflows the tick grid: out of range
+)

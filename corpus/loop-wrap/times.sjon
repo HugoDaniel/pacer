@@ -1,0 +1,10 @@
+; :dur 2bar = 8 beats = 4.0 s at 120 bpm 4/4.
+(target phase :registry 0)
+(times
+  "3FF0000000000000" ; 1.0 s — inside the first cycle (0.25)
+  "4010000000000000" ; 4.0 s — exactly dur: wraps to tick 0 (0.0)
+  "4014000000000000" ; 5.0 s — second cycle (0.25)
+  "BFF0000000000000" ; -1.0 s — floor-mod wraps to 6 beats (0.75)
+  "4022000000000000" ; 9.0 s — third cycle (0.25)
+  "4059000000000000" ; 100.0 s — 25 whole cycles: wraps to 0 (0.0)
+)

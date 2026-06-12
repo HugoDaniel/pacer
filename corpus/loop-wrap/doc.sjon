@@ -1,0 +1,7 @@
+; transport loop: ticks wrap by floor-mod, so a negative clock wraps
+; POSITIVELY into the cycle (the corpus pins that semantic).
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(track :target phase
+  (key :at 0b :value 0)
+  (key :at 8b :value 1))

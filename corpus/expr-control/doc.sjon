@@ -1,0 +1,18 @@
+; expr tracks + control pins: the sin/tau kernels, control ids as expr
+; bindings (a targeted control AND an env-only knob), the control write
+; landing AFTER track writes, and the runtime-failure contract — spike
+; divides by zero at exactly beat 1, so its write is OMITTED for that
+; frame (a pure function of time: omission never depends on history).
+(transport :bpm 120 :meter [4 4])
+
+(control :id depth :target gain :min 0 :max 1 :value 0.25)
+(control :id sway :value 0.5)
+
+(track :target wave
+  :expr (+ 0.5 (* 0.5 (sin (* (tau) beat)))))
+
+(track :target spike
+  :expr (/ 1 (- beat 1)))
+
+(track :target mod
+  :expr (* depth sway))
