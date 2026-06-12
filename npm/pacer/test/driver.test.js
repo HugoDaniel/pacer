@@ -112,6 +112,34 @@ test('reload recovers from a broken score', async () => {
   assert.equal(driver.eval(1.0)[0].value[0], 0.5);
 });
 
+test('expr tracks evaluate through the boundary', async () => {
+  const score = `(transport :bpm 120 :meter [4 4])
+(track :target radius :expr (+ 0.25 (* 0.25 beat)))
+(track :target tint :expr [phase phase phase])`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  assert.equal(driver.ok, true);
+
+  // beat = 2·seconds at 120 bpm; phase = beat/4 — all dyadic-exact.
+  assert.equal(driver.eval(0)[0].value[0], 0.25);
+  const at1s = driver.eval(1.0);
+  assert.equal(at1s[0].value[0], 0.75);
+  assert.equal(at1s[1].ncomp, 3);
+  assert.equal(at1s[1].value[0], 0.5);
+  assert.equal(at1s[1].value[3], 0);
+});
+
+test('expr runtime failure omits the write (count 0 ≠ not loaded)', async () => {
+  // Dry-run at beat 0 passes (1/2); beat 2 (t=1s) divides by zero —
+  // the write is omitted for that frame and the host holds its last
+  // value. An empty frame is [] (count-0 'PACW'), never null.
+  const score = `(transport :bpm 120)
+(track :target radius :expr (/ 1 (- 2 beat)))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  assert.equal(driver.eval(0).length, 1);
+  assert.deepEqual(driver.eval(1.0), []);
+  assert.equal(driver.eval(1.5).length, 1);
+});
+
 test('determinism: two instances produce byte-identical writes', async () => {
   const score = `(transport :bpm 97 :meter [7 8] :dur 4bar :end loop)
 (track :target radius
@@ -119,7 +147,9 @@ test('determinism: two instances produce byte-identical writes', async () => {
   (key :at 3b :value 0.9 :ease (spring :damping 0.4 :periods 3)))
 (track :target tint
   (key :at 0b :value [0 0 0])
-  (key :at 2bar :value [1 1 1] :ease in-out-expo))`;
+  (key :at 2bar :value [1 1 1] :ease in-out-expo))
+(track :target cutoff
+  :expr (+ 200 (* 100 (sin (* (tau) phase)))))`;
   const a = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
   const b = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
   for (const t of [0, 0.123456789, 1.5, 7.25, -2.5, 1e-9, 60.0]) {

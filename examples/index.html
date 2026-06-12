@@ -51,7 +51,11 @@
 (track :target tint
   (key :at 0b  :value [0.25 0.55 0.95])
   (key :at 8b  :value [0.95 0.35 0.45] :ease in-out-sine)
-  (key :at 16b :value [0.25 0.55 0.95] :ease in-out-sine))</textarea>
+  (key :at 16b :value [0.25 0.55 0.95] :ease in-out-sine))
+
+; an expression instead of keyframes: gentle sway, one cycle per bar
+(track :target circle-x
+  :expr (+ 0.5 (* 0.12 (sin (* (tau) bar)))))</textarea>
     <pre id="diags"></pre>
   </div>
   <div id="right"><canvas id="canvas" width="520" height="520"></canvas></div>
@@ -71,6 +75,7 @@
     // uniform reflection table instead).
     const registries = [[
       { name: 'circle-radius' },
+      { name: 'circle-x' },
       { name: 'circle-y' },
       { name: 'tint', ncomp: 3 },
     ]];
@@ -96,7 +101,7 @@
     }
 
     const clock = perfClock();
-    let uniforms = { 'circle-radius': 30, 'circle-y': 0.72, tint: [0.25, 0.55, 0.95] };
+    let uniforms = { 'circle-radius': 30, 'circle-x': 0.5, 'circle-y': 0.72, tint: [0.25, 0.55, 0.95] };
 
     function frame() {
       // eval returns null while the score text is broken — the last
@@ -109,7 +114,7 @@
       const [r, g, b] = uniforms.tint;
       ctx.fillStyle = `rgb(${r * 255} ${g * 255} ${b * 255})`;
       ctx.beginPath();
-      ctx.arc(w / 2, uniforms['circle-y'] * h, uniforms['circle-radius'], 0, Math.PI * 2);
+      ctx.arc(uniforms['circle-x'] * w, uniforms['circle-y'] * h, uniforms['circle-radius'], 0, Math.PI * 2);
       ctx.fill();
       requestAnimationFrame(frame);
     }
