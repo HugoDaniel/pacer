@@ -103,4 +103,16 @@ pub fn build(b: *std.Build) void {
     run_corpus.has_side_effects = true;
     const corpus_step = b.step("corpus", "Verify the golden corpus (native); `-- --update` regenerates");
     corpus_step.dependOn(&run_corpus.step);
+
+    // `zig build verify` — the whole gate in one verb: unit tests, the
+    // native corpus half, then node --test against the freshly built
+    // pacer.wasm (the JS suite includes the corpus parity walk, so this
+    // is where native-vs-wasm byte equality is actually asserted).
+    const node_test = b.addSystemCommand(&.{ "node", "--test" });
+    node_test.setCwd(b.path("npm/pacer"));
+    node_test.step.dependOn(&install_wasm.step);
+    const verify_step = b.step("verify", "test + native corpus + node/wasm corpus parity");
+    verify_step.dependOn(&run_tests.step);
+    verify_step.dependOn(&run_corpus.step);
+    verify_step.dependOn(&node_test.step);
 }
