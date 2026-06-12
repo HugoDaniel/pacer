@@ -3,15 +3,20 @@
 //!
 //! Built once per load by `Compile.buildTable` (walk the validated tree
 //! into static arrays, convert positions to i64 ticks, flatten + dedup
-//! easing programs); immutable afterwards. The hot path never touches
-//! the AST, never parses, never allocates — it reads these slices.
+//! easing programs); immutable afterwards. Keyframe tracks never touch
+//! the AST again — the hot path reads these slices. Expr tracks are the
+//! one designed exception: their `Source.expr` is a node index into the
+//! compile result's tree, re-evaluated each frame (`ExprTrack.evalAt`),
+//! so the tree must outlive the table — both live on
+//! `Compile.CompileResult`, which guarantees it.
 //!
 //! Invariants (asserted at build, relied on by `Eval`):
-//!   * every track has ≥ 1 key; keys are sorted by `at`, strictly
-//!     increasing (duplicates were load diagnostics);
+//!   * every keyframe track has ≥ 1 key; keys are sorted by `at`,
+//!     strictly increasing (duplicates were load diagnostics);
 //!   * every `Key.value` lane ≥ its track's `ncomp` is zero;
 //!   * every `ease_ref` indexes `programs`; `programs[0]` is linear
 //!     (the shared default for keys without `:ease`);
+//!   * every expr track dry-ran successfully at t = 0 during compile;
 //!   * `transport.dur`, when present, is > 0.
 //!
 //! Ownership: SJON convention — arena-backed `.deinit()`, the struct
@@ -47,6 +52,17 @@ pub const Key = struct {
     ease_ref: u16,
 };
 
+/// A track's value source — `(key …)` children XOR `:expr`, enforced at
+/// compile with `track_source_conflict`.
+pub const Source = union(enum) {
+    /// Contiguous run in `keys`: `keys[start..][0..len]`, len ≥ 1,
+    /// sorted by `at`, strictly increasing.
+    keys: struct { start: u32, len: u32 },
+    /// The `:expr` value node, evaluated against the compile result's
+    /// tree each frame with the time env bound (see `ExprTrack`).
+    expr: sjon.Ast.NodeIndex,
+};
+
 /// One animated target. `target_id`/`registry`/`ncomp` come from the
 /// load-time join against the host registries.
 pub const Track = struct {
@@ -55,8 +71,7 @@ pub const Track = struct {
     /// `Writes.Entry.flags` so JS routing is one switch.
     registry: u8,
     ncomp: u8,
-    keys_start: u32,
-    keys_len: u32,
+    source: Source,
 };
 
 arena: std.heap.ArenaAllocator,
@@ -74,11 +89,12 @@ pub fn deinit(self: *TrackTable) void {
     self.* = undefined;
 }
 
-/// Keys of one track. O(1).
+/// Keys of one keyframe track. O(1). Asserts the track is key-sourced.
 pub fn trackKeys(self: *const TrackTable, track: *const Track) []const Key {
-    std.debug.assert(track.keys_len >= 1);
-    std.debug.assert(track.keys_start + track.keys_len <= self.keys.len);
-    return self.keys[track.keys_start..][0..track.keys_len];
+    const ks = track.source.keys;
+    std.debug.assert(ks.len >= 1);
+    std.debug.assert(ks.start + ks.len <= self.keys.len);
+    return self.keys[ks.start..][0..ks.len];
 }
 
 test {

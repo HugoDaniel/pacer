@@ -1,11 +1,15 @@
 //! Per-frame evaluator — the hot path.
 //!
 //! `evalSeconds(t)` is one mul+floor to ticks (the `TimeMap` seam),
-//! end-behavior wrap/clamp, then a bounded loop over tracks: per-track
-//! last-segment cache (the playhead is near-monotonic, so the common
-//! case is O(1)), unclamped f64 lerp through the easing program,
-//! truncation to f32 at emission. No allocation, no AST access, no
-//! recursion — everything was compiled into the `TrackTable`.
+//! end-behavior wrap/clamp, then a bounded loop over tracks. Keyframe
+//! tracks: per-track last-segment cache (the playhead is
+//! near-monotonic, so the common case is O(1)), unclamped f64 lerp
+//! through the easing program, truncation to f32 at emission — no
+//! allocation, no AST access, no recursion. Expr tracks: the `:expr`
+//! node is re-evaluated against the compile result's tree with the
+//! time env bound (`ExprTrack.evalAt`), allocating only from a fixed
+//! scratch zone (`ExprTrack.SCRATCH_BYTES`, reset per track) — the gpa
+//! is never touched on the frame path either way.
 //!
 //! Boundary semantics (load-bearing for the corpus): before a track's
 //! first key it holds the first value; after the last, the last
@@ -13,6 +17,14 @@
 //! on key values is structural: at `t == key.at` the segment STARTING
 //! there is selected, so the value is the key's own, bit-exactly —
 //! easing residue (springs!) never leaks across a key.
+//!
+//! Expr-track runtime failure (compile dry-ran t = 0; a later tick can
+//! still divide by zero, hit a budget, or yield the wrong shape): the
+//! track's write is OMITTED for that frame and `expr_failures` counts
+//! it. Hosts hold the last delivered value — the documented fill
+//! default — and, unlike emitting a stale value from the driver,
+//! omission keeps the write buffer a pure function of time: whether a
+//! write exists at time t never depends on what was evaluated before.
 //!
 //! Fixed-order float seams, in order of application:
 //!   1. `u = (t - a.at) / (b.at - a.at)` — exact i64→f64 (ticks < 2^53),
@@ -30,6 +42,8 @@ const sjon = @import("sjon");
 const TrackTable = @import("TrackTable.zig");
 const TimeMap = @import("TimeMap.zig");
 const Writes = @import("Writes.zig");
+const ExprTrack = @import("ExprTrack.zig");
+const Compile = @import("Compile.zig");
 
 pub const Tick = sjon.Pattern.Tick;
 
@@ -37,25 +51,56 @@ pub const Tick = sjon.Pattern.Tick;
 /// path is total once conversion succeeded.
 pub const Error = TimeMap.Error;
 
-/// Frame evaluator over a compiled table. The table is borrowed and
-/// must outlive the evaluator. Owns its arena (cache + entry buffer);
+/// Frame evaluator over a compiled score. The `CompileResult` is
+/// borrowed whole (expr tracks need its tree + schema, not just the
+/// table), must already sit in its final memory location (it is moved
+/// by value; see `Compile.CompileResult`), and must outlive the
+/// evaluator. Owns its arena (cache + entry buffer + expr scratch);
 /// SJON deinit convention.
 pub const Evaluator = struct {
     arena: std.heap.ArenaAllocator,
     table: *const TrackTable,
+    tree: *const sjon.Ast.Tree,
+    schema: sjon.Schema.Schema,
     /// Per-track index of the last segment hit (`keys[i] ≤ t < keys[i+1]`).
+    /// Indexed by track position; expr tracks never read theirs.
     seg_cache: []u32,
     /// Reused output buffer, one entry per track.
     entries: []Writes.Entry,
+    /// Fixed expr scratch (empty for keyframe-only scores) — fronts a
+    /// per-track `FixedBufferAllocator` so the frame path never touches
+    /// the gpa.
+    scratch: []u8,
+    /// Lifetime count of expr-track evaluations that failed at runtime
+    /// (their writes were omitted). A debugging probe, not semantics.
+    expr_failures: u64 = 0,
 
-    pub fn init(gpa: std.mem.Allocator, table: *const TrackTable) error{OutOfMemory}!Evaluator {
+    pub fn init(gpa: std.mem.Allocator, result: *const Compile.CompileResult) error{OutOfMemory}!Evaluator {
+        std.debug.assert(result.table != null); // compile succeeded
+        const table = &result.table.?;
         std.debug.assert(table.tracks.len <= TrackTable.MAX_TRACKS);
         var arena = std.heap.ArenaAllocator.init(gpa);
         errdefer arena.deinit();
         const seg_cache = try arena.allocator().alloc(u32, table.tracks.len);
         @memset(seg_cache, 0);
         const entries = try arena.allocator().alloc(Writes.Entry, table.tracks.len);
-        return .{ .arena = arena, .table = table, .seg_cache = seg_cache, .entries = entries };
+        var has_expr = false;
+        for (table.tracks) |tr| {
+            if (tr.source == .expr) has_expr = true;
+        }
+        const scratch: []u8 = if (has_expr)
+            try arena.allocator().alloc(u8, ExprTrack.SCRATCH_BYTES)
+        else
+            &.{};
+        return .{
+            .arena = arena,
+            .table = table,
+            .tree = &result.validated.result.tree,
+            .schema = result.eval_schema,
+            .seg_cache = seg_cache,
+            .entries = entries,
+            .scratch = scratch,
+        };
     }
 
     pub fn deinit(self: *Evaluator) void {
@@ -71,7 +116,9 @@ pub const Evaluator = struct {
         return self.evalTicks(t);
     }
 
-    /// Tick-domain twin (tests, corpus, future `drv_evalTicks`). Total.
+    /// Tick-domain twin (tests, corpus, `drv_evalTicks`). Total: an
+    /// expr-track runtime failure omits that write (see module header),
+    /// it never errors out of the frame.
     pub fn evalTicks(self: *Evaluator, t_raw: Tick) []const Writes.Entry {
         const table = self.table;
         var t = t_raw;
@@ -82,14 +129,45 @@ pub const Evaluator = struct {
                 .hold => t = @min(t, dur),
             }
         }
+        var n: usize = 0;
         for (table.tracks, 0..) |*track, i| {
-            self.entries[i] = evalTrack(table, track, t, &self.seg_cache[i]);
+            switch (track.source) {
+                .keys => {
+                    self.entries[n] = evalKeyTrack(table, track, t, &self.seg_cache[i]);
+                    n += 1;
+                },
+                .expr => |node| {
+                    // Reset scratch per track: each expression gets the
+                    // whole fixed zone; nothing survives the call.
+                    var fba = std.heap.FixedBufferAllocator.init(self.scratch);
+                    const value = ExprTrack.evalAt(
+                        fba.allocator(),
+                        self.tree,
+                        self.schema,
+                        &table.transport,
+                        node,
+                        t,
+                        track.ncomp,
+                    ) catch {
+                        self.expr_failures += 1;
+                        continue;
+                    };
+                    self.entries[n] = .{
+                        .target_id = track.target_id,
+                        .flags = track.registry,
+                        .ncomp = track.ncomp,
+                        .value = value,
+                    };
+                    n += 1;
+                },
+            }
         }
-        return self.entries;
+        std.debug.assert(n <= self.entries.len);
+        return self.entries[0..n];
     }
 };
 
-fn evalTrack(table: *const TrackTable, track: *const TrackTable.Track, t: Tick, cache: *u32) Writes.Entry {
+fn evalKeyTrack(table: *const TrackTable, track: *const TrackTable.Track, t: Tick, cache: *u32) Writes.Entry {
     const keys = table.trackKeys(track);
     std.debug.assert(keys.len >= 1);
 
@@ -136,7 +214,6 @@ fn evalTrack(table: *const TrackTable, track: *const TrackTable.Track, t: Tick, 
 // ---------------------------------------------------------------------------
 
 const t_ = std.testing;
-const Compile = @import("Compile.zig");
 
 const targets = [_]Compile.Target{
     .{ .name = "radius", .ncomp = 1 },
@@ -160,7 +237,7 @@ test "keyframe interpolation: golden values at beat positions" {
         \\  (key :at 8b :value 0.2 :ease smoothstep))
     );
     defer r.deinit();
-    var ev = try Evaluator.init(t_.allocator, &r.table.?);
+    var ev = try Evaluator.init(t_.allocator, &r);
     defer ev.deinit();
     const map = &r.table.?.transport.map;
 
@@ -186,7 +263,7 @@ test "loop end-behavior wraps the playhead" {
         \\  (key :at 8b :value 1.0))
     );
     defer r.deinit();
-    var ev = try Evaluator.init(t_.allocator, &r.table.?);
+    var ev = try Evaluator.init(t_.allocator, &r);
     defer ev.deinit();
     const map = &r.table.?.transport.map;
 
@@ -206,7 +283,7 @@ test "vector tracks interpolate per component, zero lanes stay zero" {
         \\  (key :at 2b :value [0 1 0.5]))
     );
     defer r.deinit();
-    var ev = try Evaluator.init(t_.allocator, &r.table.?);
+    var ev = try Evaluator.init(t_.allocator, &r);
     defer ev.deinit();
     const map = &r.table.?.transport.map;
 
@@ -228,7 +305,7 @@ test "overshoot extrapolates past key values (unclamped lerp)" {
         \\               (stage :ease in-out-quad :t 0.5 :v -0.2))))
     );
     defer r.deinit();
-    var ev = try Evaluator.init(t_.allocator, &r.table.?);
+    var ev = try Evaluator.init(t_.allocator, &r);
     defer ev.deinit();
     const map = &r.table.?.transport.map;
 
@@ -249,7 +326,7 @@ test "same time twice → byte-identical encoded writes" {
         \\  (key :at 2bar :value [1 1 1] :ease in-out-expo))
     );
     defer r.deinit();
-    var ev = try Evaluator.init(t_.allocator, &r.table.?);
+    var ev = try Evaluator.init(t_.allocator, &r);
     defer ev.deinit();
 
     var buf_a: [Writes.encodedLen(2)]u8 align(4) = undefined;
@@ -259,7 +336,88 @@ test "same time twice → byte-identical encoded writes" {
         const a = try Writes.encode(try ev.evalSeconds(s), &buf_a);
         // A fresh evaluator (cold cache) must agree byte-for-byte —
         // the cache is a pure optimization, never semantics.
-        var ev2 = try Evaluator.init(t_.allocator, &r.table.?);
+        var ev2 = try Evaluator.init(t_.allocator, &r);
+        defer ev2.deinit();
+        const b = try Writes.encode(try ev2.evalSeconds(s), &buf_b);
+        try t_.expectEqualSlices(u8, a, b);
+    }
+}
+
+test "expr tracks: golden values, vector exprs, mixed with keyframes" {
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target radius :expr (+ 0.25 (* 0.25 beat)))
+        \\(track :target tint :expr [phase phase phase])
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // beat 0: 0.25; beat 2: 0.75 — pure affine, dyadic-exact.
+    try t_.expectEqual(@as(f32, 0.25), ev.evalTicks(0)[0].value[0]);
+    const at2 = ev.evalTicks(try map.tickFromBeats(2));
+    try t_.expectEqual(@as(usize, 2), at2.len);
+    try t_.expectEqual(@as(f32, 0.75), at2[0].value[0]);
+    // 2 beats into a 4/4 bar = phase 0.5, all three lanes; lane 3 zero.
+    try t_.expectEqual(@as(u8, 3), at2[1].ncomp);
+    try t_.expectEqual(@as(f32, 0.5), at2[1].value[0]);
+    try t_.expectEqual(@as(f32, 0.5), at2[1].value[2]);
+    try t_.expectEqual(@as(f32, 0), at2[1].value[3]);
+    try t_.expectEqual(@as(u64, 0), ev.expr_failures);
+}
+
+test "expr tracks: loop wrap applies to the env (pure function of wrapped tick)" {
+    var r = try compileScore(
+        \\(transport :bpm 120 :dur 1bar :end loop)
+        \\(track :target radius :expr (+ beat 0))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+    // 5 beats wraps to 1 beat inside the 4-beat loop.
+    try t_.expectEqual(@as(f32, 1), ev.evalTicks(try map.tickFromBeats(5))[0].value[0]);
+}
+
+test "expr runtime failure omits the write and counts it" {
+    // Dry-run at beat 0 passes (1/2); beat 2 divides by zero. The
+    // failing frame drops the radius write, keeps the tint write, and
+    // the next frame recovers — pure function of time throughout.
+    var r = try compileScore(
+        \\(transport :bpm 120)
+        \\(track :target radius :expr (/ 1 (- 2 beat)))
+        \\(track :target tint :expr [phase phase phase])
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    try t_.expectEqual(@as(usize, 2), ev.evalTicks(0).len);
+    const failing = ev.evalTicks(try map.tickFromBeats(2));
+    try t_.expectEqual(@as(usize, 1), failing.len);
+    try t_.expectEqual(@as(u8, 3), failing[0].ncomp); // the tint entry
+    try t_.expectEqual(@as(u64, 1), ev.expr_failures);
+    try t_.expectEqual(@as(usize, 2), ev.evalTicks(try map.tickFromBeats(3)).len);
+}
+
+test "expr tracks: same time twice → byte-identical encoded writes" {
+    var r = try compileScore(
+        \\(transport :bpm 97 :meter [7 8] :dur 4bar :end loop)
+        \\(track :target radius :expr (+ 0.5 (* 0.5 (sin (* (tau) phase)))))
+        \\(track :target tint :expr [(sin beat) (sin bar) (sin t)])
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    var buf_a: [Writes.encodedLen(2)]u8 align(4) = undefined;
+    var buf_b: [Writes.encodedLen(2)]u8 align(4) = undefined;
+    const times = [_]f64{ 0.0, 0.123456789, 1.5, 7.25, -2.5, 1e-9, 60.0 };
+    for (times) |s| {
+        const a = try Writes.encode(try ev.evalSeconds(s), &buf_a);
+        var ev2 = try Evaluator.init(t_.allocator, &r);
         defer ev2.deinit();
         const b = try Writes.encode(try ev2.evalSeconds(s), &buf_b);
         try t_.expectEqualSlices(u8, a, b);
@@ -277,7 +435,7 @@ test "segment cache survives scrubbing backwards" {
         \\  (key :at 4b :value 1.0))
     );
     defer r.deinit();
-    var ev = try Evaluator.init(t_.allocator, &r.table.?);
+    var ev = try Evaluator.init(t_.allocator, &r);
     defer ev.deinit();
     const map = &r.table.?.transport.map;
 
@@ -285,7 +443,7 @@ test "segment cache survives scrubbing backwards" {
     const probe = [_]f64{ 0.5, 1.5, 2.5, 3.5, 1.25, 0.75, 3.9, 0.1 };
     for (probe) |beats| {
         const warm = ev.evalTicks(try map.tickFromBeats(beats))[0].value[0];
-        var cold = try Evaluator.init(t_.allocator, &r.table.?);
+        var cold = try Evaluator.init(t_.allocator, &r);
         defer cold.deinit();
         const expect = cold.evalTicks(try map.tickFromBeats(beats))[0].value[0];
         try t_.expectEqual(expect, warm);

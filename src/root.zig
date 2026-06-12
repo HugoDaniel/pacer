@@ -38,6 +38,9 @@ pub const Easing = @import("Easing.zig");
 pub const TrackTable = @import("TrackTable.zig");
 /// Per-frame evaluator: seconds → ticks → packed write entries.
 pub const Eval = @import("Eval.zig");
+/// Expr-track evaluation shared by `Compile` (t=0 dry-run) and `Eval`
+/// (frame path): the time env contract + result coercion.
+pub const ExprTrack = @import("ExprTrack.zig");
 /// Packed write-buffer wire format (`'PACW'` header + 20-byte entries).
 pub const Writes = @import("Writes.zig");
 /// WASM boundary blobs: `'PACT'` target-registry list in, `'PACD'`
@@ -50,6 +53,7 @@ test {
     _ = Easing;
     _ = TrackTable;
     _ = Eval;
+    _ = ExprTrack;
     _ = Writes;
     _ = Abi;
 }

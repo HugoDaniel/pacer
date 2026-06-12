@@ -8,9 +8,9 @@
 ; `@embedFile`'d via the `pacer_schema` build import — the pngine
 ; precedent (`pngine/schema/pngine.sjon`).
 ;
-; Deliberate omissions, landing with later build-order steps: `:expr`
-; tracks (Expr embedding), `(scene …)`/cue lists, `(control …)` pins,
-; compose-mode `(target …)` declarations.
+; Deliberate omissions, landing with later build-order steps:
+; `(scene …)`/cue lists, `(control …)` pins, compose-mode `(target …)`
+; declarations.
 (plugin :name pacer :version "0.1.0"
 
   ; ---- numeric / time value kinds ----
@@ -167,10 +167,15 @@
       :description "Playhead behavior past :dur; defaults to hold."))
 
   (form :name track
-    :description "One animated target: keyframe children interpolated with easing programs. Hosts receive final values and never interpolate."
+    :description "One animated target with exactly one value source: keyframe children interpolated with easing programs, XOR an :expr evaluated every frame. Hosts receive final values and never interpolate."
     :positional key-section
     (key :name target :type target-name
-      :description "Resolved at load() against the ordered host registries; unresolved names are a load diagnostic, not a schema error."))
+      :description "Resolved at load() against the ordered host registries; unresolved names are a load diagnostic, not a schema error.")
+    ; :walk-opaque — the validator never descends into the expression;
+    ; its interior is SJON Expr vocabulary, checked by the compile-time
+    ; dry-run at t=0 (spans on failure), not by this schema.
+    (key :name expr :type any :optional true :walk-opaque true
+      :description "Expression evaluated each frame with the time env bound (t, tick, beat, bar, cycle, phase, bpm, dur). Must yield a finite number or an ncomp-component numeric vector. Exclusive with (key …) children."))
 
   (form :name key
     :description "A keyframe. Before the first key a track holds its first value; after the last, its last."

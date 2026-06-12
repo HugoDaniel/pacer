@@ -1,7 +1,10 @@
 //! `pacer.wasm` entry — static zones + the `drv_*` export surface.
 //!
-//! The artifact is a pure function of its linear memory: no imports at
-//! all (instantiate with an empty import object), no clock, no loop.
+//! The artifact is a pure function of its linear memory: no clock, no
+//! loop. One import rides in transitively (`env.sjon_host_invoke_plugin`,
+//! SJON's executable-plugin dispatch) — pacer scores never declare
+//! executable plugins, so hosts stub it with `() => 0`, which SJON maps
+//! to a clean diagnostic rather than a trap.
 //! The host writes the score text and the `'PACT'` target-registry blob
 //! into the zones below, calls `drv_load`, then calls `drv_eval(seconds)`
 //! per frame and reads the `'PACW'` write buffer back. Blob formats
@@ -71,8 +74,9 @@ var writes_buffer: [WRITES_CAP]u8 align(4) = undefined;
 /// entirely inside `drv_load`.
 var targets_scratch: [Abi.MAX_TARGETS]Compile.Target = undefined;
 
-/// Loaded state. `evaluator` borrows `result.?.table.?`, so teardown
-/// order (evaluator first) and the no-reassign-while-live rule are
+/// Loaded state. `evaluator` borrows `result.?` whole (table + tree +
+/// schema — expr tracks re-read the tree each frame), so teardown order
+/// (evaluator first) and the no-reassign-while-live rule are
 /// load-bearing — both are confined to `unload`/`drv_load`.
 var result: ?Compile.CompileResult = null;
 var evaluator: ?Eval.Evaluator = null;
@@ -141,7 +145,7 @@ export fn drv_load(doc_len: u32, targets_len: u32) u32 {
         return @intFromEnum(LoadStatus.diagnostics);
     }
     result = r;
-    evaluator = Eval.Evaluator.init(gpa, &result.?.table.?) catch {
+    evaluator = Eval.Evaluator.init(gpa, &result.?) catch {
         unload();
         return @intFromEnum(LoadStatus.oom);
     };

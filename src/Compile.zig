@@ -13,7 +13,13 @@
 //! exact integer products, seconds through the one documented mul+floor
 //! seam), easing forms flattened + deduped into the program table,
 //! targets joined by name against the caller's ordered registries.
-//! After this walk the frame path never touches the AST.
+//! After this walk keyframe tracks never touch the AST. Expr tracks
+//! (`:expr`, exclusive with `(key …)` children) keep their node index
+//! and are dry-run here at t = 0 via `ExprTrack.evalAt` — the same code
+//! path the frame uses — so unknown bindings, type errors, and result-
+//! shape defects fail at load with spans. Time-dependent failures
+//! (e.g. a division that only zeroes at beat 2) are by nature beyond
+//! the dry-run; the frame path omits that track's write for the frame.
 //!
 //! Diagnostics: pacer-level load defects (unknown target, duplicate
 //! key, cap overflow, …) are `Diagnostic`s with wire-stable codes and
@@ -27,6 +33,7 @@ const Allocator = std.mem.Allocator;
 const TimeMap = @import("TimeMap.zig");
 const Easing = @import("Easing.zig");
 const TrackTable = @import("TrackTable.zig");
+const ExprTrack = @import("ExprTrack.zig");
 
 const Ast = sjon.Ast;
 const NodeIndex = Ast.NodeIndex;
@@ -139,6 +146,9 @@ pub const Code = enum(u16) {
     transport_invalid,
     loop_requires_dur,
     track_empty,
+    track_source_conflict,
+    expr_eval_failed,
+    expr_result_invalid,
 };
 
 /// One pacer load diagnostic. `span` indexes the combined text (same
@@ -152,11 +162,25 @@ pub const Diagnostic = struct {
 
 /// Owned result of `compile`. `table` is non-null iff the score is
 /// clean: no SJON validation errors and no pacer diagnostics.
+///
+/// The validated tree (and its schema aggregate) ride along because
+/// expr tracks evaluate by node index against them every frame — the
+/// table alone is self-contained only for keyframe-only scores.
+/// `Eval.Evaluator` therefore borrows the WHOLE result, which must sit
+/// in its final memory location first (the struct is moved by value;
+/// interior pointers taken before the move would dangle).
 pub const CompileResult = struct {
     validated: Validated,
     arena: std.heap.ArenaAllocator,
     diagnostics: []const Diagnostic,
     table: ?TrackTable,
+    /// Schema for expr-track evaluation: the CORE plugin prepended to
+    /// the document's user plugins (`HostResult.schema` is user-only by
+    /// design — core funcs like `sin`/`tau` would not resolve through
+    /// it, and an unresolved head quietly evaluates to a form literal).
+    /// Mirrors `Host.zig`'s eval-pass schema. Arena-backed slice, so it
+    /// survives the by-value move of this struct.
+    eval_schema: sjon.Schema.Schema,
 
     pub fn deinit(self: *CompileResult) void {
         if (self.table) |*tb| tb.deinit();
@@ -187,11 +211,19 @@ pub fn compile(gpa: Allocator, source: [:0]const u8, targets: []const Target) Er
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
+    const user_plugins = v.result.schema.plugins;
+    const eval_plugins = arena.allocator().alloc(sjon.Plugin.Plugin, user_plugins.len + 1) catch
+        return error.OutOfMemory;
+    eval_plugins[0] = sjon.plugins.core.plugin;
+    @memcpy(eval_plugins[1..], user_plugins);
+    const eval_schema: sjon.Schema.Schema = .{ .plugins = eval_plugins };
+
     var builder: Builder = .{
         .gpa = gpa,
         .arena = arena.allocator(),
         .tree = &v.result.tree,
         .forest = v.result.data_forest,
+        .schema = eval_schema,
         .targets = targets,
         .diags = .empty,
     };
@@ -206,6 +238,7 @@ pub fn compile(gpa: Allocator, source: [:0]const u8, targets: []const Target) Er
         .arena = arena,
         .diagnostics = builder.diags.items,
         .table = table,
+        .eval_schema = eval_schema,
     };
 }
 
@@ -216,6 +249,9 @@ const Builder = struct {
     tree: *const Ast.Tree,
     /// Top-level validated data forms (`HostResult.data_forest`).
     forest: []const NodeIndex,
+    /// Core-prepended eval schema (`CompileResult.eval_schema`) —
+    /// resolves the expr-func vocabulary for the expr-track dry-run.
+    schema: sjon.Schema.Schema,
     targets: []const Target,
     diags: std.ArrayList(Diagnostic),
 
@@ -253,7 +289,7 @@ const Builder = struct {
 
         var tracks: std.ArrayList(TrackTable.Track) = .empty;
         var keys: std.ArrayList(TrackTable.Key) = .empty;
-        try self.buildTracks(ta, &transport.map, &tracks, &keys);
+        try self.buildTracks(ta, &transport, &tracks, &keys);
 
         if (self.diags.items.len != before_diags) {
             table_arena.deinit();
@@ -326,11 +362,12 @@ const Builder = struct {
     fn buildTracks(
         self: *Builder,
         ta: Allocator,
-        map: *const TimeMap,
+        transport: *const TrackTable.Transport,
         tracks: *std.ArrayList(TrackTable.Track),
         keys: *std.ArrayList(TrackTable.Key),
     ) Error!void {
         const tree = self.tree;
+        const map = &transport.map;
         for (self.dataForest()) |idx| {
             const hdr = tree.formHeader(idx);
             if (!std.mem.eql(u8, hdr.head, "track")) continue;
@@ -346,6 +383,22 @@ const Builder = struct {
                 try self.emit(.unknown_target, tree.spanOf(target_node), "unknown target `{s}` — not in any host registry", .{target_name});
                 continue;
             };
+
+            if (kvNode(tree, hdr.children, "expr")) |expr_node| {
+                if (firstKeyChild(tree, hdr.children) != null) {
+                    try self.emit(.track_source_conflict, tree.spanOf(expr_node), "track `{s}` has both (key …) children and :expr — exactly one value source", .{target_name});
+                    continue;
+                }
+                if (try self.dryRunExpr(transport, expr_node, target.ncomp)) {
+                    tracks.append(ta, .{
+                        .target_id = target.id,
+                        .registry = target.registry,
+                        .ncomp = target.ncomp,
+                        .source = .{ .expr = expr_node },
+                    }) catch return error.OutOfMemory;
+                }
+                continue;
+            }
 
             const keys_start: u32 = @intCast(keys.items.len);
             var spans: std.ArrayList(Ast.Span) = .empty;
@@ -363,7 +416,7 @@ const Builder = struct {
             }
             const track_keys = keys.items[keys_start..];
             if (track_keys.len == 0) {
-                try self.emit(.track_empty, tree.spanOf(idx), "track `{s}` has no keys", .{target_name});
+                try self.emit(.track_empty, tree.spanOf(idx), "track `{s}` has no value source — give it (key …) children or :expr", .{target_name});
                 continue;
             }
 
@@ -380,10 +433,32 @@ const Builder = struct {
                 .target_id = target.id,
                 .registry = target.registry,
                 .ncomp = target.ncomp,
-                .keys_start = keys_start,
-                .keys_len = @intCast(track_keys.len),
+                .source = .{ .keys = .{ .start = keys_start, .len = @intCast(track_keys.len) } },
             }) catch return error.OutOfMemory;
         }
+    }
+
+    /// Dry-run an expr track at t = 0 through the SAME code path the
+    /// frame uses (`ExprTrack.evalAt`), so load-time acceptance and
+    /// frame semantics cannot drift. True = the track is sound at t = 0;
+    /// false = a diagnostic was emitted at the expression's span.
+    fn dryRunExpr(self: *Builder, transport: *const TrackTable.Transport, expr_node: NodeIndex, ncomp: u8) Error!bool {
+        _ = ExprTrack.evalAt(self.gpa, self.tree, self.schema, transport, expr_node, 0, ncomp) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ResultShape => {
+                // A misspelled function name lands here too: a head
+                // that resolves to no expr-func evaluates to a form
+                // LITERAL (Expr's form-construction semantics), which
+                // then fails the shape contract — hence the hint.
+                try self.emit(.expr_result_invalid, self.tree.spanOf(expr_node), "expression must yield a finite number or a finite {d}-component numeric vector (a form result usually means a misspelled function name)", .{ncomp});
+                return false;
+            },
+            else => {
+                try self.emit(.expr_eval_failed, self.tree.spanOf(expr_node), "expression failed to evaluate at t=0: {s}", .{@errorName(err)});
+                return false;
+            },
+        };
+        return true;
     }
 
     fn buildKey(self: *Builder, map: *const TimeMap, key_form: NodeIndex, want_ncomp: u8) Error!?TrackTable.Key {
@@ -608,6 +683,15 @@ fn sortKeysWithSpans(keys: []TrackTable.Key, spans: []Ast.Span) void {
         keys[j] = k;
         spans[j] = s;
     }
+}
+
+/// First `(key …)` positional child of a track, or null. The manifest's
+/// `:positional key-section` guarantees form children ARE key forms.
+fn firstKeyChild(tree: *const Ast.Tree, children: []const NodeIndex) ?NodeIndex {
+    for (children) |c| {
+        if (tree.tagOf(c) == .form) return c;
+    }
+    return null;
 }
 
 /// Find a kvpair child by key name. O(children).
@@ -845,6 +929,74 @@ test "compile diagnostics: transport missing / seq nesting / weights" {
     defer weights.deinit();
     try t.expect(!weights.ok());
     try t.expect(weights.findDiag(.ease_weights_invalid) != null);
+}
+
+test "compile accepts expr tracks: node recorded, keys table untouched" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target circle-radius
+        \\  :expr (+ 0.5 (* 0.5 (sin (* (tau) beat)))))
+        \\(track :target tint :expr [phase phase phase])
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const table = r.table.?;
+    try t.expectEqual(@as(usize, 2), table.tracks.len);
+    try t.expectEqual(@as(usize, 0), table.keys.len);
+    try t.expect(table.tracks[0].source == .expr);
+    try t.expectEqual(@as(u8, 3), table.tracks[1].ncomp);
+}
+
+test "compile diagnostics: keys XOR expr — both is a conflict" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius
+        \\  :expr (+ beat 0)
+        \\  (key :at 0b :value 0.2))
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.track_source_conflict) != null);
+}
+
+test "compile diagnostics: expr dry-run failures carry user spans" {
+    // Unknown binding (controls land in a later step), and a division
+    // that is zero exactly at t=0 — both must fail at LOAD, not on the
+    // frame path.
+    const source: [:0]const u8 =
+        \\(transport :bpm 120)
+        \\(track :target circle-radius :expr (* radius-knob 2))
+        \\(track :target tint :expr (/ 1 beat))
+    ;
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    const unknown = r.findDiag(.expr_eval_failed).?;
+    // The span points at the whole expression in user coordinates.
+    const start = r.validated.userOffset(unknown.span.start);
+    try t.expectEqualStrings("(* radius-knob 2)", source[start..r.validated.userOffset(unknown.span.end)]);
+}
+
+test "compile diagnostics: expr result shape — arity, boolean, typo'd func" {
+    // The fourth track locks Expr's form-construction semantics: a head
+    // that is no expr-func (`sine`) evaluates to a form LITERAL, not
+    // `UnknownFunction` — it must still fail the dry-run, as a shape
+    // defect.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius :expr [1 2])
+        \\(track :target tint :expr (+ 1 2))
+        \\(track :target cutoff :expr (> beat 1))
+        \\(track :target circle-radius :expr (sine beat))
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    var shape_count: usize = 0;
+    for (r.diagnostics) |d| {
+        if (d.code == .expr_result_invalid) shape_count += 1;
+    }
+    try t.expectEqual(@as(usize, 4), shape_count);
 }
 
 test "compile leaves table null when SJON validation already failed" {
