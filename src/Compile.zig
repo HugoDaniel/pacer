@@ -21,6 +21,11 @@
 //! (e.g. a division that only zeroes at beat 2) are by nature beyond
 //! the dry-run; the frame path omits that track's write for the frame.
 //!
+//! `(control …)` pins build BEFORE tracks: their ids must already be
+//! bound (with document `:value`s) when the dry-run evaluates each
+//! expression, so `(* radius-knob 2)` loads cleanly regardless of where
+//! the control sits in the document.
+//!
 //! Diagnostics: pacer-level load defects (unknown target, duplicate
 //! key, cap overflow, …) are `Diagnostic`s with wire-stable codes and
 //! spans — collection over abort, mirroring SJON. Any error (SJON or
@@ -149,6 +154,9 @@ pub const Code = enum(u16) {
     track_source_conflict,
     expr_eval_failed,
     expr_result_invalid,
+    control_duplicate_id,
+    control_cap_exceeded,
+    control_invalid,
 };
 
 /// One pacer load diagnostic. `span` indexes the combined text (same
@@ -260,6 +268,12 @@ const Builder = struct {
     programs: [TrackTable.MAX_EASE_PROGRAMS]Easing.Program = undefined,
     programs_len: usize = 0,
 
+    /// Control bindings for the expr dry-run (document `:value`s),
+    /// filled by `buildControls` before any track builds. Names alias
+    /// the table arena.
+    ctl_bindings: [TrackTable.MAX_CONTROLS]ExprTrack.ControlBinding = undefined,
+    ctl_count: usize = 0,
+
     /// Short-circuit signal for easing subtrees: the diagnostic was
     /// already emitted at the offending node; callers fall back to the
     /// linear program and keep collecting.
@@ -287,6 +301,10 @@ const Builder = struct {
             return null;
         };
 
+        // Controls first: the track dry-run needs their ids bound.
+        var controls: std.ArrayList(TrackTable.Control) = .empty;
+        try self.buildControls(ta, &controls);
+
         var tracks: std.ArrayList(TrackTable.Track) = .empty;
         var keys: std.ArrayList(TrackTable.Key) = .empty;
         try self.buildTracks(ta, &transport, &tracks, &keys);
@@ -304,7 +322,97 @@ const Builder = struct {
             .tracks = tracks.items,
             .keys = keys.items,
             .programs = programs,
+            .controls = controls.items,
         };
+    }
+
+    fn buildControls(self: *Builder, ta: Allocator, controls: *std.ArrayList(TrackTable.Control)) Error!void {
+        const tree = self.tree;
+        for (self.dataForest()) |idx| {
+            if (!std.mem.eql(u8, tree.formHeader(idx).head, "control")) continue;
+            if (controls.items.len == TrackTable.MAX_CONTROLS) {
+                try self.emit(.control_cap_exceeded, tree.spanOf(idx), "more than {d} controls", .{TrackTable.MAX_CONTROLS});
+                return;
+            }
+            if (try self.buildControl(ta, idx, controls.items)) |ctl| {
+                self.ctl_bindings[controls.items.len] = .{ .name = ctl.id, .value = ctl.value, .ncomp = ctl.ncomp };
+                controls.append(ta, ctl) catch return error.OutOfMemory;
+                self.ctl_count = controls.items.len;
+            }
+        }
+    }
+
+    /// Build one `(control …)` pin, or null after emitting a diagnostic.
+    fn buildControl(self: *Builder, ta: Allocator, idx: NodeIndex, existing: []const TrackTable.Control) Error!?TrackTable.Control {
+        const tree = self.tree;
+        const children = tree.formHeader(idx).children;
+
+        const id_node = kvNode(tree, children, "id").?;
+        const id = tree.symbolText(id_node);
+        for (ExprTrack.reserved_names) |reserved| {
+            if (std.mem.eql(u8, id, reserved)) {
+                try self.emit(.control_invalid, tree.spanOf(id_node), "control id `{s}` shadows a reserved time binding", .{id});
+                return null;
+            }
+        }
+        for (existing) |c| {
+            if (std.mem.eql(u8, c.id, id)) {
+                try self.emit(.control_duplicate_id, tree.spanOf(id_node), "duplicate control id `{s}`", .{id});
+                return null;
+            }
+        }
+
+        const value_node = kvNode(tree, children, "value").?;
+        const val = readValueVec(tree, value_node);
+
+        var target: ?TrackTable.ControlTarget = null;
+        if (kvNode(tree, children, "target")) |target_node| {
+            const name = tree.symbolText(target_node);
+            const tg = self.resolveTarget(name) orelse {
+                try self.emit(.unknown_target, tree.spanOf(target_node), "unknown target `{s}` — not in any host registry", .{name});
+                return null;
+            };
+            if (val.ncomp != tg.ncomp) {
+                try self.emit(.target_arity_mismatch, tree.spanOf(value_node), "value has {d} component(s); target expects {d}", .{ val.ncomp, tg.ncomp });
+                return null;
+            }
+            target = .{ .id = tg.id, .registry = tg.registry };
+        }
+
+        var kind: TrackTable.ControlType = .slider;
+        if (kvNode(tree, children, "type")) |type_node| {
+            // Member-set-validated symbol; the names match the enum.
+            kind = std.meta.stringToEnum(TrackTable.ControlType, tree.symbolText(type_node)).?;
+        }
+
+        var bounds_ok = true;
+        const min = try self.readBound(children, "min", val.ncomp, &bounds_ok);
+        const max = try self.readBound(children, "max", val.ncomp, &bounds_ok);
+        if (!bounds_ok) return null;
+
+        return .{
+            .id = ta.dupe(u8, id) catch return error.OutOfMemory,
+            .target = target,
+            .ncomp = val.ncomp,
+            .kind = kind,
+            .value = val.value,
+            .min = min,
+            .max = max,
+            .value_span = tree.spanOf(value_node),
+        };
+    }
+
+    /// Read an optional `:min`/`:max` widget bound; its arity must match
+    /// `:value`'s (emits `control_invalid` and flips `ok` otherwise).
+    fn readBound(self: *Builder, children: []const NodeIndex, key: []const u8, want_ncomp: u8, ok: *bool) Error!?[4]f32 {
+        const node = kvNode(self.tree, children, key) orelse return null;
+        const b = readValueVec(self.tree, node);
+        if (b.ncomp != want_ncomp) {
+            try self.emit(.control_invalid, self.tree.spanOf(node), ":{s} has {d} component(s); :value has {d}", .{ key, b.ncomp, want_ncomp });
+            ok.* = false;
+            return null;
+        }
+        return b.value;
     }
 
     fn buildTransport(self: *Builder) Error!?TrackTable.Transport {
@@ -440,10 +548,12 @@ const Builder = struct {
 
     /// Dry-run an expr track at t = 0 through the SAME code path the
     /// frame uses (`ExprTrack.evalAt`), so load-time acceptance and
-    /// frame semantics cannot drift. True = the track is sound at t = 0;
-    /// false = a diagnostic was emitted at the expression's span.
+    /// frame semantics cannot drift. Control ids are bound with their
+    /// document `:value`s. True = the track is sound at t = 0; false = a
+    /// diagnostic was emitted at the expression's span.
     fn dryRunExpr(self: *Builder, transport: *const TrackTable.Transport, expr_node: NodeIndex, ncomp: u8) Error!bool {
-        _ = ExprTrack.evalAt(self.gpa, self.tree, self.schema, transport, expr_node, 0, ncomp) catch |err| switch (err) {
+        const controls = self.ctl_bindings[0..self.ctl_count];
+        _ = ExprTrack.evalAt(self.gpa, self.tree, self.schema, transport, controls, expr_node, 0, ncomp) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ResultShape => {
                 // A misspelled function name lands here too: a head
@@ -469,18 +579,9 @@ const Builder = struct {
         const at = try self.posToTick(map, at_node) orelse return null;
 
         const value_node = kvNode(tree, children, "value").?;
-        var value: [4]f32 = .{ 0, 0, 0, 0 };
-        var ncomp: u8 = 1;
-        if (tree.tagOf(value_node) == .vector) {
-            const elems = tree.vectorElements(value_node);
-            std.debug.assert(elems.len >= 1 and elems.len <= 4); // vector-shape
-            ncomp = @intCast(elems.len);
-            for (elems, 0..) |e, i| value[i] = @floatCast(readNumber(tree, e).?);
-        } else {
-            value[0] = @floatCast(readNumber(tree, value_node).?);
-        }
-        if (ncomp != want_ncomp) {
-            try self.emit(.target_arity_mismatch, tree.spanOf(value_node), "value has {d} component(s); target expects {d}", .{ ncomp, want_ncomp });
+        const val = readValueVec(tree, value_node);
+        if (val.ncomp != want_ncomp) {
+            try self.emit(.target_arity_mismatch, tree.spanOf(value_node), "value has {d} component(s); target expects {d}", .{ val.ncomp, want_ncomp });
             return null;
         }
 
@@ -488,7 +589,7 @@ const Builder = struct {
         if (kvNode(tree, children, "ease")) |ease_node| {
             ease_ref = try self.buildEase(ease_node);
         }
-        return .{ .at = at, .value = value, .ease_ref = ease_ref };
+        return .{ .at = at, .value = val.value, .ease_ref = ease_ref };
     }
 
     /// `:at` / `:dur` → ticks. Unit set is manifest-validated [b bar s].
@@ -702,6 +803,23 @@ fn kvNode(tree: *const Ast.Tree, children: []const NodeIndex, key: []const u8) ?
         if (std.mem.eql(u8, kv.key, key)) return kv.value;
     }
     return null;
+}
+
+/// Read a `key-value` slot (scalar or 1-4 component vector) into a
+/// zero-padded `[4]f32` + live component count. Shape is manifest-
+/// guaranteed (`key-value` union), hence the asserts.
+fn readValueVec(tree: *const Ast.Tree, node: NodeIndex) struct { value: [4]f32, ncomp: u8 } {
+    var value: [4]f32 = .{ 0, 0, 0, 0 };
+    var ncomp: u8 = 1;
+    if (tree.tagOf(node) == .vector) {
+        const elems = tree.vectorElements(node);
+        std.debug.assert(elems.len >= 1 and elems.len <= 4); // vector-shape
+        ncomp = @intCast(elems.len);
+        for (elems, 0..) |e, i| value[i] = @floatCast(readNumber(tree, e).?);
+    } else {
+        value[0] = @floatCast(readNumber(tree, node).?);
+    }
+    return .{ .value = value, .ncomp = ncomp };
 }
 
 /// Read any plain numeric literal as f64. Returns null for non-number
@@ -961,9 +1079,9 @@ test "compile diagnostics: keys XOR expr — both is a conflict" {
 }
 
 test "compile diagnostics: expr dry-run failures carry user spans" {
-    // Unknown binding (controls land in a later step), and a division
-    // that is zero exactly at t=0 — both must fail at LOAD, not on the
-    // frame path.
+    // Unknown binding (no (control …) declares radius-knob here), and a
+    // division that is zero exactly at t=0 — both must fail at LOAD,
+    // not on the frame path.
     const source: [:0]const u8 =
         \\(transport :bpm 120)
         \\(track :target circle-radius :expr (* radius-knob 2))
@@ -997,6 +1115,96 @@ test "compile diagnostics: expr result shape — arity, boolean, typo'd func" {
         if (d.code == .expr_result_invalid) shape_count += 1;
     }
     try t.expectEqual(@as(usize, 4), shape_count);
+}
+
+test "compile builds controls: target join, defaults, spans, env binding" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120)
+        \\(control :id radius-knob :type slider :target circle-radius :min 0 :max 1 :value 0.4)
+        \\(control :id sway :value 0.12)
+        \\(track :target circle-radius :expr (* radius-knob 2))
+        \\(track :target tint :expr [sway sway sway])
+    ;
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const table = r.table.?;
+
+    try t.expectEqual(@as(usize, 2), table.controls.len);
+    const knob = table.controls[0];
+    try t.expectEqualStrings("radius-knob", knob.id);
+    try t.expectEqual(@as(u16, 0), knob.target.?.id);
+    try t.expectEqual(TrackTable.ControlType.slider, knob.kind);
+    try t.expectEqual(@as(u8, 1), knob.ncomp);
+    try t.expectEqual(@as(f32, 0.4), knob.value[0]);
+    try t.expectEqual(@as(f32, 0), knob.min.?[0]);
+    try t.expectEqual(@as(f32, 1), knob.max.?[0]);
+    // The :value span is the commit-to-text anchor, in user coordinates.
+    const vs_start = r.validated.userOffset(knob.value_span.start);
+    const vs_end = r.validated.userOffset(knob.value_span.end);
+    try t.expectEqualStrings("0.4", source[vs_start..vs_end]);
+
+    // Env-only control: no target, defaults applied.
+    const sway = table.controls[1];
+    try t.expectEqual(@as(?TrackTable.ControlTarget, null), sway.target);
+    try t.expectEqual(TrackTable.ControlType.slider, sway.kind);
+    try t.expectEqual(@as(?[4]f32, null), sway.min);
+
+    // Both expr tracks dry-ran against the control bindings.
+    try t.expectEqual(@as(usize, 2), table.tracks.len);
+}
+
+test "compile builds vector controls and joins their arity" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(control :id tint-pick :type color :target tint :value [1 0 0])
+        \\(track :target tint :expr tint-pick)
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const ctl = r.table.?.controls[0];
+    try t.expectEqual(@as(u8, 3), ctl.ncomp);
+    try t.expectEqual(TrackTable.ControlType.color, ctl.kind);
+    try t.expectEqual(@as(f32, 1), ctl.value[0]);
+    try t.expectEqual(@as(f32, 0), ctl.value[3]); // zero lane
+}
+
+test "compile diagnostics: control defects" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(control :id knob :value 1)
+        \\(control :id knob :value 2)
+        \\(control :id beat :value 3)
+        \\(control :id a :target nonexistent :value 4)
+        \\(control :id b :target tint :value 5)
+        \\(control :id c :min [0 0] :value 6)
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.control_duplicate_id) != null);
+    try t.expect(r.findDiag(.unknown_target) != null);
+    try t.expect(r.findDiag(.target_arity_mismatch) != null);
+    // Reserved id and min-arity mismatch both land on control_invalid.
+    var invalid_count: usize = 0;
+    for (r.diagnostics) |d| {
+        if (d.code == .control_invalid) invalid_count += 1;
+    }
+    try t.expectEqual(@as(usize, 2), invalid_count);
+}
+
+test "compile binds controls for the dry-run regardless of document order" {
+    // The track sits ABOVE the control: a single-pass walk would miss
+    // the binding; the two-pass build must not.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius :expr (* late-knob 0.5))
+        \\(control :id late-knob :value 0.8)
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
 }
 
 test "compile leaves table null when SJON validation already failed" {

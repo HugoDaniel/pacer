@@ -24,6 +24,13 @@
 //! |         | transport declares `:dur` (referencing it in an      |
 //! |         | unbounded score is an `UnknownBinding` dry-run catch) |
 //!
+//! Every `(control …)` id is bound too, in a parent scope below the
+//! time names (compile rejects collisions with `reserved_names`; the
+//! scope order makes time win even if one slipped through). The caller
+//! supplies the values: document `:value`s at the compile dry-run,
+//! live-overridden effective values on the frame path — so
+//! `(* radius-knob (sin beat))` follows a held widget.
+//!
 //! ## Result contract
 //!
 //! The expression must yield a number (`ncomp == 1`) or a numeric
@@ -65,6 +72,21 @@ pub const Error = Expr.Error || error{ResultShape};
 /// t, tick, beat, bar, cycle, phase, bpm, dur.
 const MAX_BINDINGS = 8;
 
+/// The names `bindTime` owns. `Compile` rejects control ids that
+/// collide with these (`control_invalid`), keeping every expression's
+/// meaning independent of scope-resolution order.
+pub const reserved_names = [_][]const u8{ "t", "tick", "beat", "bar", "cycle", "phase", "bpm", "dur" };
+
+/// One control's binding for an evaluation: the document `:value` at
+/// the compile dry-run, the live-overridden effective value on the
+/// frame path. Values are f32 (the boundary quantum — `drv_setControl`
+/// takes f32) promoted exactly to f64 at binding time.
+pub const ControlBinding = struct {
+    name: []const u8,
+    value: [4]f32,
+    ncomp: u8,
+};
+
 /// Evaluate an expr node at a tick. `tree` must be the tree `node`
 /// belongs to and `schema` the aggregate it validated under — both live
 /// on the `Compile.CompileResult`, which outlives every caller. Cost:
@@ -75,16 +97,36 @@ pub fn evalAt(
     tree: *const Ast.Tree,
     schema: sjon.Schema.Schema,
     transport: *const TrackTable.Transport,
+    controls: []const ControlBinding,
     node: Ast.NodeIndex,
     tick: Tick,
     ncomp: u8,
 ) Error![4]f32 {
     std.debug.assert(ncomp >= 1 and ncomp <= 4);
+    std.debug.assert(controls.len <= TrackTable.MAX_CONTROLS);
+    // Controls bind in a parent scope; the time env is the child, so
+    // time names win structurally (and compile rejects collisions).
+    var ctl_vals: [TrackTable.MAX_CONTROLS][4]Expr.Value = undefined;
+    var ctl_buf: [TrackTable.MAX_CONTROLS]Expr.Env.Binding = undefined;
+    for (controls, 0..) |c, i| {
+        ctl_buf[i] = .{ .name = c.name, .value = bindControl(c, &ctl_vals[i]) };
+    }
+    const ctl_env: Expr.Env = .{ .bindings = ctl_buf[0..controls.len] };
     var buf: [MAX_BINDINGS]Expr.Env.Binding = undefined;
-    const env: Expr.Env = .{ .bindings = bindTime(transport, tick, &buf) };
+    const env: Expr.Env = .{ .parent = &ctl_env, .bindings = bindTime(transport, tick, &buf) };
     var result = try Expr.eval(gpa, tree, node, &env, schema);
     defer result.deinit();
     return coerce(result.value, ncomp) orelse error.ResultShape;
+}
+
+/// A control value as an Expr value: scalar for ncomp 1, else a vector
+/// of `ncomp` numbers backed by `vals` (caller-owned, must outlive the
+/// evaluation). f32→f64 promotion is exact.
+fn bindControl(c: ControlBinding, vals: *[4]Expr.Value) Expr.Value {
+    std.debug.assert(c.ncomp >= 1 and c.ncomp <= 4);
+    if (c.ncomp == 1) return .{ .number = c.value[0] };
+    for (0..c.ncomp) |i| vals[i] = .{ .number = c.value[i] };
+    return .{ .vector = vals[0..c.ncomp] };
 }
 
 /// Fill `buf` with the time environment (see the module header table).
@@ -179,7 +221,7 @@ const test_transport: TrackTable.Transport = .{
 test "evalAt: constant scalar golden" {
     var doc = try TestDoc.init("(+ 1 2)");
     defer doc.deinit();
-    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, doc.node(0), 0, 1);
+    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, 1);
     try t_.expectEqual([4]f32{ 3, 0, 0, 0 }, v);
 }
 
@@ -194,7 +236,7 @@ test "evalAt: time bindings golden at 6.5 beats (all dyadic-exact)" {
     const tick: Tick = 6 * 180180 + 90090;
     const expect = [_]f32{ 6.5, 1.625, 1.625, 0.625, 3.25, 120, 1171170 };
     for (expect, 0..) |want, i| {
-        const v = try evalAt(t_.allocator, tree, schema, &test_transport, doc.node(i), tick, 1);
+        const v = try evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(i), tick, 1);
         try t_.expectEqual(want, v[0]);
     }
 }
@@ -203,7 +245,7 @@ test "evalAt: phase stays in [0,1) at negative ticks" {
     var doc = try TestDoc.init("(+ phase 0)");
     defer doc.deinit();
     const tick: Tick = -@divExact(sjon.Pattern.PPC, 4);
-    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, doc.node(0), tick, 1);
+    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), tick, 1);
     try t_.expectEqual(@as(f32, 0.75), v[0]);
 }
 
@@ -212,11 +254,11 @@ test "evalAt: dur is bound only when the transport declares :dur" {
     defer doc.deinit();
     try t_.expectError(
         error.UnknownBinding,
-        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, doc.node(0), 0, 1),
+        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, 1),
     );
     var bounded = test_transport;
     bounded.dur = 4 * sjon.Pattern.PPC; // 4 bars = 16 beats
-    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &bounded, doc.node(0), 0, 1);
+    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &bounded, &.{}, doc.node(0), 0, 1);
     try t_.expectEqual(@as(f32, 16), v[0]);
 }
 
@@ -226,11 +268,11 @@ test "evalAt: result-shape rejections — boolean, arity, non-finite" {
     const tree = &doc.result.tree;
     const schema = core_schema;
     // Boolean result.
-    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, doc.node(0), 0, 1));
+    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(0), 0, 1));
     // Scalar where a vec3 target expects 3 components.
-    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, doc.node(1), 0, 3));
+    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(1), 0, 3));
     // Overflow to +inf: evaluates fine, rejected by the finiteness gate.
-    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, doc.node(2), 0, 1));
+    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(2), 0, 1));
 }
 
 test "evalAt: expr failures pass through (division by zero at beat 0)" {
@@ -238,6 +280,38 @@ test "evalAt: expr failures pass through (division by zero at beat 0)" {
     defer doc.deinit();
     try t_.expectError(
         error.DivisionByZero,
-        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, doc.node(0), 0, 1),
+        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, 1),
+    );
+}
+
+test "evalAt: control bindings — scalar, vector, mixed with time" {
+    // `pick` alone: a bare symbol expression resolves to the vector
+    // binding (arithmetic stays scalar; vectors pass through whole).
+    var doc = try TestDoc.init("(* knob 2) pick (* knob beat)");
+    defer doc.deinit();
+    const tree = &doc.result.tree;
+    const controls = [_]ControlBinding{
+        .{ .name = "knob", .value = .{ 0.25, 0, 0, 0 }, .ncomp = 1 },
+        .{ .name = "pick", .value = .{ 1, 0.5, 0, 0 }, .ncomp = 3 },
+    };
+
+    const scalar = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(0), 0, 1);
+    try t_.expectEqual(@as(f32, 0.5), scalar[0]);
+
+    const vec = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(1), 0, 3);
+    try t_.expectEqual([4]f32{ 1, 0.5, 0, 0 }, vec);
+
+    // Controls and time names coexist: knob · beat at 2 beats.
+    const tick: Tick = 2 * 180180;
+    const mixed = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(2), tick, 1);
+    try t_.expectEqual(@as(f32, 0.5), mixed[0]);
+}
+
+test "evalAt: an unbound control name is still UnknownBinding" {
+    var doc = try TestDoc.init("(* missing-knob 2)");
+    defer doc.deinit();
+    try t_.expectError(
+        error.UnknownBinding,
+        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, 1),
     );
 }

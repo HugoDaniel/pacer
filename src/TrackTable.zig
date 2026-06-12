@@ -17,7 +17,8 @@
 //!   * every `ease_ref` indexes `programs`; `programs[0]` is linear
 //!     (the shared default for keys without `:ease`);
 //!   * every expr track dry-ran successfully at t = 0 during compile;
-//!   * `transport.dur`, when present, is > 0.
+//!   * `transport.dur`, when present, is > 0;
+//!   * control ids are unique and never shadow a reserved time-env name.
 //!
 //! Ownership: SJON convention — arena-backed `.deinit()`, the struct
 //! never retains the caller's GPA.
@@ -33,6 +34,7 @@ pub const Tick = sjon.Pattern.Tick;
 pub const MAX_TRACKS = 256;
 pub const MAX_KEYS = 4096;
 pub const MAX_EASE_PROGRAMS = 128;
+pub const MAX_CONTROLS = 64;
 
 pub const EndBehavior = enum { loop, hold };
 
@@ -74,6 +76,40 @@ pub const Track = struct {
     source: Source,
 };
 
+/// Editor widget hint, carried verbatim from the document into
+/// `drv_meta`; the driver never interprets it.
+pub const ControlType = enum(u8) { slider, xy, color };
+
+/// A control's resolved write target (same load-time join as tracks).
+pub const ControlTarget = struct { id: u16, registry: u8 };
+
+/// One `(control …)` pin. The document `:value` is the authority while
+/// the control is idle: written to `target` every frame and bound under
+/// `id` in every track expression. Live overrides are runtime state on
+/// `Eval.Evaluator`, never here — the table stays a pure function of
+/// the document.
+pub const Control = struct {
+    /// Expr-env binding name; arena-owned copy. Never one of
+    /// `ExprTrack.reserved_names` (load diagnostic).
+    id: []const u8,
+    /// Resolved write target, or null for an env-only control (a
+    /// virtual knob that only feeds expressions).
+    target: ?ControlTarget,
+    /// Component count of `value` (joined against the target's when one
+    /// is declared).
+    ncomp: u8,
+    kind: ControlType,
+    /// Document `:value`, zero-padded like `Key.value`.
+    value: [4]f32,
+    /// Optional widget range — editor metadata, the driver never clamps.
+    min: ?[4]f32,
+    max: ?[4]f32,
+    /// Span of the `:value` literal in COMBINED-text coordinates
+    /// (`drv_meta` maps to user coordinates) — the commit-to-text anchor
+    /// for editor widgets.
+    value_span: sjon.Ast.Span,
+};
+
 arena: std.heap.ArenaAllocator,
 transport: Transport,
 tracks: []const Track,
@@ -81,6 +117,9 @@ tracks: []const Track,
 keys: []const Key,
 /// Deduped easing programs; index 0 is always linear.
 programs: []const Easing.Program,
+/// `(control …)` pins in document order; the position index is the
+/// control's handle in the `drv_setControl` index space.
+controls: []const Control,
 
 const TrackTable = @This();
 
@@ -102,4 +141,5 @@ test {
     // `Compile` (build) and `Eval` (walk). Keep the layout caps sane.
     comptime std.debug.assert(MAX_TRACKS <= std.math.maxInt(u16));
     comptime std.debug.assert(MAX_EASE_PROGRAMS <= std.math.maxInt(u16));
+    comptime std.debug.assert(MAX_CONTROLS <= std.math.maxInt(u16));
 }

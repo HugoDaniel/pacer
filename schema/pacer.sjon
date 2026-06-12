@@ -9,8 +9,7 @@
 ; precedent (`pngine/schema/pngine.sjon`).
 ;
 ; Deliberate omissions, landing with later build-order steps:
-; `(scene …)`/cue lists, `(control …)` pins, compose-mode `(target …)`
-; declarations.
+; `(scene …)`/cue lists, compose-mode `(target …)` declarations.
 (plugin :name pacer :version "0.1.0"
 
   ; ---- numeric / time value kinds ----
@@ -69,6 +68,18 @@
   (value-kind :name target-name
     :description "Target resolved at load() against the host registries (visual uniforms, audio params)."
     :underlying symbol)
+
+  ; ---- controls ----
+  (value-kind :name control-id
+    :description "Expression-environment binding name for a control. Unique per score; the reserved time names (t, tick, beat, bar, cycle, phase, bpm, dur) are rejected at load."
+    :underlying symbol)
+  (value-kind :name control-type
+    :description "Editor widget hint. The driver carries it through drv_meta and never interprets it."
+    :underlying symbol
+    :members (member-set
+      (member :name slider)
+      (member :name xy)
+      (member :name color)))
 
   ; ---- easing ----
   ; An easing is a unit map e: [0,1] -> R with e(0)=0, e(1)=1; output may
@@ -175,7 +186,7 @@
     ; its interior is SJON Expr vocabulary, checked by the compile-time
     ; dry-run at t=0 (spans on failure), not by this schema.
     (key :name expr :type any :optional true :walk-opaque true
-      :description "Expression evaluated each frame with the time env bound (t, tick, beat, bar, cycle, phase, bpm, dur). Must yield a finite number or an ncomp-component numeric vector. Exclusive with (key …) children."))
+      :description "Expression evaluated each frame with the time env bound (t, tick, beat, bar, cycle, phase, bpm, dur) plus every (control …) id. Must yield a finite number or an ncomp-component numeric vector. Exclusive with (key …) children."))
 
   (form :name key
     :description "A keyframe. Before the first key a track holds its first value; after the last, its last."
@@ -185,6 +196,21 @@
       :description "Value reached exactly at :at.")
     (key :name ease :type ease-spec :optional true
       :description "Easing applied over the segment ENDING at this key; defaults to linear."))
+
+  (form :name control
+    :description "A pinned editor widget — pins ARE text. :value is the document authority: written to :target every frame while the control is idle, and bound under :id in every track expression. A live drv_setControl override wins until drv_clearControl returns authority to the document. Control writes land after track writes; consumers apply entries in order, so a pin outranks a track on the same target."
+    (key :name id :type control-id
+      :description "Binding name in the expression environment.")
+    (key :name type :type control-type :optional true
+      :description "Editor widget hint; defaults to slider.")
+    (key :name target :type target-name :optional true
+      :description "Optional write target, resolved like a track's. Without one the control only feeds expressions (a virtual knob).")
+    (key :name min :type key-value :optional true
+      :description "Widget range floor — editor metadata; the driver never clamps. Arity must match :value.")
+    (key :name max :type key-value :optional true
+      :description "Widget range ceiling — editor metadata; the driver never clamps. Arity must match :value.")
+    (key :name value :type key-value
+      :description "Document value: scalar or 1-4 component vector. Its byte span rides in drv_meta so the editor can commit a drag back to text."))
 
   ; ---- easing combinator forms ----
   (form :name seq

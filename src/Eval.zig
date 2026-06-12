@@ -71,6 +71,10 @@ pub const Evaluator = struct {
     /// per-track `FixedBufferAllocator` so the frame path never touches
     /// the gpa.
     scratch: []u8,
+    /// Control bindings handed to every expr evaluation, one per
+    /// document control (names alias the table). Values are the
+    /// document `:value`s until a live override rewrites them.
+    ctl_bindings: []ExprTrack.ControlBinding,
     /// Lifetime count of expr-track evaluations that failed at runtime
     /// (their writes were omitted). A debugging probe, not semantics.
     expr_failures: u64 = 0,
@@ -92,6 +96,10 @@ pub const Evaluator = struct {
             try arena.allocator().alloc(u8, ExprTrack.SCRATCH_BYTES)
         else
             &.{};
+        const ctl_bindings = try arena.allocator().alloc(ExprTrack.ControlBinding, table.controls.len);
+        for (ctl_bindings, table.controls) |*b, ctl| {
+            b.* = .{ .name = ctl.id, .value = ctl.value, .ncomp = ctl.ncomp };
+        }
         return .{
             .arena = arena,
             .table = table,
@@ -100,6 +108,7 @@ pub const Evaluator = struct {
             .seg_cache = seg_cache,
             .entries = entries,
             .scratch = scratch,
+            .ctl_bindings = ctl_bindings,
         };
     }
 
@@ -145,6 +154,7 @@ pub const Evaluator = struct {
                         self.tree,
                         self.schema,
                         &table.transport,
+                        self.ctl_bindings,
                         node,
                         t,
                         track.ncomp,
@@ -422,6 +432,18 @@ test "expr tracks: same time twice → byte-identical encoded writes" {
         const b = try Writes.encode(try ev2.evalSeconds(s), &buf_b);
         try t_.expectEqualSlices(u8, a, b);
     }
+}
+
+test "expr tracks read document control values" {
+    var r = try compileScore(
+        \\(transport :bpm 120)
+        \\(control :id sway :value 0.5)
+        \\(track :target radius :expr (* sway 2))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    try t_.expectEqual(@as(f32, 1), ev.evalTicks(0)[0].value[0]);
 }
 
 test "segment cache survives scrubbing backwards" {
