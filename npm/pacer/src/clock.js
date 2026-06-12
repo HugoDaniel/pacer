@@ -15,16 +15,32 @@ export function perfClock(now = () => performance.now() / 1000) {
 
 /**
  * Sample the master clock: the audio host's transport when it reports
- * playing, the fallback otherwise.
+ * playing, the fallback otherwise — with a continuous handoff. While
+ * audio plays, its position IS score time (authoritative: starting
+ * playback snaps score time to the song position, by design). When it
+ * stops, the fallback carries on rebased to the last mastered second,
+ * so a pause never jumps the visuals.
  *
  * @param {{ clock(): { seconds: number, playing: boolean } | null } | null} audioHost
- *   The AudioTargetHost surface (pngine's Sointu player already
- *   satisfies it). May be null for visual-only use.
+ *   The AudioTargetHost surface (audio.js; pngine's Sointu player
+ *   fits via `sointuHost`). May be null for visual-only use.
  * @param {() => number} fallback - typically `perfClock()`.
  */
 export function masterClock(audioHost, fallback = perfClock()) {
+  let mastered = false; // audio was authoritative on the last sample
+  let last = 0; // last mastered seconds — the handoff point
+  let offset = 0; // rebases the fallback after a handoff
   return () => {
     const c = audioHost?.clock?.();
-    return c && c.playing ? c.seconds : fallback();
+    if (c && c.playing) {
+      mastered = true;
+      last = c.seconds;
+      return last;
+    }
+    if (mastered) {
+      mastered = false;
+      offset = last - fallback();
+    }
+    return fallback() + offset;
   };
 }
