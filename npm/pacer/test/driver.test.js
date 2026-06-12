@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { Pacer } from '../src/index.js';
 import { toUniforms, routeWrites } from '../src/route.js';
 import { masterClock } from '../src/clock.js';
+import { sointuHost, paramRegistry, applyParams } from '../src/audio.js';
 
 const wasmPath = fileURLToPath(new URL('../../../zig-out/bin/pacer.wasm', import.meta.url));
 const wasmModule = new WebAssembly.Module(readFileSync(wasmPath));
@@ -249,4 +250,76 @@ test('masterClock: audio masters when playing, falls back otherwise', () => {
   assert.equal(clock(), 42);
   const noAudio = masterClock(null, () => 7);
   assert.equal(noAudio(), 7);
+});
+
+test('masterClock: the playing→stopped handoff is continuous', () => {
+  let f = 100; // scripted fallback clock
+  let playing = false;
+  let seconds = 0;
+  const audio = { clock: () => ({ seconds, playing }) };
+  const clock = masterClock(audio, () => f);
+
+  assert.equal(clock(), 100); // never mastered: raw fallback
+
+  playing = true;
+  seconds = 4.0;
+  assert.equal(clock(), 4.0); // play: snap to the song position
+  seconds = 4.5;
+  assert.equal(clock(), 4.5);
+
+  playing = false;
+  f = 200; // the fallback timebase is unrelated —
+  assert.equal(clock(), 4.5); // — pause does not jump
+  f = 200.25;
+  assert.equal(clock(), 4.75); // free-run advances on the fallback
+
+  playing = true;
+  seconds = 4.5;
+  assert.equal(clock(), 4.5); // resume: audio is authoritative again
+});
+
+test('sointuHost adapts the Sointu player surface', () => {
+  const player = { currentTime: 1.25, playing: true };
+  const host = sointuHost(player);
+  assert.deepEqual(host.params(), []);
+  assert.deepEqual(host.clock(), { seconds: 1.25, playing: true });
+  player.playing = false;
+  player.currentTime = 0.5;
+  assert.deepEqual(host.clock(), { seconds: 0.5, playing: false });
+  host.setParam('anything', 1); // pre-rendered song: accepted, ignored
+});
+
+test('audio bus: paramRegistry joins the score, applyParams routes writes', async () => {
+  const calls = [];
+  const host = {
+    params: () => [{ name: 'cutoff', min: 0, max: 8000, default: 200 }],
+    setParam: (name, value) => calls.push([name, value]),
+    clock: () => null,
+  };
+  const driver = await Pacer.load(wasmModule, SCORE, {
+    registries: [[{ name: 'radius' }, { name: 'tint', ncomp: 3 }], paramRegistry(host)],
+  });
+  assert.equal(driver.ok, true);
+
+  // 1.0 s = 2 of 8 beats: 200 + 0.25·7800 = 2150. Only the audio bus
+  // reaches setParam — radius and tint stay on registry 0.
+  applyParams(driver.eval(1.0), host);
+  assert.deepEqual(calls, [['cutoff', 2150]]);
+});
+
+test('applyParams: registry filter and scalar/vector arity', () => {
+  const calls = [];
+  const host = { params: () => [], setParam: (n, v) => calls.push([n, v]), clock: () => null };
+  applyParams(
+    [
+      { name: 'radius', registry: 0, ncomp: 1, value: Float32Array.of(9, 0, 0, 0) },
+      { name: 'gain', registry: 1, ncomp: 1, value: Float32Array.of(0.5, 0, 0, 0) },
+      { name: 'pan', registry: 1, ncomp: 2, value: Float32Array.of(0.25, 0.75, 0, 0) },
+    ],
+    host,
+  );
+  assert.deepEqual(calls, [
+    ['gain', 0.5],
+    ['pan', [0.25, 0.75]],
+  ]);
 });

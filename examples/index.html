@@ -7,12 +7,14 @@
       zig build wasm
       python3 -m http.server          # then open /examples/
 
-  The RAF loop samples performance.now() (the perf clock masters until
-  an audio host exists), passes one f64 to drv_eval through the npm
-  glue, and routes the write buffer into a 2D canvas scene. Editing the
-  score recompiles live — diagnostics appear under the editor with
-  spans in the score's own coordinates; the last good table keeps
-  animating until the text is clean again.
+  The RAF loop samples the master clock — the audio host's transport
+  while music plays, the perf clock otherwise, handed off without a
+  jump — passes one f64 to drv_eval through the npm glue, and routes
+  the write buffer: registry 0 into a 2D canvas scene, registry 1 into
+  the audio host's params. Editing the score recompiles live —
+  diagnostics appear under the editor with spans in the score's own
+  coordinates; the last good table keeps animating until the text is
+  clean again.
 -->
 <html lang="en">
 <head>
@@ -24,9 +26,9 @@
     #score { flex: 1; background: #1c1e26; color: #d8dbe2; border: 1px solid #2c2f3a; border-radius: 6px; padding: 10px; font: inherit; resize: none; outline: none; white-space: pre; }
     #score.bad { border-color: #b3475a; }
     #diags { min-height: 4em; max-height: 10em; overflow: auto; margin: 0; color: #e58a9b; white-space: pre-wrap; }
-    #controls { display: flex; gap: 8px; align-items: center; color: #7a8094; }
-    #controls input[type="range"] { flex: 1; accent-color: #5b8dee; }
-    #controls button { background: #1c1e26; color: #d8dbe2; border: 1px solid #2c2f3a; border-radius: 4px; font: inherit; padding: 1px 8px; }
+    .controls { display: flex; gap: 8px; align-items: center; color: #7a8094; }
+    .controls input[type="range"] { flex: 1; accent-color: #5b8dee; }
+    .controls button { background: #1c1e26; color: #d8dbe2; border: 1px solid #2c2f3a; border-radius: 4px; font: inherit; padding: 1px 8px; }
     #right { flex: 1; display: flex; align-items: center; justify-content: center; }
     canvas { background: #0d0e12; border-radius: 8px; }
     h1 { font-size: 14px; margin: 0; font-weight: 600; }
@@ -61,35 +63,115 @@
 ; to hold a live override, edit the :value here to commit one.
 (control :id sway-amt :type slider :min 0 :max 0.3 :value 0.12)
 (track :target circle-x
-  :expr (+ 0.5 (* sway-amt (sin (* (tau) bar)))))</textarea>
+  :expr (+ 0.5 (* sway-amt (sin (* (tau) bar)))))
+
+; the audio bus: the same score conducts the music's master gain
+; (registry 1). Big circle, loud click.
+(track :target master-gain
+  (key :at 0b  :value 0.05)
+  (key :at 8b  :value 0.40 :ease out-cubic)
+  (key :at 16b :value 0.05 :ease smoothstep))</textarea>
     <pre id="diags"></pre>
-    <div id="controls">
+    <div class="controls">
       <span>sway-amt</span>
       <input id="sway" type="range" min="0" max="0.3" step="0.005" />
       <button id="sway-clear" title="drv_clearControl — authority back to the text">clear</button>
+    </div>
+    <div class="controls">
+      <button id="audio-toggle" title="audio masters the clock while playing">&#9654; play music</button>
+      <span id="clock-source">perf clock</span>
     </div>
   </div>
   <div id="right"><canvas id="canvas" width="520" height="520"></canvas></div>
 
   <script type="module">
     import { Pacer } from '../npm/pacer/src/index.js';
-    import { perfClock } from '../npm/pacer/src/clock.js';
+    import { masterClock } from '../npm/pacer/src/clock.js';
     import { toUniforms } from '../npm/pacer/src/route.js';
+    import { sointuHost, paramRegistry, applyParams } from '../npm/pacer/src/audio.js';
 
     const scoreEl = document.getElementById('score');
     const diagsEl = document.getElementById('diags');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
 
-    // The host registry IS the property space: these names are what the
-    // score may target (with pngine this list comes from the live
-    // uniform reflection table instead).
+    // A stand-in for a Sointu song: a synthesized 4-bar click loop
+    // behind the exact player surface pngine's createAudioPlayer
+    // exposes (currentTime/playing getters, play/pause) — so the clock
+    // rides the real sointuHost adapter. One extension beyond Sointu:
+    // a master gain node the score drives through the audio bus.
+    function clickLoop() {
+      let actx = null, gain = null, source = null, buffer = null;
+      let startedAt = 0, pauseOffset = 0, playing = false;
+      let gainValue = 0.05;
+      const dur = 8; // 4 bars at 120 bpm
+
+      function ensure() {
+        if (actx) return;
+        actx = new AudioContext();
+        gain = actx.createGain();
+        gain.gain.value = gainValue;
+        gain.connect(actx.destination);
+        const sr = actx.sampleRate;
+        buffer = actx.createBuffer(1, sr * dur, sr);
+        const d = buffer.getChannelData(0);
+        for (let beat = 0; beat < 16; beat++) {
+          const hz = beat % 4 === 0 ? 220 : 440; // accent on bar starts
+          const at = Math.floor(beat * 0.5 * sr);
+          for (let i = 0; i < sr * 0.1; i++) {
+            d[at + i] += Math.sin((2 * Math.PI * hz * i) / sr) * Math.exp(-i / (sr * 0.02)) * 0.8;
+          }
+        }
+      }
+      return {
+        get playing() { return playing; },
+        get currentTime() {
+          if (!playing || !actx) return pauseOffset;
+          return actx.currentTime - startedAt;
+        },
+        play() {
+          if (playing) return;
+          ensure();
+          if (actx.state === 'suspended') actx.resume();
+          source = actx.createBufferSource();
+          source.buffer = buffer;
+          source.loop = true;
+          source.connect(gain);
+          startedAt = actx.currentTime - pauseOffset;
+          source.start(0, pauseOffset % dur);
+          playing = true;
+        },
+        pause() {
+          if (!playing) return;
+          pauseOffset = actx.currentTime - startedAt;
+          source.stop();
+          source = null;
+          playing = false;
+        },
+        setGain(v) {
+          gainValue = v;
+          if (gain) gain.gain.value = v;
+        },
+      };
+    }
+
+    const player = clickLoop();
+    const audioHost = {
+      ...sointuHost(player), // the clock — Sointu's exact role
+      params: () => [{ name: 'master-gain', min: 0, max: 1, default: 0.05 }],
+      setParam: (name, v) => { if (name === 'master-gain') player.setGain(v); },
+    };
+
+    // The host registries ARE the property space: these names are what
+    // the score may target. Registry 0 is the visual bus (with pngine
+    // the list comes from the live uniform reflection table); registry
+    // 1 is the audio host's declared params.
     const registries = [[
       { name: 'circle-radius' },
       { name: 'circle-x' },
       { name: 'circle-y' },
       { name: 'tint', ncomp: 3 },
-    ]];
+    ], paramRegistry(audioHost)];
 
     const wasmBytes = await fetch('../zig-out/bin/pacer.wasm').then((r) => r.arrayBuffer());
     const driver = await Pacer.load(wasmBytes, scoreEl.value, { registries });
@@ -130,14 +212,29 @@
         .join('\n');
     }
 
-    const clock = perfClock();
+    // Play/pause hands the master clock to the audio transport and
+    // back — the handoff is continuous, so the circle never jumps on
+    // pause (starting playback snaps to the song position, by design).
+    const audioToggleEl = document.getElementById('audio-toggle');
+    const clockSourceEl = document.getElementById('clock-source');
+    audioToggleEl.addEventListener('click', () => {
+      if (player.playing) player.pause();
+      else player.play();
+      audioToggleEl.innerHTML = player.playing ? '&#9208; pause music' : '&#9654; play music';
+    });
+
+    const clock = masterClock(audioHost);
     let uniforms = { 'circle-radius': 30, 'circle-x': 0.5, 'circle-y': 0.72, tint: [0.25, 0.55, 0.95] };
 
     function frame() {
       // eval returns null while the score text is broken — the last
       // good uniforms keep the scene alive (hold-last, like the driver).
       const entries = driver.eval(clock());
-      if (entries) uniforms = toUniforms(entries, 0);
+      if (entries) {
+        uniforms = toUniforms(entries, 0);
+        applyParams(entries, audioHost);
+      }
+      clockSourceEl.textContent = player.playing ? '♪ audio clock masters' : 'perf clock';
 
       const { width: w, height: h } = canvas;
       ctx.clearRect(0, 0, w, h);
