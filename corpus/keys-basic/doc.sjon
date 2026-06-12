@@ -1,0 +1,15 @@
+; keyframe fundamentals: scalar + vector tracks, linear and named
+; eases, exact landing on key ticks, hold past the last key.
+(transport :bpm 120 :meter [4 4])
+
+(track :target radius
+  (key :at 0b :value 0.2)
+  (key :at 4b :value 0.8))
+
+(track :target tint
+  (key :at 0b :value [1 0 0])
+  (key :at 2b :value [0 1 0] :ease in-out-quad))
+
+(track :target cutoff
+  (key :at 0b :value 200)
+  (key :at 8b :value 8000))

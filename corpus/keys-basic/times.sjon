@@ -1,0 +1,13 @@
+; harness: the flat target join (order IS the target_id space) plus
+; eval times as hex f64 bit patterns. At 120 bpm 4/4 one beat = 0.5 s.
+(target radius :registry 0)
+(target tint :registry 0 :ncomp 3)
+(target cutoff :registry 1)
+(times
+  "0000000000000000" ; 0.0 s — first keys, exact landing
+  "3FE0000000000000" ; 0.5 s — 1 beat: tint mid-segment (in-out-quad)
+  "3FF0000000000000" ; 1.0 s — 2 beats: radius mid, tint lands its last key
+  "4000000000000000" ; 2.0 s — 4 beats: radius lands, cutoff mid
+  "4010000000000000" ; 4.0 s — 8 beats: cutoff lands its last key
+  "4014000000000000" ; 5.0 s — past every key: hold-last everywhere
+)

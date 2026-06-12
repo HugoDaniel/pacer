@@ -75,4 +75,32 @@ pub fn build(b: *std.Build) void {
     const install_wasm = b.addInstallArtifact(wasm, .{});
     const wasm_step = b.step("wasm", "Build pacer.wasm (browser driver artifact)");
     wasm_step.dependOn(&install_wasm.step);
+
+    // `zig build corpus` — the native half of the determinism gate:
+    // walk corpus/<case>/, compile + eval each score, compare the
+    // canonical rendering byte-equal against expected.sjon. Pass
+    // `-- --update` to regenerate the goldens (review the diff). The
+    // wasm half is npm/pacer/test/corpus.test.js rendering the same
+    // text from pacer.wasm output against the same goldens.
+    const corpus_mod = b.createModule(.{
+        .root_source_file = b.path("src/corpus_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_mod },
+        },
+    });
+    corpus_mod.addAnonymousImport("pacer_schema", .{
+        .root_source_file = b.path("schema/pacer.sjon"),
+    });
+    const corpus_runner = b.addExecutable(.{
+        .name = "corpus-runner",
+        .root_module = corpus_mod,
+    });
+    const run_corpus = b.addRunArtifact(corpus_runner);
+    run_corpus.addDirectoryArg(b.path("corpus"));
+    if (b.args) |args| run_corpus.addArgs(args);
+    run_corpus.has_side_effects = true;
+    const corpus_step = b.step("corpus", "Verify the golden corpus (native); `-- --update` regenerates");
+    corpus_step.dependOn(&run_corpus.step);
 }
