@@ -120,6 +120,12 @@ programs: []const Easing.Program,
 /// `(control …)` pins in document order; the position index is the
 /// control's handle in the `drv_setControl` index space.
 controls: []const Control,
+/// Spans of each `(track …)` / `(key …)` form in COMBINED-text
+/// coordinates, parallel to `tracks` / `keys` (key spans ride the same
+/// sort as their keys). Pure `drv_meta` material — the editor's
+/// timeline anchors; the frame path never reads them.
+track_spans: []const sjon.Ast.Span,
+key_spans: []const sjon.Ast.Span,
 
 const TrackTable = @This();
 

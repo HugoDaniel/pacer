@@ -25,12 +25,32 @@
 //!             1 = pacer load    (code is `Compile.Code`).
 //!     severity: 0 = error, 1 = warning.
 //!
+//! Outbound (driver → host), `'PACM'` — score metadata for the editor
+//! (timeline lanes, widget rails, commit-to-text anchors), encoded once
+//! per successful load. All spans are USER source coordinates:
+//!
+//!     [magic u32]['PACM'][version u32]
+//!     [bpm f64][dur i64][beats_per_bar u16][flags u8][pad u8]
+//!         flags: bit0 = dur present, bit1 = end is loop.
+//!     [track_count u32][key_count u32][control_count u32]
+//!     track_count × 24 { target_id u16, registry u8, ncomp u8,
+//!                        source u8 (0 keys / 1 expr), pad u8×3,
+//!                        key_start u32, key_len u32 (0,0 for expr),
+//!                        span_start u32, span_end u32 }
+//!     key_count × 32 { at i64, value f32×4, span_start u32, span_end u32 }
+//!     control_count × (64 + id) {
+//!         target_id u16 (0xffff = env-only), registry u8, ncomp u8,
+//!         type u8 (ControlType), flags u8 (bit0 min, bit1 max),
+//!         id_len u16, value f32×4, min f32×4, max f32×4,
+//!         value_span_start u32, value_span_end u32, id bytes }
+//!
 //! Both formats are wire-stable from day one: append/version, never
 //! reorder. The third boundary format, `'PACW'`, lives in `Writes`.
 
 const std = @import("std");
 const sjon = @import("sjon");
 const Compile = @import("Compile.zig");
+const TrackTable = @import("TrackTable.zig");
 
 const Ast = sjon.Ast;
 
@@ -39,11 +59,22 @@ pub const TARGETS_MAGIC: u32 = 0x54434150;
 /// `"PACD"` read as LE u32.
 pub const DIAGS_MAGIC: u32 = 0x44434150;
 pub const DIAGS_VERSION: u32 = 1;
+/// `"PACM"` read as LE u32.
+pub const META_MAGIC: u32 = 0x4d434150;
+pub const META_VERSION: u32 = 1;
 
 pub const TARGETS_HEADER_LEN: usize = 8;
 pub const DIAGS_HEADER_LEN: usize = 12;
 /// Fixed bytes per diagnostic record, before its message.
 pub const DIAG_RECORD_LEN: usize = 16;
+/// magic+version (8) + transport block (20) + counts (12).
+pub const META_HEADER_LEN: usize = 40;
+pub const META_TRACK_LEN: usize = 24;
+pub const META_KEY_LEN: usize = 32;
+/// Fixed bytes per control record, before its id.
+pub const META_CONTROL_LEN: usize = 64;
+/// `target_id` of an env-only control in a meta record.
+pub const META_NO_TARGET: u16 = 0xffff;
 
 /// Most registries any host may join at load. Generous: pngine uniform
 /// tables run tens of fields, not hundreds.
@@ -174,6 +205,110 @@ fn appendRecord(dest: []u8, pos: *usize, source: u8, severity: u8, code: u16, sp
 }
 
 // ---------------------------------------------------------------------------
+// 'PACM' — score metadata out
+// ---------------------------------------------------------------------------
+
+/// Exact encoded size of the meta blob. Asserts a live table.
+pub fn metaEncodedLen(result: *const Compile.CompileResult) usize {
+    const table = &result.table.?;
+    var len: usize = META_HEADER_LEN +
+        table.tracks.len * META_TRACK_LEN +
+        table.keys.len * META_KEY_LEN;
+    for (table.controls) |c| len += META_CONTROL_LEN + c.id.len;
+    return len;
+}
+
+/// Encode the `'PACM'` blob for a successfully compiled score (asserts
+/// `result.ok()`). Spans are mapped to USER coordinates — manifest-
+/// region spans cannot occur here (every record comes from the user's
+/// data forms). Unlike diagnostics, metadata must never silently
+/// truncate (the editor would desync), so a short `dest` is an error.
+pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
+    std.debug.assert(result.ok());
+    const table = &result.table.?;
+    const total = metaEncodedLen(result);
+    if (dest.len < total) return error.BufferTooSmall;
+    const v = &result.validated;
+    const map = &table.transport.map;
+
+    std.mem.writeInt(u32, dest[0..4], META_MAGIC, .little);
+    std.mem.writeInt(u32, dest[4..8], META_VERSION, .little);
+    std.mem.writeInt(u64, dest[8..16], @bitCast(map.bpm), .little);
+    std.mem.writeInt(i64, dest[16..24], table.transport.dur orelse 0, .little);
+    std.mem.writeInt(u16, dest[24..26], @intCast(map.beats_per_bar), .little);
+    var tflags: u8 = 0;
+    if (table.transport.dur != null) tflags |= 1;
+    if (table.transport.end == .loop) tflags |= 2;
+    dest[26] = tflags;
+    dest[27] = 0;
+    std.mem.writeInt(u32, dest[28..32], @intCast(table.tracks.len), .little);
+    std.mem.writeInt(u32, dest[32..36], @intCast(table.keys.len), .little);
+    std.mem.writeInt(u32, dest[36..40], @intCast(table.controls.len), .little);
+
+    var pos: usize = META_HEADER_LEN;
+    for (table.tracks, table.track_spans) |track, span| {
+        const rec = dest[pos..][0..META_TRACK_LEN];
+        std.mem.writeInt(u16, rec[0..2], track.target_id, .little);
+        rec[2] = track.registry;
+        rec[3] = track.ncomp;
+        rec[4] = switch (track.source) {
+            .keys => 0,
+            .expr => 1,
+        };
+        rec[5] = 0;
+        rec[6] = 0;
+        rec[7] = 0;
+        const range: struct { start: u32, len: u32 } = switch (track.source) {
+            .keys => |ks| .{ .start = ks.start, .len = ks.len },
+            .expr => .{ .start = 0, .len = 0 },
+        };
+        std.mem.writeInt(u32, rec[8..12], range.start, .little);
+        std.mem.writeInt(u32, rec[12..16], range.len, .little);
+        writeSpan(rec[16..24], userSpan(v, span));
+        pos += META_TRACK_LEN;
+    }
+    for (table.keys, table.key_spans) |key, span| {
+        const rec = dest[pos..][0..META_KEY_LEN];
+        std.mem.writeInt(i64, rec[0..8], key.at, .little);
+        writeF32x4(rec[8..24], key.value);
+        writeSpan(rec[24..32], userSpan(v, span));
+        pos += META_KEY_LEN;
+    }
+    for (table.controls) |ctl| {
+        const rec = dest[pos..][0..META_CONTROL_LEN];
+        std.mem.writeInt(u16, rec[0..2], if (ctl.target) |tg| tg.id else META_NO_TARGET, .little);
+        rec[2] = if (ctl.target) |tg| tg.registry else 0;
+        rec[3] = ctl.ncomp;
+        rec[4] = @intFromEnum(ctl.kind);
+        var cflags: u8 = 0;
+        if (ctl.min != null) cflags |= 1;
+        if (ctl.max != null) cflags |= 2;
+        rec[5] = cflags;
+        std.mem.writeInt(u16, rec[6..8], @intCast(ctl.id.len), .little);
+        writeF32x4(rec[8..24], ctl.value);
+        writeF32x4(rec[24..40], ctl.min orelse .{ 0, 0, 0, 0 });
+        writeF32x4(rec[40..56], ctl.max orelse .{ 0, 0, 0, 0 });
+        writeSpan(rec[56..64], userSpan(v, ctl.value_span));
+        pos += META_CONTROL_LEN;
+        @memcpy(dest[pos..][0..ctl.id.len], ctl.id);
+        pos += ctl.id.len;
+    }
+    std.debug.assert(pos == total);
+    return dest[0..pos];
+}
+
+fn writeSpan(rec: *[8]u8, span: Ast.Span) void {
+    std.mem.writeInt(u32, rec[0..4], span.start, .little);
+    std.mem.writeInt(u32, rec[4..8], span.end, .little);
+}
+
+fn writeF32x4(rec: *[16]u8, value: [4]f32) void {
+    for (value, 0..) |x, i| {
+        std.mem.writeInt(u32, rec[i * 4 ..][0..4], @bitCast(x), .little);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -299,6 +434,101 @@ test "encodeDiags: clean compile yields an empty record set" {
     const encoded = encodeDiags(&r, &buf);
     try t.expectEqual(DIAGS_HEADER_LEN, encoded.len);
     try t.expectEqual(@as(u32, 0), std.mem.readInt(u32, encoded[8..12], .little));
+}
+
+test "encodeMeta: transport, tracks, keys, controls — spans in user coordinates" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0.2)
+        \\  (key :at 4b :value 0.8))
+        \\(track :target tint :expr [1 0 0])
+        \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
+    ;
+    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    var buf: [4096]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    try t.expectEqual(metaEncodedLen(&r), m.len);
+
+    try t.expectEqual(META_MAGIC, std.mem.readInt(u32, m[0..4], .little));
+    try t.expectEqual(META_VERSION, std.mem.readInt(u32, m[4..8], .little));
+    try t.expectEqual(@as(f64, 120), @as(f64, @bitCast(std.mem.readInt(u64, m[8..16], .little))));
+    try t.expectEqual(2 * sjon.Pattern.PPC, std.mem.readInt(i64, m[16..24], .little));
+    try t.expectEqual(@as(u16, 4), std.mem.readInt(u16, m[24..26], .little));
+    try t.expectEqual(@as(u8, 3), m[26]); // dur present + loop
+    try t.expectEqual(@as(u32, 2), std.mem.readInt(u32, m[28..32], .little));
+    try t.expectEqual(@as(u32, 2), std.mem.readInt(u32, m[32..36], .little));
+    try t.expectEqual(@as(u32, 1), std.mem.readInt(u32, m[36..40], .little));
+
+    // Track 0: keyframed, keys [0..2), span starts at its form.
+    const t0 = m[META_HEADER_LEN..][0..META_TRACK_LEN];
+    try t.expectEqual(@as(u16, 0), std.mem.readInt(u16, t0[0..2], .little));
+    try t.expectEqual(@as(u8, 1), t0[3]); // ncomp
+    try t.expectEqual(@as(u8, 0), t0[4]); // source: keys
+    try t.expectEqual(@as(u32, 0), std.mem.readInt(u32, t0[8..12], .little));
+    try t.expectEqual(@as(u32, 2), std.mem.readInt(u32, t0[12..16], .little));
+    const t0_start = std.mem.readInt(u32, t0[16..20], .little);
+    try t.expectEqualStrings("(track", source[t0_start..][0..6]);
+
+    // Track 1: expr-sourced, empty key range.
+    const t1 = m[META_HEADER_LEN + META_TRACK_LEN ..][0..META_TRACK_LEN];
+    try t.expectEqual(@as(u8, 1), t1[4]); // source: expr
+    try t.expectEqual(@as(u32, 0), std.mem.readInt(u32, t1[12..16], .little));
+
+    // Key 1: tick exact, value bit-exact, span covers the (key …) form.
+    const keys_off = META_HEADER_LEN + 2 * META_TRACK_LEN;
+    const k1 = m[keys_off + META_KEY_LEN ..][0..META_KEY_LEN];
+    try t.expectEqual(@as(i64, 4 * 180180), std.mem.readInt(i64, k1[0..8], .little));
+    try t.expectEqual(@as(f32, 0.8), @as(f32, @bitCast(std.mem.readInt(u32, k1[8..12], .little))));
+    const k1_span_start = std.mem.readInt(u32, k1[24..28], .little);
+    const k1_span_end = std.mem.readInt(u32, k1[28..32], .little);
+    try t.expectEqualStrings("(key :at 4b :value 0.8)", source[k1_span_start..k1_span_end]);
+
+    // Control: join, flags, range, id, and the :value commit anchor.
+    const c0 = m[keys_off + 2 * META_KEY_LEN ..][0..META_CONTROL_LEN];
+    try t.expectEqual(@as(u16, 0), std.mem.readInt(u16, c0[0..2], .little));
+    try t.expectEqual(@as(u8, 1), c0[3]); // ncomp
+    try t.expectEqual(@as(u8, 0), c0[4]); // type: slider
+    try t.expectEqual(@as(u8, 3), c0[5]); // min + max present
+    try t.expectEqual(@as(u16, 4), std.mem.readInt(u16, c0[6..8], .little));
+    try t.expectEqual(@as(f32, 0.4), @as(f32, @bitCast(std.mem.readInt(u32, c0[8..12], .little))));
+    try t.expectEqual(@as(f32, 1), @as(f32, @bitCast(std.mem.readInt(u32, c0[40..44], .little))));
+    const vs_start = std.mem.readInt(u32, c0[56..60], .little);
+    const vs_end = std.mem.readInt(u32, c0[60..64], .little);
+    try t.expectEqualStrings("0.4", source[vs_start..vs_end]);
+    const id_off = keys_off + 2 * META_KEY_LEN + META_CONTROL_LEN;
+    try t.expectEqualStrings("knob", m[id_off..][0..4]);
+    try t.expectEqual(id_off + 4, m.len);
+}
+
+test "encodeMeta: env-only control carries the no-target sentinel" {
+    var r = try Compile.compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(control :id sway :value 0.12)
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    var buf: [512]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    const c0 = m[META_HEADER_LEN..][0..META_CONTROL_LEN];
+    try t.expectEqual(META_NO_TARGET, std.mem.readInt(u16, c0[0..2], .little));
+    try t.expectEqual(@as(u8, 0), c0[5]); // no min/max
+    try t.expectEqual(@as(u8, 0), m[26]); // no dur, hold
+}
+
+test "encodeMeta refuses a short destination (no silent truncation)" {
+    var r = try Compile.compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target tint (key :at 0b :value [1 0 0]))
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    var small: [META_HEADER_LEN + META_TRACK_LEN]u8 = undefined;
+    try t.expectError(error.BufferTooSmall, encodeMeta(&r, &small));
 }
 
 test "encodeDiags truncates whole records when the buffer is tight" {

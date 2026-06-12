@@ -321,7 +321,11 @@ const Builder = struct {
 
         var tracks: std.ArrayList(TrackTable.Track) = .empty;
         var keys: std.ArrayList(TrackTable.Key) = .empty;
-        try self.buildTracks(ta, &transport, &tracks, &keys);
+        var track_spans: std.ArrayList(Ast.Span) = .empty;
+        var key_spans: std.ArrayList(Ast.Span) = .empty;
+        try self.buildTracks(ta, &transport, &tracks, &keys, &track_spans, &key_spans);
+        std.debug.assert(track_spans.items.len == tracks.items.len);
+        std.debug.assert(key_spans.items.len == keys.items.len);
 
         if (self.diags.items.len != before_diags) {
             table_arena.deinit();
@@ -337,6 +341,8 @@ const Builder = struct {
             .keys = keys.items,
             .programs = programs,
             .controls = controls.items,
+            .track_spans = track_spans.items,
+            .key_spans = key_spans.items,
         };
     }
 
@@ -487,6 +493,8 @@ const Builder = struct {
         transport: *const TrackTable.Transport,
         tracks: *std.ArrayList(TrackTable.Track),
         keys: *std.ArrayList(TrackTable.Key),
+        track_spans: *std.ArrayList(Ast.Span),
+        key_spans: *std.ArrayList(Ast.Span),
     ) Error!void {
         const tree = self.tree;
         const map = &transport.map;
@@ -518,12 +526,12 @@ const Builder = struct {
                         .ncomp = target.ncomp,
                         .source = .{ .expr = expr_node },
                     }) catch return error.OutOfMemory;
+                    track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
                 }
                 continue;
             }
 
             const keys_start: u32 = @intCast(keys.items.len);
-            var spans: std.ArrayList(Ast.Span) = .empty;
             for (hdr.children) |child| {
                 if (tree.tagOf(child) != .form) continue;
                 std.debug.assert(std.mem.eql(u8, tree.formHeader(child).head, "key"));
@@ -533,10 +541,11 @@ const Builder = struct {
                 }
                 if (try self.buildKey(map, child, target.ncomp)) |k| {
                     keys.append(ta, k) catch return error.OutOfMemory;
-                    spans.append(self.arena, tree.spanOf(child)) catch return error.OutOfMemory;
+                    key_spans.append(ta, tree.spanOf(child)) catch return error.OutOfMemory;
                 }
             }
             const track_keys = keys.items[keys_start..];
+            const track_key_spans = key_spans.items[keys_start..];
             if (track_keys.len == 0) {
                 try self.emit(.track_empty, tree.spanOf(idx), "track `{s}` has no value source — give it (key …) children or :expr", .{target_name});
                 continue;
@@ -544,10 +553,10 @@ const Builder = struct {
 
             // Author order is free; the table is sorted. Equal ticks are
             // a defect (which value wins would be source-order luck).
-            sortKeysWithSpans(track_keys, spans.items);
+            sortKeysWithSpans(track_keys, track_key_spans);
             for (track_keys[1..], 0..) |k, i| {
                 if (k.at == track_keys[i].at) {
-                    try self.emit(.duplicate_key_at, spans.items[i + 1], "duplicate key at the same tick ({d})", .{k.at});
+                    try self.emit(.duplicate_key_at, track_key_spans[i + 1], "duplicate key at the same tick ({d})", .{k.at});
                 }
             }
 
@@ -557,6 +566,7 @@ const Builder = struct {
                 .ncomp = target.ncomp,
                 .source = .{ .keys = .{ .start = keys_start, .len = @intCast(track_keys.len) } },
             }) catch return error.OutOfMemory;
+            track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
         }
     }
 
