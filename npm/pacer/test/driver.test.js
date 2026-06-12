@@ -157,6 +157,89 @@ test('determinism: two instances produce byte-identical writes', async () => {
   }
 });
 
+test('controls: document value writes, live override, clear restores', async () => {
+  const score = `(transport :bpm 120)
+(control :id knob :target radius :value 0.4)
+(track :target radius
+  (key :at 0b :value 0.0)
+  (key :at 4b :value 1.0))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  assert.equal(driver.ok, true);
+
+  // Track write first, control write last — toUniforms folds in order,
+  // so the pin outranks the score on the same target.
+  const entries = driver.eval(1.0);
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].value[0], 0.5);
+  assert.equal(toUniforms(entries, 0).radius, Math.fround(0.4));
+
+  assert.equal(driver.setControl('knob', 0.9), true);
+  assert.equal(toUniforms(driver.eval(1.0), 0).radius, Math.fround(0.9));
+  assert.equal(driver.clearControl('knob'), true);
+  assert.equal(toUniforms(driver.eval(1.0), 0).radius, Math.fround(0.4));
+});
+
+test('controls steer expressions live', async () => {
+  const score = `(transport :bpm 120)
+(control :id sway :value 0.5)
+(track :target radius :expr (* sway 2))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  assert.equal(driver.eval(0)[0].value[0], 1);
+  assert.equal(driver.setControl('sway', 0.25), true);
+  assert.equal(driver.eval(0)[0].value[0], 0.5);
+});
+
+test('meta: transport, key ticks, and the commit-to-text anchors', async () => {
+  const score = `(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+(control :id knob :target radius :min 0 :max 1 :value 0.4)
+(track :target radius
+  (key :at 0b :value 0.0)
+  (key :at 4b :value 1.0))
+(track :target cutoff :expr (* knob 8000))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  const meta = driver.meta;
+
+  assert.equal(meta.transport.bpm, 120);
+  assert.equal(meta.transport.end, 'loop');
+  assert.equal(meta.transport.dur, 2n * 4n * TICKS_PER_BEAT);
+
+  const track = meta.tracks[0];
+  assert.equal(track.name, 'radius');
+  assert.equal(track.source, 'keys');
+  assert.equal(track.keys.length, 2);
+  assert.equal(track.keys[1].at, 4n * TICKS_PER_BEAT);
+  assert.equal(score.slice(track.keys[1].span.start, track.keys[1].span.end), '(key :at 4b :value 1.0)');
+  assert.equal(meta.tracks[1].source, 'expr');
+  assert.equal(meta.tracks[1].keys.length, 0);
+
+  const knob = meta.controls.find((c) => c.id === 'knob');
+  assert.equal(knob.name, 'radius');
+  assert.equal(knob.type, 'slider');
+  assert.deepEqual([knob.min[0], knob.max[0]], [0, 1]);
+  assert.equal(score.slice(knob.valueSpan.start, knob.valueSpan.end), '0.4');
+});
+
+test('registerControl drives an unpinned target while held', async () => {
+  const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
+  const slot = driver.registerControl('cutoff');
+  assert.notEqual(slot, null);
+
+  const before = toUniforms(driver.eval(1.0), 1).cutoff;
+  assert.equal(driver.setControl(slot, 500), true);
+  assert.equal(toUniforms(driver.eval(1.0), 1).cutoff, 500);
+  assert.equal(driver.clearControl(slot), true);
+  assert.equal(toUniforms(driver.eval(1.0), 1).cutoff, before);
+});
+
+test('setBpm rescales seconds; tick positions stand still', async () => {
+  const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
+  assert.equal(driver.eval(1.0)[0].value[0], 0.5); // 2 of 4 beats
+  assert.equal(driver.setBpm(60), true);
+  assert.equal(driver.eval(1.0)[0].value[0], Math.fround(0.35)); // 1 of 4 beats
+  assert.equal(driver.evalTicks(2n * TICKS_PER_BEAT)[0].value[0], 0.5);
+  assert.equal(driver.setBpm(0), false);
+});
+
 test('masterClock: audio masters when playing, falls back otherwise', () => {
   let playing = false;
   const audio = { clock: () => ({ seconds: 42, playing }) };

@@ -24,6 +24,9 @@
     #score { flex: 1; background: #1c1e26; color: #d8dbe2; border: 1px solid #2c2f3a; border-radius: 6px; padding: 10px; font: inherit; resize: none; outline: none; white-space: pre; }
     #score.bad { border-color: #b3475a; }
     #diags { min-height: 4em; max-height: 10em; overflow: auto; margin: 0; color: #e58a9b; white-space: pre-wrap; }
+    #controls { display: flex; gap: 8px; align-items: center; color: #7a8094; }
+    #controls input[type="range"] { flex: 1; accent-color: #5b8dee; }
+    #controls button { background: #1c1e26; color: #d8dbe2; border: 1px solid #2c2f3a; border-radius: 4px; font: inherit; padding: 1px 8px; }
     #right { flex: 1; display: flex; align-items: center; justify-content: center; }
     canvas { background: #0d0e12; border-radius: 8px; }
     h1 { font-size: 14px; margin: 0; font-weight: 600; }
@@ -53,10 +56,18 @@
   (key :at 8b  :value [0.95 0.35 0.45] :ease in-out-sine)
   (key :at 16b :value [0.25 0.55 0.95] :ease in-out-sine))
 
-; an expression instead of keyframes: gentle sway, one cycle per bar
+; an expression instead of keyframes: gentle sway, one cycle per bar.
+; sway-amt is a pinned widget; the pin IS text. Drag the slider below
+; to hold a live override, edit the :value here to commit one.
+(control :id sway-amt :type slider :min 0 :max 0.3 :value 0.12)
 (track :target circle-x
-  :expr (+ 0.5 (* 0.12 (sin (* (tau) bar)))))</textarea>
+  :expr (+ 0.5 (* sway-amt (sin (* (tau) bar)))))</textarea>
     <pre id="diags"></pre>
+    <div id="controls">
+      <span>sway-amt</span>
+      <input id="sway" type="range" min="0" max="0.3" step="0.005" />
+      <button id="sway-clear" title="drv_clearControl — authority back to the text">clear</button>
+    </div>
   </div>
   <div id="right"><canvas id="canvas" width="520" height="520"></canvas></div>
 
@@ -83,6 +94,7 @@
     const wasmBytes = await fetch('../zig-out/bin/pacer.wasm').then((r) => r.arrayBuffer());
     const driver = await Pacer.load(wasmBytes, scoreEl.value, { registries });
     showDiags();
+    syncControls();
 
     let debounce;
     scoreEl.addEventListener('input', () => {
@@ -90,8 +102,26 @@
       debounce = setTimeout(() => {
         driver.reload(scoreEl.value);
         showDiags();
+        // A reload tears down held overrides — the text is the
+        // authority again, so the slider re-reads it from meta.
+        syncControls();
       }, 150);
     });
+
+    // The slider is the editor-widget shape in miniature: drag = live
+    // drv_setControl override (no recompile), clear = back to the text.
+    const swayEl = document.getElementById('sway');
+    const swayClearEl = document.getElementById('sway-clear');
+    swayEl.addEventListener('input', () => driver.setControl('sway-amt', +swayEl.value));
+    swayClearEl.addEventListener('click', () => {
+      driver.clearControl('sway-amt');
+      syncControls();
+    });
+
+    function syncControls() {
+      const ctl = driver.meta?.controls.find((c) => c.id === 'sway-amt');
+      if (ctl) swayEl.value = ctl.value[0];
+    }
 
     function showDiags() {
       scoreEl.classList.toggle('bad', !driver.ok);

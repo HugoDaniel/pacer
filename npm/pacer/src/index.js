@@ -8,6 +8,8 @@
 //   'PACT' (in)  — flattened target-registry join list
 //   'PACD' (out) — load diagnostics, spans in USER source coordinates
 //   'PACW' (out) — per-frame write entries (20 bytes each)
+//   'PACM' (out) — score metadata: transport, tracks (key ticks +
+//                  spans), controls — the editor's timeline anchors
 //
 // Hot-path discipline: `eval` allocates nothing after warm-up — entry
 // objects and their Float32Array values are reused frame to frame, and
@@ -23,6 +25,15 @@ const PACW_HEADER_LEN = 12;
 const PACW_ENTRY_LEN = 20;
 const PACD_HEADER_LEN = 12;
 const PACD_RECORD_LEN = 16;
+const PACM_MAGIC = 0x4d434150;
+const PACM_VERSION = 1;
+const PACM_HEADER_LEN = 40;
+const PACM_TRACK_LEN = 24;
+const PACM_KEY_LEN = 32;
+const PACM_CONTROL_LEN = 64;
+const PACM_NO_TARGET = 0xffff;
+const NO_SLOT = 0xffffffff;
+const CONTROL_TYPES = ['slider', 'xy', 'color'];
 
 const LOAD_OK = 0;
 const LOAD_DIAGNOSTICS = 1;
@@ -75,12 +86,15 @@ export class Pacer {
     /** Diagnostics from the last (re)load, decoded from 'PACD'. */
     this.diagnostics = [];
     this._entries = [];
+    this._meta = null;
   }
 
   /**
    * (Re)compile a score against the registries given at load. Safe at
    * any time; on failure `ok` is false, `diagnostics` carries spans in
-   * the score's own coordinates, and `eval` returns null.
+   * the score's own coordinates, and `eval` returns null. ALL control
+   * state (held values, dynamic slots) is torn down — re-apply held
+   * widgets after a reload.
    */
   reload(docText) {
     const e = this._exports;
@@ -93,10 +107,151 @@ export class Pacer {
     const status = e.drv_load(doc.length, this._targetsBlob.length);
     this.diagnostics = this._readDiags();
     this.ok = status === LOAD_OK;
+    this._meta = null;
     if (status !== LOAD_OK && status !== LOAD_DIAGNOSTICS) {
       throw new Error(`pacer: load failed with status ${status} (glue bug or OOM)`);
     }
     return { ok: this.ok, diagnostics: this.diagnostics };
+  }
+
+  /**
+   * Score metadata ('PACM'), decoded lazily and cached until the next
+   * reload: `{ transport, tracks, controls }` with key ticks (BigInt)
+   * and spans in the score's own coordinates — a control's `valueSpan`
+   * is the commit-to-text anchor for its widget. Null when not loaded.
+   *
+   * Spans (like diagnostic spans) are BYTE offsets into the UTF-8
+   * score; they equal string indices only while the score is ASCII —
+   * editors with non-ASCII text must map through a byte index.
+   */
+  get meta() {
+    if (this._meta) return this._meta;
+    const e = this._exports;
+    const len = e.drv_metaLen();
+    if (len === 0) return null;
+    const dv = new DataView(e.memory.buffer, e.drv_metaPtr(), len);
+    if (dv.getUint32(0, true) !== PACM_MAGIC || dv.getUint32(4, true) !== PACM_VERSION) {
+      throw new Error('pacer: corrupt meta buffer');
+    }
+    const bytes = new Uint8Array(e.memory.buffer, e.drv_metaPtr(), len);
+    const lanes = (base) => {
+      const a = [];
+      for (let c = 0; c < 4; c++) a.push(dv.getFloat32(base + c * 4, true));
+      return a;
+    };
+
+    const flags = dv.getUint8(26);
+    const transport = {
+      bpm: dv.getFloat64(8, true),
+      beatsPerBar: dv.getUint16(24, true),
+      dur: flags & 1 ? dv.getBigInt64(16, true) : null,
+      end: flags & 2 ? 'loop' : 'hold',
+    };
+    const trackCount = dv.getUint32(28, true);
+    const keyCount = dv.getUint32(32, true);
+    const controlCount = dv.getUint32(36, true);
+
+    let off = PACM_HEADER_LEN;
+    const rawTracks = [];
+    for (let i = 0; i < trackCount; i++, off += PACM_TRACK_LEN) {
+      rawTracks.push({
+        targetId: dv.getUint16(off, true),
+        registry: dv.getUint8(off + 2),
+        ncomp: dv.getUint8(off + 3),
+        source: dv.getUint8(off + 4) === 0 ? 'keys' : 'expr',
+        keyStart: dv.getUint32(off + 8, true),
+        keyLen: dv.getUint32(off + 12, true),
+        span: { start: dv.getUint32(off + 16, true), end: dv.getUint32(off + 20, true) },
+      });
+    }
+    const keys = [];
+    for (let i = 0; i < keyCount; i++, off += PACM_KEY_LEN) {
+      keys.push({
+        at: dv.getBigInt64(off, true),
+        value: lanes(off + 8),
+        span: { start: dv.getUint32(off + 24, true), end: dv.getUint32(off + 28, true) },
+      });
+    }
+    const controls = [];
+    for (let i = 0; i < controlCount; i++) {
+      const targetId = dv.getUint16(off, true);
+      const cflags = dv.getUint8(off + 5);
+      const idLen = dv.getUint16(off + 6, true);
+      controls.push({
+        index: i,
+        id: decoder.decode(bytes.subarray(off + PACM_CONTROL_LEN, off + PACM_CONTROL_LEN + idLen)),
+        targetId: targetId === PACM_NO_TARGET ? null : targetId,
+        name: targetId === PACM_NO_TARGET ? null : this._flat[targetId].name,
+        registry: dv.getUint8(off + 2),
+        ncomp: dv.getUint8(off + 3),
+        type: CONTROL_TYPES[dv.getUint8(off + 4)] ?? 'slider',
+        value: lanes(off + 8),
+        min: cflags & 1 ? lanes(off + 24) : null,
+        max: cflags & 2 ? lanes(off + 40) : null,
+        valueSpan: { start: dv.getUint32(off + 56, true), end: dv.getUint32(off + 60, true) },
+      });
+      off += PACM_CONTROL_LEN + idLen;
+    }
+
+    this._meta = {
+      transport,
+      tracks: rawTracks.map((t) => ({
+        targetId: t.targetId,
+        name: this._flat[t.targetId].name,
+        registry: t.registry,
+        ncomp: t.ncomp,
+        source: t.source,
+        span: t.span,
+        keys: keys.slice(t.keyStart, t.keyStart + t.keyLen),
+      })),
+      controls,
+    };
+    return this._meta;
+  }
+
+  /**
+   * Hold a live control value (a widget drag): replaces the document's
+   * :value — for writes AND expression bindings — until `clearControl`.
+   * `ref` is a control id or slot index; `value` a number or up-to-4
+   * array. False when rejected (bad slot, non-finite component).
+   */
+  setControl(ref, value) {
+    const [x = 0, y = 0, z = 0, w = 0] = typeof value === 'number' ? [value] : value;
+    return this._exports.drv_setControl(this._controlSlot(ref), x, y, z, w) === 0;
+  }
+
+  /** Return authority to the document (or silence a dynamic slot). */
+  clearControl(ref) {
+    return this._exports.drv_clearControl(this._controlSlot(ref)) === 0;
+  }
+
+  /**
+   * Register a dynamic control slot for a target with no (control …)
+   * pin in the text (editor lifts). Returns the slot index for
+   * `setControl`/`clearControl`, or null. Dynamic slots write only
+   * while held and never enter the expression environment.
+   */
+  registerControl(targetName) {
+    const targetId = this._flat.findIndex((t) => t.name === targetName);
+    if (targetId < 0) return null;
+    const { registry, ncomp } = this._flat[targetId];
+    const slot = this._exports.drv_registerControl(targetId, registry, ncomp);
+    return slot === NO_SLOT ? null : slot;
+  }
+
+  /**
+   * Live tempo nudge: rescales the seconds↔ticks projection; musical
+   * (tick) positions stand still. False outside 1..1000 bpm.
+   */
+  setBpm(bpm) {
+    return this._exports.drv_setBpm(bpm) === 0;
+  }
+
+  _controlSlot(ref) {
+    if (typeof ref === 'number') return ref;
+    const ctl = this.meta?.controls.find((c) => c.id === ref);
+    if (!ctl) throw new Error(`pacer: unknown control \`${ref}\``);
+    return ctl.index;
   }
 
   /**
