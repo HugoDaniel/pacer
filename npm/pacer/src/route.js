@@ -22,7 +22,7 @@ export function toUniforms(entries, registry = 0) {
     // `value` is a fixed 4-lane Float32Array, so lane 0 is always present;
     // `?? 0` only satisfies noUncheckedIndexedAccess (and matches the
     // trailing-lane-is-0 contract) — it never fires at runtime.
-    uniforms[e.name] = e.ncomp === 1 ? e.value[0] ?? 0 : Array.from(e.value.subarray(0, e.ncomp));
+    uniforms[e.name] = e.ncomp === 1 ? (e.value[0] ?? 0) : Array.from(e.value.subarray(0, e.ncomp));
   }
   return uniforms;
 }

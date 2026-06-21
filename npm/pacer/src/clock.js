@@ -36,7 +36,7 @@ export function masterClock(audioHost, fallback = perfClock()) {
   let offset = 0; // rebases the fallback after a handoff
   return () => {
     const c = audioHost?.clock?.();
-    if (c && c.playing) {
+    if (c?.playing) {
       mastered = true;
       last = c.seconds;
       return last;

@@ -3,22 +3,19 @@
 // Eval tests; key-tick values are compared bit-exactly via Math.fround
 // (the structural-landing guarantee survives the WASM boundary).
 
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { Pacer } from '../src/index.js';
-import { toUniforms, routeWrites } from '../src/route.js';
+import { applyParams, paramRegistry, sointuHost } from '../src/audio.js';
 import { masterClock } from '../src/clock.js';
-import { sointuHost, paramRegistry, applyParams } from '../src/audio.js';
+import { Pacer } from '../src/index.js';
+import { routeWrites, toUniforms } from '../src/route.js';
 
 const wasmPath = fileURLToPath(new URL('../../../zig-out/bin/pacer.wasm', import.meta.url));
 const wasmModule = new WebAssembly.Module(readFileSync(wasmPath));
 
-const REGISTRIES = [
-  [{ name: 'radius' }, { name: 'tint', ncomp: 3 }],
-  [{ name: 'cutoff' }],
-];
+const REGISTRIES = [[{ name: 'radius' }, { name: 'tint', ncomp: 3 }], [{ name: 'cutoff' }]];
 
 const SCORE = `(transport :bpm 120 :meter [4 4])
 (track :target radius
@@ -69,8 +66,14 @@ test('routing: registry split and pngine-style uniforms', async () => {
   const entries = driver.eval(1.0);
 
   const [visual, audio] = routeWrites(entries, 2);
-  assert.deepEqual(visual.map((e) => e.name), ['radius', 'tint']);
-  assert.deepEqual(audio.map((e) => e.name), ['cutoff']);
+  assert.deepEqual(
+    visual.map((e) => e.name),
+    ['radius', 'tint'],
+  );
+  assert.deepEqual(
+    audio.map((e) => e.name),
+    ['cutoff'],
+  );
 
   const uniforms = toUniforms(entries, 0);
   assert.equal(typeof uniforms.radius, 'number');
@@ -209,7 +212,10 @@ test('meta: transport, key ticks, and the commit-to-text anchors', async () => {
   assert.equal(track.source, 'keys');
   assert.equal(track.keys.length, 2);
   assert.equal(track.keys[1].at, 4n * TICKS_PER_BEAT);
-  assert.equal(score.slice(track.keys[1].span.start, track.keys[1].span.end), '(key :at 4b :value 1.0)');
+  assert.equal(
+    score.slice(track.keys[1].span.start, track.keys[1].span.end),
+    '(key :at 4b :value 1.0)',
+  );
   assert.equal(meta.tracks[1].source, 'expr');
   assert.equal(meta.tracks[1].keys.length, 0);
 

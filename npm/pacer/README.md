@@ -88,12 +88,14 @@ repo; `pacer.wasm` is built from the Zig sources by Zig 0.16.
 ```sh
 npm run build      # zig build wasm → copy in → emit .d.ts (types/)
 npm run typecheck  # tsc --noEmit over the JSDoc-typed source
+npm run lint       # biome check src test (lint + format, read-only)
+npm run format     # biome check --write src test (apply fixes)
 npm test           # node --test (rebuilds the wasm first); incl. corpus parity
 ```
 
-`npm publish` rebuilds `pacer.wasm` fresh and runs the full test suite before it
-packs: `prepublishOnly` runs `typecheck` + `test`, then `prepack` runs `build`
-(so the published `pacer.wasm` is always freshly compiled from source).
+`npm publish` rebuilds `pacer.wasm` fresh and runs the full gate before it
+packs: `prepublishOnly` runs `lint` + `typecheck` + `test`, then `prepack` runs
+`build` (so the published `pacer.wasm` is always freshly compiled from source).
 `publishConfig.registry` targets the self-hosted Gitea registry, so a bare
 `npm publish` from `npm/pacer/` lands in the right place.
 

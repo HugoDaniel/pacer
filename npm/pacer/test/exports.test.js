@@ -2,9 +2,9 @@
 // resolves through the package name exactly as a consumer imports it.
 // (Functional behaviour lives in driver.test.js / corpus.test.js.)
 
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -21,7 +21,11 @@ test('publishable: not private, ESM, ships the wasm + types + license', () => {
   assert.ok(pkg.files.includes('types'), 'files ships the .d.ts');
   assert.ok(pkg.files.includes('LICENSE'), 'files ships the LICENSE');
   assert.ok(existsSync(fromRoot('LICENSE')), 'LICENSE exists on disk');
-  assert.match(readFileSync(fromRoot('LICENSE'), 'utf8'), /CC0 1\.0 Universal/, 'LICENSE is the CC0 text');
+  assert.match(
+    readFileSync(fromRoot('LICENSE'), 'utf8'),
+    /CC0 1\.0 Universal/,
+    'LICENSE is the CC0 text',
+  );
   assert.equal(pkg.exports['.'].types, './types/index.d.ts');
 });
 

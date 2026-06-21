@@ -110,9 +110,7 @@ export class Pacer {
   constructor(instance, registries) {
     // The wasm exports are untyped at the boundary; cast once to the
     // pinned `drv_*` ABI so every call site type-checks against it.
-    this.#exports = /** @type {PacerExports} */ (
-      /** @type {unknown} */ (instance.exports)
-    );
+    this.#exports = /** @type {PacerExports} */ (/** @type {unknown} */ (instance.exports));
     if (this.#exports.drv_abiVersion() !== 1) {
       throw new Error(`pacer: unsupported ABI version ${this.#exports.drv_abiVersion()}`);
     }
@@ -368,7 +366,9 @@ export class Pacer {
   #target(targetId) {
     const entry = this.#flat[targetId];
     if (entry === undefined) {
-      throw new Error(`pacer: target_id ${targetId} not in the registry table (corrupt wasm output)`);
+      throw new Error(
+        `pacer: target_id ${targetId} not in the registry table (corrupt wasm output)`,
+      );
     }
     return entry;
   }
@@ -429,7 +429,9 @@ export class Pacer {
         code: dv.getUint16(off + 2, true),
         start: dv.getUint32(off + 4, true),
         end: dv.getUint32(off + 8, true),
-        message: decoder.decode(bytes.subarray(off + PACD_RECORD_LEN, off + PACD_RECORD_LEN + msgLen)),
+        message: decoder.decode(
+          bytes.subarray(off + PACD_RECORD_LEN, off + PACD_RECORD_LEN + msgLen),
+        ),
       });
       off += PACD_RECORD_LEN + msgLen;
     }

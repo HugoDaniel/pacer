@@ -9,9 +9,9 @@
 // regenerate goldens with `zig build corpus -- --update` (never here —
 // the native rendering is the authority, this file only re-derives it).
 
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Pacer } from '../src/index.js';
 
