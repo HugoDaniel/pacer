@@ -1,17 +1,74 @@
 {
   "name": "pacer",
-  "private": true,
   "version": "0.1.0",
   "type": "module",
   "description": "JS glue for pacer.wasm — deterministic animation driver conducted by an SJON score",
-  "exports": {
-    ".": "./src/index.js",
-    "./audio": "./src/audio.js",
-    "./clock": "./src/clock.js",
-    "./route": "./src/route.js"
+  "keywords": [
+    "animation",
+    "deterministic",
+    "wasm",
+    "webassembly",
+    "sjon",
+    "easing",
+    "timeline",
+    "audio"
+  ],
+  "author": "Hugo Daniel <mail@hugodaniel.pt>",
+  "license": "CC0-1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://git.hugodaniel.com/hugo/pacer.git",
+    "directory": "npm/pacer"
   },
+  "publishConfig": {
+    "registry": "https://git.hugodaniel.com/api/packages/hugo/npm/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "main": "./src/index.js",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./audio": {
+      "types": "./types/audio.d.ts",
+      "default": "./src/audio.js"
+    },
+    "./clock": {
+      "types": "./types/clock.d.ts",
+      "default": "./src/clock.js"
+    },
+    "./route": {
+      "types": "./types/route.d.ts",
+      "default": "./src/route.js"
+    },
+    "./pacer.wasm": "./pacer.wasm",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "types",
+    "pacer.wasm",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "pretest": "cd ../.. && zig build wasm",
-    "test": "node --test"
+    "build:wasm": "cd ../.. && zig build wasm",
+    "build:wasm-copy": "node -e \"require('node:fs').copyFileSync('../../zig-out/bin/pacer.wasm','pacer.wasm')\"",
+    "build:types": "tsc",
+    "build": "npm run build:wasm && npm run build:wasm-copy && npm run build:types",
+    "typecheck": "tsc --noEmit",
+    "clean": "node -e \"const fs=require('node:fs');fs.rmSync('types',{recursive:true,force:true});fs.rmSync('pacer.wasm',{force:true})\"",
+    "pretest": "npm run build:wasm",
+    "test": "node --test",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
   }
 }

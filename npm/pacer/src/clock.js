@@ -7,6 +7,9 @@
 /**
  * Monotonic seconds from the performance clock, rebased to 0 at
  * creation.
+ *
+ * @param {() => number} [now] Seconds source; defaults to `performance.now()`.
+ * @returns {() => number} Reads elapsed seconds since creation.
  */
 export function perfClock(now = () => performance.now() / 1000) {
   const t0 = now();
@@ -25,6 +28,7 @@ export function perfClock(now = () => performance.now() / 1000) {
  *   The AudioTargetHost surface (audio.js; pngine's Sointu player
  *   fits via `sointuHost`). May be null for visual-only use.
  * @param {() => number} fallback - typically `perfClock()`.
+ * @returns {() => number} Samples the master clock in seconds per call.
  */
 export function masterClock(audioHost, fallback = perfClock()) {
   let mastered = false; // audio was authoritative on the last sample

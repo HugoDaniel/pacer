@@ -1,0 +1,22 @@
+{
+  "//": "Library type-gen for the JS+JSDoc glue: type-check the public src under strict, then emit .d.ts into types/. `npm run build:types` runs `tsc` (emit); `npm run typecheck` runs `tsc --noEmit`. noUncheckedIndexedAccess is intentionally OFF — the hot path indexes structurally-validated tables whose bounds the wasm guarantees, and `!` noise there would bury the real invariants.",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+
+    "allowJs": true,
+    "checkJs": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "./types",
+
+    "strict": true,
+    "noEmitOnError": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*.js"]
+}
