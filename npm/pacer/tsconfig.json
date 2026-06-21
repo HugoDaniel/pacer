@@ -1,22 +1,32 @@
 {
-  "//": "Library type-gen for the JS+JSDoc glue: type-check the public src under strict, then emit .d.ts into types/. `npm run build:types` runs `tsc` (emit); `npm run typecheck` runs `tsc --noEmit`. noUncheckedIndexedAccess is intentionally OFF — the hot path indexes structurally-validated tables whose bounds the wasm guarantees, and `!` noise there would bury the real invariants.",
+  "//": "Library type-gen for the JS+JSDoc glue: type-check the public src under the strict 2026 baseline, then emit .d.ts (+ maps) into types/. `npm run build:types` runs `tsc`; `npm run typecheck` runs `tsc --noEmit`. noUncheckedIndexedAccess is ON: the wasm-boundary index access it flags is resolved at named seams — `Pacer#target` asserts the wasm-supplied target_id is in the 'PACT' table the driver gave it, and the fixed 4-lane Float32Array reads coalesce with `?? 0` — so the invariants stay visible instead of buried under `!`. isolatedDeclarations is intentionally absent: tsc forbids it with allowJs (TS5053), and its parallel-d.ts-emit payoff is moot for a single package anyway.",
   "compilerOptions": {
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "target": "es2022",
-    "lib": ["es2022", "dom", "dom.iterable"],
+    "lib": ["es2022", "dom"],
 
     "allowJs": true,
     "checkJs": true,
     "declaration": true,
+    "declarationMap": true,
     "emitDeclarationOnly": true,
     "outDir": "./types",
 
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
     "noEmitOnError": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "verbatimModuleSyntax": true
+    "forceConsistentCasingInFileNames": true
   },
   "include": ["src/**/*.js"]
 }

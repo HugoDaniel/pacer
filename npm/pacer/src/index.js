@@ -63,7 +63,7 @@ export class Pacer {
   #exports;
   /**
    * Flattened registries; the flat index IS the target_id.
-   * @type {{ name: string, ncomp: number, registry: number }[]}
+   * @type {import('./types.js').FlatTarget[]}
    */
   #flat;
   /** @type {Uint8Array} The encoded 'PACT' target blob. */
@@ -77,7 +77,7 @@ export class Pacer {
   ok = false;
   /**
    * Diagnostics from the last (re)load, decoded from 'PACD'.
-   * @type {Diagnostic[]}
+   * @type {ReadonlyArray<Diagnostic>}
    */
   diagnostics = [];
 
@@ -174,6 +174,7 @@ export class Pacer {
     }
     const bytes = new Uint8Array(e.memory.buffer, e.drv_metaPtr(), len);
     const lanes = (/** @type {number} */ base) => {
+      /** @type {number[]} */
       const a = [];
       for (let c = 0; c < 4; c++) a.push(dv.getFloat32(base + c * 4, true));
       return a;
@@ -227,7 +228,7 @@ export class Pacer {
         index: i,
         id: decoder.decode(bytes.subarray(off + PACM_CONTROL_LEN, off + PACM_CONTROL_LEN + idLen)),
         targetId: targetId === PACM_NO_TARGET ? null : targetId,
-        name: targetId === PACM_NO_TARGET ? null : this.#flat[targetId].name,
+        name: targetId === PACM_NO_TARGET ? null : this.#target(targetId).name,
         registry: dv.getUint8(off + 2),
         ncomp: dv.getUint8(off + 3),
         type: CONTROL_TYPES[dv.getUint8(off + 4)] ?? 'slider',
@@ -243,7 +244,7 @@ export class Pacer {
       transport,
       tracks: rawTracks.map((t) => ({
         targetId: t.targetId,
-        name: this.#flat[t.targetId].name,
+        name: this.#target(t.targetId).name,
         registry: t.registry,
         ncomp: t.ncomp,
         source: t.source,
@@ -291,7 +292,7 @@ export class Pacer {
   registerControl(targetName) {
     const targetId = this.#flat.findIndex((t) => t.name === targetName);
     if (targetId < 0) return null;
-    const { registry, ncomp } = this.#flat[targetId];
+    const { registry, ncomp } = this.#target(targetId);
     const slot = this.#exports.drv_registerControl(targetId, registry, ncomp);
     return slot === NO_SLOT ? null : slot;
   }
@@ -355,6 +356,24 @@ export class Pacer {
   }
 
   /**
+   * Resolve a wasm-emitted `target_id` to its registry entry. The id is
+   * always in range — the wasm only ever emits ids from the 'PACT' table
+   * this driver handed it — but the type system can't see that closed
+   * loop, so the lookup asserts the invariant at the seam rather than
+   * leak `undefined` (or paper over it with `!`) into every call site.
+   *
+   * @param {number} targetId
+   * @returns {import('./types.js').FlatTarget}
+   */
+  #target(targetId) {
+    const entry = this.#flat[targetId];
+    if (entry === undefined) {
+      throw new Error(`pacer: target_id ${targetId} not in the registry table (corrupt wasm output)`);
+    }
+    return entry;
+  }
+
+  /**
    * @param {number} len
    * @returns {WriteEntry[] | null}
    */
@@ -366,20 +385,25 @@ export class Pacer {
       throw new Error('pacer: corrupt write buffer');
     }
     const count = dv.getUint32(8, true);
-    while (this.#entries.length < count) {
-      this.#entries.push({ name: '', targetId: 0, registry: 0, ncomp: 0, value: new Float32Array(4) });
-    }
-    this.#entries.length = count;
+    const entries = this.#entries;
     for (let i = 0; i < count; i++) {
       const off = PACW_HEADER_LEN + i * PACW_ENTRY_LEN;
-      const entry = this.#entries[i];
+      // Grow (never shrink) the reused pool: a fresh slot is allocated
+      // only while the frame's write count is still climbing, so the
+      // steady state allocates nothing.
+      let entry = entries[i];
+      if (entry === undefined) {
+        entry = { name: '', targetId: 0, registry: 0, ncomp: 0, value: new Float32Array(4) };
+        entries.push(entry);
+      }
       entry.targetId = dv.getUint16(off, true);
       entry.registry = dv.getUint8(off + 2);
       entry.ncomp = dv.getUint8(off + 3);
-      entry.name = this.#flat[entry.targetId].name;
+      entry.name = this.#target(entry.targetId).name;
       for (let c = 0; c < 4; c++) entry.value[c] = dv.getFloat32(off + 4 + c * 4, true);
     }
-    return this.#entries;
+    entries.length = count;
+    return entries;
   }
 
   /**
@@ -415,26 +439,30 @@ export class Pacer {
 
 /**
  * Encode the flattened target list as a 'PACT' blob.
- * @param {ReadonlyArray<{ name: string, ncomp: number, registry: number }>} flat
+ * @param {ReadonlyArray<import('./types.js').FlatTarget>} flat
  * @returns {Uint8Array}
  */
 function encodeTargets(flat) {
-  const names = flat.map((t) => encoder.encode(t.name));
+  // Pair each target with its UTF-8 name up front so the write loop
+  // never re-correlates two arrays by index.
+  const encoded = flat.map((target) => ({ target, name: encoder.encode(target.name) }));
   let len = 8;
-  for (const n of names) len += 4 + n.length;
+  for (const { name } of encoded) len += 4 + name.length;
   const blob = new Uint8Array(len);
   const dv = new DataView(blob.buffer);
   dv.setUint32(0, PACT_MAGIC, true);
   dv.setUint32(4, flat.length, true);
   let pos = 8;
-  flat.forEach((t, i) => {
-    if (t.ncomp < 1 || t.ncomp > 4) throw new Error(`pacer: target ${t.name} has ncomp ${t.ncomp}`);
-    blob[pos] = t.ncomp;
-    blob[pos + 1] = t.registry;
-    dv.setUint16(pos + 2, names[i].length, true);
+  for (const { target, name } of encoded) {
+    if (target.ncomp < 1 || target.ncomp > 4) {
+      throw new Error(`pacer: target ${target.name} has ncomp ${target.ncomp}`);
+    }
+    blob[pos] = target.ncomp;
+    blob[pos + 1] = target.registry;
+    dv.setUint16(pos + 2, name.length, true);
     pos += 4;
-    blob.set(names[i], pos);
-    pos += names[i].length;
-  });
+    blob.set(name, pos);
+    pos += name.length;
+  }
   return blob;
 }

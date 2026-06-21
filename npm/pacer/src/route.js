@@ -19,7 +19,10 @@ export function toUniforms(entries, registry = 0) {
   const uniforms = {};
   for (const e of entries) {
     if (e.registry !== registry) continue;
-    uniforms[e.name] = e.ncomp === 1 ? e.value[0] : Array.from(e.value.subarray(0, e.ncomp));
+    // `value` is a fixed 4-lane Float32Array, so lane 0 is always present;
+    // `?? 0` only satisfies noUncheckedIndexedAccess (and matches the
+    // trailing-lane-is-0 contract) — it never fires at runtime.
+    uniforms[e.name] = e.ncomp === 1 ? e.value[0] ?? 0 : Array.from(e.value.subarray(0, e.ncomp));
   }
   return uniforms;
 }
@@ -35,7 +38,8 @@ export function toUniforms(entries, registry = 0) {
 export function routeWrites(entries, registryCount) {
   const groups = Array.from({ length: registryCount }, () => /** @type {WriteEntry[]} */ ([]));
   for (const e of entries) {
-    if (e.registry < registryCount) groups[e.registry].push(e);
+    const group = groups[e.registry];
+    if (group !== undefined) group.push(e);
   }
   return groups;
 }

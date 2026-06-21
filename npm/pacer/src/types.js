@@ -4,6 +4,12 @@
 // module so the typedefs are importable). The driver, routing, and audio
 // modules name one set of types by referencing `import('./types.js').X`,
 // and `tsc` emits them into `types/types.d.ts` for published consumers.
+//
+// Convention: decoded, consumer-facing values (diagnostics, meta, spans)
+// are `readonly` — they are produced once per (re)load and meant to be
+// read, not mutated. The lone exception is {@link WriteEntry}, which is
+// deliberately mutable: the driver reuses the same entry objects frame to
+// frame, so the hot path allocates nothing after warm-up.
 
 export {};
 
@@ -25,9 +31,9 @@ export {};
  */
 
 /**
- * One resolved write produced by `Pacer.eval`. The object and its `value`
- * are reused frame to frame — copy `value` if you must retain it past the
- * next `eval`.
+ * One resolved write produced by `Pacer.eval`. Deliberately mutable: the
+ * object and its `value` are reused frame to frame — copy `value` if you
+ * must retain it past the next `eval`.
  * @typedef {object} WriteEntry
  * @property {string} name Target name, from the joined host registry.
  * @property {number} targetId Flat index into the joined registry list.
@@ -61,7 +67,7 @@ export {};
  * Outcome of a (re)load: `ok` plus any diagnostics.
  * @typedef {object} LoadResult
  * @property {boolean} ok
- * @property {Diagnostic[]} diagnostics
+ * @property {ReadonlyArray<Diagnostic>} diagnostics
  */
 
 /**
@@ -78,7 +84,7 @@ export {};
  * byte span of its `(key …)` form.
  * @typedef {object} MetaKey
  * @property {bigint} at Tick position on the PPC grid.
- * @property {number[]} value Four lanes (trailing lanes are 0).
+ * @property {ReadonlyArray<number>} value Four lanes (trailing lanes are 0).
  * @property {Span} span
  */
 
@@ -91,7 +97,7 @@ export {};
  * @property {number} ncomp
  * @property {'keys' | 'expr'} source Value source: keyframes or an expression.
  * @property {Span} span
- * @property {MetaKey[]} keys Empty for expr tracks.
+ * @property {ReadonlyArray<MetaKey>} keys Empty for expr tracks.
  */
 
 /**
@@ -104,9 +110,9 @@ export {};
  * @property {number} registry
  * @property {number} ncomp
  * @property {'slider' | 'xy' | 'color'} type Editor widget hint.
- * @property {number[]} value Document value (four lanes).
- * @property {number[] | null} min Widget floor — editor metadata only.
- * @property {number[] | null} max Widget ceiling — editor metadata only.
+ * @property {ReadonlyArray<number>} value Document value (four lanes).
+ * @property {ReadonlyArray<number> | null} min Widget floor — editor metadata only.
+ * @property {ReadonlyArray<number> | null} max Widget ceiling — editor metadata only.
  * @property {Span} valueSpan Commit-to-text anchor for the value.
  */
 
@@ -114,8 +120,8 @@ export {};
  * Decoded score metadata ('PACM'): the editor's timeline anchors.
  * @typedef {object} Meta
  * @property {Transport} transport
- * @property {MetaTrack[]} tracks
- * @property {MetaControl[]} controls
+ * @property {ReadonlyArray<MetaTrack>} tracks
+ * @property {ReadonlyArray<MetaControl>} controls
  */
 
 /**
@@ -126,6 +132,15 @@ export {};
 /**
  * A control value: a scalar or up to four components.
  * @typedef {number | readonly number[]} ControlValue
+ */
+
+/**
+ * The flattened registry entry: the join of all registries, where the
+ * flat index IS the `target_id`. Internal to the driver.
+ * @typedef {object} FlatTarget
+ * @property {string} name
+ * @property {number} ncomp
+ * @property {number} registry
  */
 
 /**
