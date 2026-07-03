@@ -115,4 +115,35 @@ pub fn build(b: *std.Build) void {
     verify_step.dependOn(&run_tests.step);
     verify_step.dependOn(&run_corpus.step);
     verify_step.dependOn(&node_test.step);
+
+    // `zig build fuzz` — never-panic harnesses over the byte-eating and
+    // arbitrary-input entrypoints (compile, decodeTargets, Writes.decode,
+    // Easing builders). A SEPARATE target so `verify` stays fast; same
+    // module wiring as `test_mod` (sjon + the embedded schema). Each
+    // harness runs its corpus on a plain invocation and Smith-generated
+    // inputs under the instrumented fuzzer.
+    const fuzz_mod = b.createModule(.{
+        .root_source_file = b.path("src/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_mod },
+        },
+    });
+    fuzz_mod.addAnonymousImport("pacer_schema", .{
+        .root_source_file = b.path("schema/pacer.sjon"),
+    });
+    const fuzz_test = b.addTest(.{ .root_module = fuzz_mod });
+    const run_fuzz = b.addRunArtifact(fuzz_test);
+    const fuzz_step = b.step("fuzz", "Run never-panic fuzz harnesses");
+    fuzz_step.dependOn(&run_fuzz.step);
+
+    // `zig build audit-diagnostics` — assert every `Compile.Code` variant
+    // is exercised by name in some `test {}` body (corpus goldens carry
+    // numeric codes, so they can't satisfy the check). Keeps a new code
+    // from landing without a test, or a test from drifting to a
+    // message-only assertion when a code is renamed.
+    const audit_diagnostics_step = b.step("audit-diagnostics", "Audit Compile.Code test coverage");
+    const audit_diagnostics = b.addSystemCommand(&.{"tools/audit_diagnostic_coverage.sh"});
+    audit_diagnostics_step.dependOn(&audit_diagnostics.step);
 }

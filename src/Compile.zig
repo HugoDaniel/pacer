@@ -349,6 +349,7 @@ const Builder = struct {
     fn buildControls(self: *Builder, ta: Allocator, controls: *std.ArrayList(TrackTable.Control)) Error!void {
         const tree = self.tree;
         for (self.dataForest()) |idx| {
+            if (tree.tagOf(idx) != .form) continue; // stray top-level atom
             if (!std.mem.eql(u8, tree.formHeader(idx).head, "control")) continue;
             if (controls.items.len == TrackTable.MAX_CONTROLS) {
                 try self.emit(.control_cap_exceeded, tree.spanOf(idx), "more than {d} controls", .{TrackTable.MAX_CONTROLS});
@@ -439,6 +440,7 @@ const Builder = struct {
         const tree = self.tree;
         var found: ?NodeIndex = null;
         for (self.dataForest()) |idx| {
+            if (tree.tagOf(idx) != .form) continue; // stray top-level atom
             if (!std.mem.eql(u8, tree.formHeader(idx).head, "transport")) continue;
             if (found != null) {
                 try self.emit(.transport_duplicate, tree.spanOf(idx), "more than one (transport …) form", .{});
@@ -499,6 +501,7 @@ const Builder = struct {
         const tree = self.tree;
         const map = &transport.map;
         for (self.dataForest()) |idx| {
+            if (tree.tagOf(idx) != .form) continue; // stray top-level atom
             const hdr = tree.formHeader(idx);
             if (!std.mem.eql(u8, hdr.head, "track")) continue;
 
@@ -1237,4 +1240,148 @@ test "compile leaves table null when SJON validation already failed" {
     try t.expect(!r.ok());
     try t.expectEqual(@as(usize, 0), r.diagnostics.len); // SJON's own diagnostic carries it
     try t.expect(findCode(&r.validated, .unit_required) != null);
+}
+
+/// Compile `source` and assert exactly that `code` was raised (the score
+/// is defective, so the table is null).
+fn expectDiag(source: [:0]const u8, code: Code) !void {
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    if (r.findDiag(code) == null) {
+        for (r.diagnostics) |d| std.debug.print("  got: {s} — {s}\n", .{ @tagName(d.code), d.message });
+        std.debug.print("expected diagnostic .{s} was not raised\n", .{@tagName(code)});
+        return error.DiagnosticNotRaised;
+    }
+}
+
+test "compile diagnostics: transport + easing defects fire by name" {
+    // Two transports, a non-positive :dur, and a position past the grid.
+    try expectDiag(
+        \\(transport :bpm 120)
+        \\(transport :bpm 100)
+        \\(track :target circle-radius (key :at 0b :value 0))
+    , .transport_duplicate);
+    try expectDiag(
+        \\(transport :bpm 120 :dur 0b)
+        \\(track :target circle-radius (key :at 0b :value 0))
+    , .transport_invalid);
+    try expectDiag(
+        \\(transport :bpm 120)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0)
+        \\  (key :at 99999999999999999bar :value 1))
+    , .tick_overflow);
+
+    // Easing: an out-of-domain bezier x (schema lets the control points
+    // through; the [0,1] x-bound is a compile-stage check), an over-long
+    // chain, and too many stages.
+    try expectDiag(
+        \\(transport :bpm 120)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0)
+        \\  (key :at 1b :value 1 :ease (cubic-bezier :p [2 0 0.5 1])))
+    , .ease_params_invalid);
+    try expectDiag(
+        \\(transport :bpm 120)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0)
+        \\  (key :at 1b :value 1 :ease (chain linear linear linear linear linear)))
+    , .ease_ops_exceeded);
+    try expectDiag(
+        \\(transport :bpm 120)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0)
+        \\  (key :at 1b :value 1 :ease (seq
+        \\    (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v 1)
+        \\    (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v 1)
+        \\    (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v 1)
+        \\    (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v 1)
+        \\    (stage :ease linear :t 1 :v 1))))
+    , .ease_stages_exceeded);
+}
+
+test "compile diagnostics: table + program caps fire by name" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const zterm = struct {
+        fn f(al: Allocator, src: *std.ArrayList(u8)) ![:0]const u8 {
+            try src.append(al, 0);
+            return src.items[0 .. src.items.len - 1 :0];
+        }
+    }.f;
+
+    // track_cap_exceeded: MAX_TRACKS + 1 tracks. The cap is structural
+    // (checked before target resolution), so one shared target is fine.
+    {
+        var src: std.ArrayList(u8) = .empty;
+        try src.appendSlice(a, "(transport :bpm 120)\n");
+        for (0..TrackTable.MAX_TRACKS + 1) |_|
+            try src.appendSlice(a, "(track :target circle-radius (key :at 0b :value 0))\n");
+        var r = try compile(t.allocator, try zterm(a, &src), &test_targets);
+        defer r.deinit();
+        try t.expect(r.findDiag(.track_cap_exceeded) != null);
+    }
+
+    // key_cap_exceeded: one track, MAX_KEYS + 1 keys on a rising grid.
+    {
+        var src: std.ArrayList(u8) = .empty;
+        try src.appendSlice(a, "(transport :bpm 120)\n(track :target circle-radius\n");
+        for (0..TrackTable.MAX_KEYS + 1) |i|
+            try src.appendSlice(a, try std.fmt.allocPrint(a, "  (key :at {d}b :value 0)\n", .{i}));
+        try src.appendSlice(a, ")\n");
+        var r = try compile(t.allocator, try zterm(a, &src), &test_targets);
+        defer r.deinit();
+        try t.expect(r.findDiag(.key_cap_exceeded) != null);
+    }
+
+    // control_cap_exceeded: MAX_CONTROLS + 1 uniquely-ided controls.
+    {
+        var src: std.ArrayList(u8) = .empty;
+        try src.appendSlice(a, "(transport :bpm 120)\n");
+        for (0..TrackTable.MAX_CONTROLS + 1) |i|
+            try src.appendSlice(a, try std.fmt.allocPrint(a, "(control :id c{d} :value 0)\n", .{i}));
+        try src.appendSlice(a, "(track :target circle-radius (key :at 0b :value 0))\n");
+        var r = try compile(t.allocator, try zterm(a, &src), &test_targets);
+        defer r.deinit();
+        try t.expect(r.findDiag(.control_cap_exceeded) != null);
+    }
+
+    // ease_cap_exceeded: MAX_EASE_PROGRAMS + 2 keys, each a DISTINCT
+    // program (steps-end n, steps-start n, then two named), so dedup
+    // cannot collapse them below the cap.
+    {
+        var src: std.ArrayList(u8) = .empty;
+        try src.appendSlice(a, "(transport :bpm 120)\n(track :target circle-radius\n");
+        for (0..TrackTable.MAX_EASE_PROGRAMS + 2) |i| {
+            const ease = if (i < 64)
+                try std.fmt.allocPrint(a, "(steps :n {d})", .{i + 1})
+            else if (i < 128)
+                try std.fmt.allocPrint(a, "(steps :n {d} :jump start)", .{i - 63})
+            else if (i == 128)
+                try a.dupe(u8, "linear")
+            else
+                try a.dupe(u8, "smoothstep");
+            try src.appendSlice(a, try std.fmt.allocPrint(a, "  (key :at {d}b :value 0 :ease {s})\n", .{ i, ease }));
+        }
+        try src.appendSlice(a, ")\n");
+        var r = try compile(t.allocator, try zterm(a, &src), &test_targets);
+        defer r.deinit();
+        try t.expect(r.findDiag(.ease_cap_exceeded) != null);
+    }
+}
+
+test "compile never panics on stray top-level atoms (fuzz regression)" {
+    // A parseable document whose data forest holds a NON-form node (a
+    // bare atom or vector) must degrade to a diagnostic, never trap:
+    // buildTransport / buildTracks / buildControls once called formHeader
+    // on every forest node without a tagOf guard. drv_load reaches this
+    // path, so this is a real crash surface, not a test-only one.
+    for ([_][:0]const u8{ "5", "[1 2 3]", "nil" }) |src| {
+        var r = try compile(t.allocator, src, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok()); // no transport → not loadable, but no panic
+    }
 }
