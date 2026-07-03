@@ -1,0 +1,16 @@
+; controls-live: live control + tempo directives under the corpus gate.
+; depth (a targeted slider into gain, with :min/:max rails) and sway (an
+; env-only knob) feed blend = depth * sway; radius is a keyed track; lift
+; is an unpinned target driven only by a register-control slot. :dur +
+; :end exercise the transport meta path.
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(control :id depth :target gain :min 0 :max 1 :value 0.25)
+(control :id sway :value 0.5)
+
+(track :target radius
+  (key :at 0b :value 0.0)
+  (key :at 4b :value 1.0))
+
+(track :target blend
+  :expr (* depth sway))

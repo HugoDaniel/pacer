@@ -3,7 +3,13 @@
 // its raw output blobs, and compare byte-equal against expected.sjon —
 // the SAME golden the native runner (src/corpus_runner.zig) checks.
 // Native green + this green ⇒ native and wasm32 produce identical
-// 'PACW'/'PACD' bytes for every pinned (score, time).
+// 'PACW'/'PACD'/'PACM' bytes for every pinned (score, time, directive).
+//
+// The `(meta …)` block is rendered here from the DECODED `driver.meta`
+// object (the native runner renders the SAME text from the encoded
+// 'PACM' blob), so this pair gates the meta encoder AND the JS decoder.
+// Script directives (set-control / clear-control / set-bpm /
+// register-control) execute in document order and echo their acceptance.
 //
 // The canonical format is defined in src/corpus_runner.zig's header;
 // regenerate goldens with `zig build corpus -- --update` (never here —
@@ -27,26 +33,63 @@ const PACW_ENTRY_LEN = 20;
 /**
  * Parse the constrained harness format (times.sjon): flat
  * `(target NAME :registry R :ncomp N)` forms — flat order IS the
- * target_id space — and one `(times "HEX16" …)` form. Comments are
- * `;` to end of line and never contain quotes; the native runner
+ * target_id space, and must precede all script forms — then script
+ * forms executed in document order: `(times "H16" …)`,
+ * `(set-control :index N :value ["H8"×4])`, `(clear-control :index N)`,
+ * `(set-bpm :bpm "H16")`, `(register-control :target-id N …)`. Comments
+ * are `;` to end of line and never contain quotes; the native runner
  * parses the same file with real SJON and is the stricter check.
  */
 function parseHarness(src) {
   const stripped = src.replace(/;[^\n]*/g, '');
   const flat = [];
-  for (const m of stripped.matchAll(/\(target\s+([^\s)]+)((?:\s+:[a-z]+\s+\d+)*)\s*\)/g)) {
-    const target = { name: m[1], ncomp: 1, registry: 0 };
-    for (const kv of m[2].matchAll(/:([a-z]+)\s+(\d+)/g)) {
-      if (kv[1] === 'ncomp') target.ncomp = Number(kv[2]);
-      else if (kv[1] === 'registry') target.registry = Number(kv[2]);
-      else throw new Error(`harness: unknown target key :${kv[1]}`);
+  const steps = [];
+  let sawScript = false;
+  for (const m of stripped.matchAll(/\(([a-z][a-z-]*)([^)]*)\)/g)) {
+    const [, head, body] = m;
+    if (head === 'target') {
+      if (sawScript) throw new Error('harness: (target …) forms must precede all script forms');
+      const name = body.match(/^\s*([^\s:)]+)/);
+      if (!name) throw new Error('harness: (target …) needs a name');
+      const target = { name: name[1], ncomp: 1, registry: 0 };
+      for (const kv of body.matchAll(/:([a-z]+)\s+(\d+)/g)) {
+        if (kv[1] === 'ncomp') target.ncomp = Number(kv[2]);
+        else if (kv[1] === 'registry') target.registry = Number(kv[2]);
+        else throw new Error(`harness: unknown target key :${kv[1]}`);
+      }
+      flat.push(target);
+    } else if (head === 'times') {
+      sawScript = true;
+      for (const t of body.matchAll(/"([0-9A-Fa-f]{16})"/g))
+        steps.push({ kind: 'eval', bits: BigInt(`0x${t[1]}`) });
+    } else if (head === 'set-control') {
+      sawScript = true;
+      steps.push({
+        kind: 'set-control',
+        index: harnessInt(body, 'index'),
+        bits: harnessLanes(body),
+      });
+    } else if (head === 'clear-control') {
+      sawScript = true;
+      steps.push({ kind: 'clear-control', index: harnessInt(body, 'index') });
+    } else if (head === 'set-bpm') {
+      sawScript = true;
+      const b = body.match(/"([0-9A-Fa-f]{16})"/);
+      if (!b) throw new Error('harness: (set-bpm …) needs a :bpm 16-hex string');
+      steps.push({ kind: 'set-bpm', bits: BigInt(`0x${b[1]}`) });
+    } else if (head === 'register-control') {
+      sawScript = true;
+      steps.push({
+        kind: 'register-control',
+        targetId: harnessInt(body, 'target-id'),
+        registry: harnessInt(body, 'registry'),
+        ncomp: harnessInt(body, 'ncomp'),
+      });
+    } else {
+      throw new Error(`harness: unknown form (${head} …)`);
     }
-    flat.push(target);
   }
-  const timesForm = stripped.match(/\(times([\s\S]*?)\)/);
-  if (!timesForm) throw new Error('harness: missing (times …)');
-  const times = [...timesForm[1].matchAll(/"([0-9A-Fa-f]{16})"/g)].map((m) => BigInt(`0x${m[1]}`));
-  if (flat.length === 0 || times.length === 0) throw new Error('harness: empty targets or times');
+  if (flat.length === 0 || steps.length === 0) throw new Error('harness: empty targets or script');
 
   // Regroup the flat list for Pacer.load; non-decreasing registry
   // indices (enforced by the native runner) keep flatMap's order equal
@@ -56,10 +99,24 @@ function parseHarness(src) {
     while (registries.length <= t.registry) registries.push([]);
     registries[t.registry].push({ name: t.name, ncomp: t.ncomp });
   }
-  return { flat, times, registries };
+  return { flat, registries, steps };
 }
 
-/** Uppercase fixed-width hex — Zig's `{X:0>w}`. */
+/** `:key N` as an integer, from a harness form body. */
+function harnessInt(body, key) {
+  const m = body.match(new RegExp(`:${key}\\s+(\\d+)`));
+  if (!m) throw new Error(`harness: missing :${key}`);
+  return Number(m[1]);
+}
+
+/** `:value ["H8" "H8" "H8" "H8"]` as four u32 f32-bit patterns. */
+function harnessLanes(body) {
+  const lanes = [...body.matchAll(/"([0-9A-Fa-f]{8})"/g)].map((x) => Number.parseInt(x[1], 16));
+  if (lanes.length !== 4) throw new Error('harness: :value needs four 8-hex lanes');
+  return lanes;
+}
+
+/** Uppercase fixed-width hex — Zig's `{X:0>w}`; accepts number or BigInt. */
 const hex = (value, width) => value.toString(16).toUpperCase().padStart(width, '0');
 
 const f64FromBits = (bits) => {
@@ -67,6 +124,24 @@ const f64FromBits = (bits) => {
   dv.setBigUint64(0, bits);
   return dv.getFloat64(0);
 };
+const f64Bits = (x) => {
+  const dv = new DataView(new ArrayBuffer(8));
+  dv.setFloat64(0, x);
+  return dv.getBigUint64(0);
+};
+const f32FromBits = (bits) => {
+  const dv = new DataView(new ArrayBuffer(4));
+  dv.setUint32(0, bits);
+  return dv.getFloat32(0);
+};
+const f32Bits = (x) => {
+  const dv = new DataView(new ArrayBuffer(4));
+  dv.setFloat32(0, x);
+  return dv.getUint32(0);
+};
+
+/** Four f32 lanes as space-separated `"H8"` bit patterns (no brackets). */
+const laneHex = (arr) => arr.map((x) => `"${hex(f32Bits(x), 8)}"`).join(' ');
 
 function escapeMessage(msg) {
   let out = '';
@@ -95,6 +170,32 @@ function renderWrites(bytes, flat) {
   return out;
 }
 
+/**
+ * Render the `(meta …)` block from the DECODED `driver.meta` object —
+ * the native runner renders the same text from the encoded 'PACM' blob,
+ * so byte-parity gates both the encoder and this decoder.
+ */
+function renderMeta(meta) {
+  const t = meta.transport;
+  let out = `(meta :bpm "${hex(f64Bits(t.bpm), 16)}" :beats-per-bar ${t.beatsPerBar}`;
+  if (t.dur !== null) out += ` :dur ${t.dur} :end ${t.end}`;
+  for (const tr of meta.tracks) {
+    out += `\n  (mtrack :id ${tr.targetId} :target ${tr.name} :registry ${tr.registry}`;
+    out += ` :ncomp ${tr.ncomp} :source ${tr.source} :span [${tr.span.start} ${tr.span.end}]`;
+    for (const k of tr.keys) {
+      out += `\n    (mkey :at ${k.at} :value [${laneHex(k.value)}] :span [${k.span.start} ${k.span.end}])`;
+    }
+    out += ')';
+  }
+  for (const c of meta.controls) {
+    const rail = (r) => (r ? `[${laneHex(r)}]` : 'none');
+    out += `\n  (mcontrol :index ${c.index} :id ${c.id} :target ${c.name ?? 'none'}`;
+    out += ` :registry ${c.registry} :ncomp ${c.ncomp} :type ${c.type} :value [${laneHex(c.value)}]`;
+    out += ` :min ${rail(c.min)} :max ${rail(c.max)} :value-span [${c.valueSpan.start} ${c.valueSpan.end}])`;
+  }
+  return `${out})\n`;
+}
+
 async function renderCase(doc, harness) {
   const driver = await Pacer.load(wasmModule, doc, { registries: harness.registries });
   let out = GENERATED_HEADER;
@@ -104,13 +205,31 @@ async function renderCase(doc, harness) {
     out += ` :start ${d.start} :end ${d.end} :message "${escapeMessage(d.message)}")\n`;
   }
   if (!driver.ok) return out;
-  for (const bits of harness.times) {
-    const t = `(eval :t "${hex(bits, 16)}"`;
-    const bytes = driver.evalBytes(f64FromBits(bits));
-    if (bytes === null) {
-      out += `${t} :out-of-range true)\n`;
-    } else {
-      out += `${t}${renderWrites(bytes, harness.flat)})\n`;
+
+  // Meta reflects the document — render before any set-bpm nudge.
+  out += renderMeta(driver.meta);
+
+  for (const step of harness.steps) {
+    if (step.kind === 'eval') {
+      const head = `(eval :t "${hex(step.bits, 16)}"`;
+      const bytes = driver.evalBytes(f64FromBits(step.bits));
+      out +=
+        bytes === null
+          ? `${head} :out-of-range true)\n`
+          : `${head}${renderWrites(bytes, harness.flat)})\n`;
+    } else if (step.kind === 'set-control') {
+      const ok = driver.setControl(step.index, step.bits.map(f32FromBits));
+      const value = step.bits.map((b) => `"${hex(b, 8)}"`).join(' ');
+      out += `(set-control :index ${step.index} :value [${value}] :ok ${ok})\n`;
+    } else if (step.kind === 'clear-control') {
+      out += `(clear-control :index ${step.index} :ok ${driver.clearControl(step.index)})\n`;
+    } else if (step.kind === 'set-bpm') {
+      const ok = driver.setBpm(f64FromBits(step.bits));
+      out += `(set-bpm :bpm "${hex(step.bits, 16)}" :ok ${ok})\n`;
+    } else if (step.kind === 'register-control') {
+      const slot = driver.registerControl(harness.flat[step.targetId].name);
+      out += `(register-control :target-id ${step.targetId} :registry ${step.registry}`;
+      out += ` :ncomp ${step.ncomp} :slot ${slot === null ? 'none' : slot})\n`;
     }
   }
   return out;
