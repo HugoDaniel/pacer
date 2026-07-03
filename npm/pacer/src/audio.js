@@ -10,6 +10,8 @@
 // `applyParams`. The driver stays a pure function of time — it never
 // reads a clock and never owns the loop.
 
+import { laneValue } from './lane.js';
+
 /**
  * @typedef {{ seconds: number, playing: boolean }} AudioClock
  * @typedef {{ name: string, min?: number, max?: number, default?: number, ncomp?: number }} AudioParamSpec
@@ -64,11 +66,6 @@ export function paramRegistry(host) {
 export function applyParams(entries, host, registry = 1) {
   for (const e of entries) {
     if (e.registry !== registry) continue;
-    // Lane 0 is always present in the fixed 4-lane buffer; `?? 0` is for
-    // noUncheckedIndexedAccess only and never fires at runtime.
-    host.setParam(
-      e.name,
-      e.ncomp === 1 ? (e.value[0] ?? 0) : Array.from(e.value.subarray(0, e.ncomp)),
-    );
+    host.setParam(e.name, laneValue(e));
   }
 }

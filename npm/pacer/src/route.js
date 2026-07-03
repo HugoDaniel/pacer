@@ -2,6 +2,8 @@
 // ordered registries by each entry's `registry` index. Registry 0 is
 // conventionally the visual bus (pngine uniforms), registry 1 audio.
 
+import { laneValue } from './lane.js';
+
 /** @typedef {import('./types.js').WriteEntry} WriteEntry */
 
 /**
@@ -19,10 +21,7 @@ export function toUniforms(entries, registry = 0) {
   const uniforms = {};
   for (const e of entries) {
     if (e.registry !== registry) continue;
-    // `value` is a fixed 4-lane Float32Array, so lane 0 is always present;
-    // `?? 0` only satisfies noUncheckedIndexedAccess (and matches the
-    // trailing-lane-is-0 contract) — it never fires at runtime.
-    uniforms[e.name] = e.ncomp === 1 ? (e.value[0] ?? 0) : Array.from(e.value.subarray(0, e.ncomp));
+    uniforms[e.name] = laneValue(e);
   }
   return uniforms;
 }
