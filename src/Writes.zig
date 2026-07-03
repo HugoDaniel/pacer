@@ -26,6 +26,8 @@ pub const Entry = extern struct {
     /// Index into the load-time target join (string-free hot path).
     target_id: u16,
     /// Registry index of the resolved target (0 = visual, 1 = audio, …).
+    /// The name is reserved for future bit-packing; today it is exactly
+    /// the registry index.
     flags: u8,
     /// Live component count, 1–4. Lanes ≥ ncomp are zero.
     ncomp: u8,
