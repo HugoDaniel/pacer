@@ -208,6 +208,49 @@ fn appendRecord(dest: []u8, pos: *usize, source: u8, severity: u8, code: u16, sp
 // 'PACM' — score metadata out
 // ---------------------------------------------------------------------------
 
+/// 'PACM' track record — 24 bytes, mirrors META_TRACK_LEN. LE hosts only
+/// (the module's standing assumption); encoded by value-copy like Writes.Entry.
+const MetaTrackRec = extern struct {
+    target_id: u16,
+    registry: u8,
+    ncomp: u8,
+    source: u8, // 0 keys / 1 expr
+    _pad: [3]u8 = .{ 0, 0, 0 },
+    key_start: u32,
+    key_len: u32,
+    span_start: u32,
+    span_end: u32,
+};
+const MetaKeyRec = extern struct {
+    at: i64,
+    value: [4]f32,
+    span_start: u32,
+    span_end: u32,
+};
+const MetaControlRec = extern struct {
+    target_id: u16, // 0xffff = env-only
+    registry: u8,
+    ncomp: u8,
+    kind: u8,
+    flags: u8, // bit0 min, bit1 max
+    id_len: u16,
+    value: [4]f32,
+    min: [4]f32,
+    max: [4]f32,
+    value_span_start: u32,
+    value_span_end: u32,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(MetaTrackRec) == META_TRACK_LEN);
+    std.debug.assert(@sizeOf(MetaKeyRec) == META_KEY_LEN);
+    std.debug.assert(@sizeOf(MetaControlRec) == META_CONTROL_LEN);
+    // spot-check a couple of offsets so a field reorder is a build break
+    std.debug.assert(@offsetOf(MetaTrackRec, "key_start") == 8);
+    std.debug.assert(@offsetOf(MetaControlRec, "value") == 8);
+    std.debug.assert(@offsetOf(MetaControlRec, "value_span_start") == 56);
+}
+
 /// Exact encoded size of the meta blob. Asserts a live table.
 pub fn metaEncodedLen(result: *const Compile.CompileResult) usize {
     const table = &result.table.?;
@@ -247,65 +290,63 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
 
     var pos: usize = META_HEADER_LEN;
     for (table.tracks, table.track_spans) |track, span| {
-        const rec = dest[pos..][0..META_TRACK_LEN];
-        std.mem.writeInt(u16, rec[0..2], track.target_id, .little);
-        rec[2] = track.registry;
-        rec[3] = track.ncomp;
-        rec[4] = switch (track.source) {
-            .keys => 0,
-            .expr => 1,
-        };
-        rec[5] = 0;
-        rec[6] = 0;
-        rec[7] = 0;
+        const us = userSpan(v, span);
         const range: struct { start: u32, len: u32 } = switch (track.source) {
             .keys => |ks| .{ .start = ks.start, .len = ks.len },
             .expr => .{ .start = 0, .len = 0 },
         };
-        std.mem.writeInt(u32, rec[8..12], range.start, .little);
-        std.mem.writeInt(u32, rec[12..16], range.len, .little);
-        writeSpan(rec[16..24], userSpan(v, span));
+        const rec: MetaTrackRec = .{
+            .target_id = track.target_id,
+            .registry = track.registry,
+            .ncomp = track.ncomp,
+            .source = switch (track.source) {
+                .keys => 0,
+                .expr => 1,
+            },
+            .key_start = range.start,
+            .key_len = range.len,
+            .span_start = us.start,
+            .span_end = us.end,
+        };
+        @memcpy(dest[pos..][0..META_TRACK_LEN], std.mem.asBytes(&rec));
         pos += META_TRACK_LEN;
     }
     for (table.keys, table.key_spans) |key, span| {
-        const rec = dest[pos..][0..META_KEY_LEN];
-        std.mem.writeInt(i64, rec[0..8], key.at, .little);
-        writeF32x4(rec[8..24], key.value);
-        writeSpan(rec[24..32], userSpan(v, span));
+        const us = userSpan(v, span);
+        const rec: MetaKeyRec = .{
+            .at = key.at,
+            .value = key.value,
+            .span_start = us.start,
+            .span_end = us.end,
+        };
+        @memcpy(dest[pos..][0..META_KEY_LEN], std.mem.asBytes(&rec));
         pos += META_KEY_LEN;
     }
     for (table.controls) |ctl| {
-        const rec = dest[pos..][0..META_CONTROL_LEN];
-        std.mem.writeInt(u16, rec[0..2], if (ctl.target) |tg| tg.id else META_NO_TARGET, .little);
-        rec[2] = if (ctl.target) |tg| tg.registry else 0;
-        rec[3] = ctl.ncomp;
-        rec[4] = @intFromEnum(ctl.kind);
         var cflags: u8 = 0;
         if (ctl.min != null) cflags |= 1;
         if (ctl.max != null) cflags |= 2;
-        rec[5] = cflags;
-        std.mem.writeInt(u16, rec[6..8], @intCast(ctl.id.len), .little);
-        writeF32x4(rec[8..24], ctl.value);
-        writeF32x4(rec[24..40], ctl.min orelse .{ 0, 0, 0, 0 });
-        writeF32x4(rec[40..56], ctl.max orelse .{ 0, 0, 0, 0 });
-        writeSpan(rec[56..64], userSpan(v, ctl.value_span));
+        const us = userSpan(v, ctl.value_span);
+        const rec: MetaControlRec = .{
+            .target_id = if (ctl.target) |tg| tg.id else META_NO_TARGET,
+            .registry = if (ctl.target) |tg| tg.registry else 0,
+            .ncomp = ctl.ncomp,
+            .kind = @intFromEnum(ctl.kind),
+            .flags = cflags,
+            .id_len = @intCast(ctl.id.len),
+            .value = ctl.value,
+            .min = ctl.min orelse .{ 0, 0, 0, 0 },
+            .max = ctl.max orelse .{ 0, 0, 0, 0 },
+            .value_span_start = us.start,
+            .value_span_end = us.end,
+        };
+        @memcpy(dest[pos..][0..META_CONTROL_LEN], std.mem.asBytes(&rec));
         pos += META_CONTROL_LEN;
         @memcpy(dest[pos..][0..ctl.id.len], ctl.id);
         pos += ctl.id.len;
     }
     std.debug.assert(pos == total);
     return dest[0..pos];
-}
-
-fn writeSpan(rec: *[8]u8, span: Ast.Span) void {
-    std.mem.writeInt(u32, rec[0..4], span.start, .little);
-    std.mem.writeInt(u32, rec[4..8], span.end, .little);
-}
-
-fn writeF32x4(rec: *[16]u8, value: [4]f32) void {
-    for (value, 0..) |x, i| {
-        std.mem.writeInt(u32, rec[i * 4 ..][0..4], @bitCast(x), .little);
-    }
 }
 
 // ---------------------------------------------------------------------------
