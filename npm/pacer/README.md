@@ -32,14 +32,24 @@ pass the bytes (or a compiled `WebAssembly.Module`) to `Pacer.load`. Resolve the
 shipped binary via the `pacer/pacer.wasm` subpath:
 
 ```js
-// Browser / bundler — get a URL to the shipped asset:
-const wasmUrl = new URL('pacer/pacer.wasm', import.meta.url); // or your bundler's ?url import
+// Browser (bundler) — import the asset URL, then fetch it. Use your
+// bundler's URL suffix/loader: Vite/webpack `?url`, esbuild `file`, …
+import wasmUrl from 'pacer/pacer.wasm?url';
 const wasm = await fetch(wasmUrl).then((r) => r.arrayBuffer());
-
-// Node:
-import { readFile } from 'node:fs/promises';
-const wasm = await readFile(import.meta.resolve('pacer/pacer.wasm').slice('file://'.length));
 ```
+
+```js
+// Node — resolve the subpath to a file path, then read the bytes:
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+const wasm = await readFile(fileURLToPath(import.meta.resolve('pacer/pacer.wasm')));
+```
+
+Without a bundler, a browser can't resolve the bare `pacer/pacer.wasm`
+specifier at runtime — `new URL('pacer/pacer.wasm', import.meta.url)` is a
+*relative-URL* resolution against your module's URL, **not** package
+resolution, so it points at the wrong place. Map the specifier through an
+import map, or hand `Pacer.load` an explicit URL you control.
 
 ## Usage
 
@@ -74,7 +84,7 @@ const clock = perfClock();
 
 | Import | Provides |
 |---|---|
-| `pacer` | `Pacer` — `load`, `reload`, `eval` / `evalTicks` / `evalBytes`, `meta`, `setControl` / `clearControl` / `registerControl`, `setBpm` |
+| `pacer` | `Pacer` — `load`, `reload`, `eval` / `evalTicks` / `evalBytes`, `meta`, `setControl` / `clearControl` / `registerControl`, `setBpm`, `exprFailures` |
 | `pacer/route` | `toUniforms`, `routeWrites` — split write entries across registries |
 | `pacer/clock` | `perfClock`, `masterClock` — sample the master clock (audio masters when playing) |
 | `pacer/audio` | `sointuHost`, `paramRegistry`, `applyParams` — the `AudioTargetHost` boundary |

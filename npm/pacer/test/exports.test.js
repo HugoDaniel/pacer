@@ -68,3 +68,17 @@ test('public API resolves through the package name (self-reference)', async () =
   assert.equal(typeof audio.paramRegistry, 'function');
   assert.equal(typeof audio.applyParams, 'function');
 });
+
+test('version is in lockstep across package.json, build.zig.zon, and root.zig', () => {
+  // The version is spelled by hand in three places; a release bump that
+  // updates one but not the others ships a mislabeled package. Repo-root
+  // reads are test-only (never published), same as corpus.test.js.
+  const readRoot = (rel) =>
+    readFileSync(fileURLToPath(new URL(`../../../${rel}`, import.meta.url)), 'utf8');
+  const zon = readRoot('build.zig.zon').match(/\.version\s*=\s*"([^"]+)"/);
+  const root = readRoot('src/root.zig').match(/pub const version\s*=\s*"([^"]+)"/);
+  assert.ok(zon, 'build.zig.zon declares a .version');
+  assert.ok(root, 'src/root.zig declares a pub const version');
+  assert.equal(zon[1], pkg.version, 'build.zig.zon .version matches package.json');
+  assert.equal(root[1], pkg.version, 'src/root.zig version matches package.json');
+});
