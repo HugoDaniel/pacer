@@ -348,9 +348,8 @@ const Builder = struct {
 
     fn buildControls(self: *Builder, ta: Allocator, controls: *std.ArrayList(TrackTable.Control)) Error!void {
         const tree = self.tree;
-        for (self.dataForest()) |idx| {
-            if (tree.tagOf(idx) != .form) continue; // stray top-level atom
-            if (!std.mem.eql(u8, tree.formHeader(idx).head, "control")) continue;
+        for (self.forest) |idx| {
+            if (!isForm(tree, idx, "control")) continue;
             if (controls.items.len == TrackTable.MAX_CONTROLS) {
                 try self.emit(.control_cap_exceeded, tree.spanOf(idx), "more than {d} controls", .{TrackTable.MAX_CONTROLS});
                 return;
@@ -439,9 +438,8 @@ const Builder = struct {
     fn buildTransport(self: *Builder) Error!?TrackTable.Transport {
         const tree = self.tree;
         var found: ?NodeIndex = null;
-        for (self.dataForest()) |idx| {
-            if (tree.tagOf(idx) != .form) continue; // stray top-level atom
-            if (!std.mem.eql(u8, tree.formHeader(idx).head, "transport")) continue;
+        for (self.forest) |idx| {
+            if (!isForm(tree, idx, "transport")) continue;
             if (found != null) {
                 try self.emit(.transport_duplicate, tree.spanOf(idx), "more than one (transport …) form", .{});
                 continue;
@@ -500,10 +498,9 @@ const Builder = struct {
     ) Error!void {
         const tree = self.tree;
         const map = &transport.map;
-        for (self.dataForest()) |idx| {
-            if (tree.tagOf(idx) != .form) continue; // stray top-level atom
+        for (self.forest) |idx| {
+            if (!isForm(tree, idx, "track")) continue;
             const hdr = tree.formHeader(idx);
-            if (!std.mem.eql(u8, hdr.head, "track")) continue;
 
             if (tracks.items.len == TrackTable.MAX_TRACKS) {
                 try self.emit(.track_cap_exceeded, tree.spanOf(idx), "more than {d} tracks", .{TrackTable.MAX_TRACKS});
@@ -790,9 +787,6 @@ const Builder = struct {
         return null;
     }
 
-    fn dataForest(self: *const Builder) []const NodeIndex {
-        return self.forest;
-    }
 };
 
 /// Sort a track's keys (and their parallel source spans) by tick.
@@ -811,6 +805,13 @@ fn sortKeysWithSpans(keys: []TrackTable.Key, spans: []Ast.Span) void {
         keys[j] = k;
         spans[j] = s;
     }
+}
+
+/// True when `idx` is a form whose head text-matches `head`. The data
+/// forest may hold stray top-level atoms (a fuzz surface) — those are
+/// not forms, so the tag guard comes first.
+fn isForm(tree: *const Ast.Tree, idx: NodeIndex, head: []const u8) bool {
+    return tree.tagOf(idx) == .form and std.mem.eql(u8, tree.formHeader(idx).head, head);
 }
 
 /// First `(key …)` positional child of a track, or null. The manifest's
