@@ -33,6 +33,8 @@ const PACM_KEY_LEN = 32;
 const PACM_CONTROL_LEN = 64;
 const PACM_NO_TARGET = 0xffff;
 const NO_SLOT = 0xffffffff;
+/** Mirror of `Abi.MAX_TARGETS` — the flat registry join's ceiling. */
+const MAX_TARGETS = 1024;
 const CONTROL_TYPES = /** @type {const} */ (['slider', 'xy', 'color']);
 
 const LOAD_OK = 0;
@@ -119,6 +121,15 @@ export class Pacer {
       targets.map(({ name, ncomp = 1 }) => ({ name, ncomp, registry })),
     );
     this.#targetsBlob = encodeTargets(this.#flat);
+    // The blob is written verbatim into the fixed targets zone on every
+    // reload; reject an over-cap blob here rather than let `reload` scribble
+    // past the zone into wasm linear memory.
+    const cap = this.#exports.drv_targetsCap();
+    if (this.#targetsBlob.length > cap) {
+      throw new Error(
+        `pacer: targets blob is ${this.#targetsBlob.length} bytes, over drv_targetsCap (${cap})`,
+      );
+    }
   }
 
   /**
@@ -158,6 +169,9 @@ export class Pacer {
    * Spans (like diagnostic spans) are BYTE offsets into the UTF-8
    * score; they equal string indices only while the score is ASCII —
    * editors with non-ASCII text must map through a byte index.
+   *
+   * `transport` mirrors the *document*: a live {@link Pacer#setBpm} nudge
+   * does not re-encode it, so `transport.bpm` stays the score's tempo.
    *
    * @returns {Meta | null}
    */
@@ -258,24 +272,30 @@ export class Pacer {
    * Hold a live control value (a widget drag): replaces the document's
    * :value — for writes AND expression bindings — until `clearControl`.
    * `ref` is a control id or slot index; `value` a number or up-to-4
-   * array. False when rejected (bad slot, non-finite component).
+   * array. False when rejected: unknown id, out-of-range slot, or a
+   * non-finite component.
    *
    * @param {ControlRef} ref
    * @param {ControlValue} value
    * @returns {boolean}
    */
   setControl(ref, value) {
+    const slot = this.#controlSlot(ref);
+    if (slot === null) return false;
     const [x = 0, y = 0, z = 0, w = 0] = typeof value === 'number' ? [value] : value;
-    return this.#exports.drv_setControl(this.#controlSlot(ref), x, y, z, w) === 0;
+    return this.#exports.drv_setControl(slot, x, y, z, w) === 0;
   }
 
   /**
-   * Return authority to the document (or silence a dynamic slot).
+   * Return authority to the document (or silence a dynamic slot). False
+   * when rejected: unknown id or out-of-range slot.
    * @param {ControlRef} ref
    * @returns {boolean}
    */
   clearControl(ref) {
-    return this.#exports.drv_clearControl(this.#controlSlot(ref)) === 0;
+    const slot = this.#controlSlot(ref);
+    if (slot === null) return false;
+    return this.#exports.drv_clearControl(slot) === 0;
   }
 
   /**
@@ -299,6 +319,10 @@ export class Pacer {
    * Live tempo nudge: rescales the seconds↔ticks projection; musical
    * (tick) positions stand still. False outside 1..1000 bpm.
    *
+   * A nudge does NOT re-encode {@link Pacer#meta}: `meta.transport.bpm`
+   * keeps reporting the *document* tempo (the score text is the
+   * authority), so read this back from your own widget state, not meta.
+   *
    * @param {number} bpm
    * @returns {boolean}
    */
@@ -307,14 +331,27 @@ export class Pacer {
   }
 
   /**
-   * @param {ControlRef} ref
+   * Lifetime count of expr-track evaluations omitted for a runtime
+   * failure (non-finite result) since the last (re)load — a debugging
+   * probe, not semantics. 0 while nothing is loaded; resets every reload.
+   *
    * @returns {number}
+   */
+  get exprFailures() {
+    return this.#exports.drv_exprFailures();
+  }
+
+  /**
+   * Resolve a control reference to its slot index, or null when it names
+   * nothing — a slot index rides through unchanged (the wasm range-checks
+   * it), an id resolves through the decoded meta.
+   * @param {ControlRef} ref
+   * @returns {number | null}
    */
   #controlSlot(ref) {
     if (typeof ref === 'number') return ref;
     const ctl = this.meta?.controls.find((c) => c.id === ref);
-    if (!ctl) throw new Error(`pacer: unknown control \`${ref}\``);
-    return ctl.index;
+    return ctl ? ctl.index : null;
   }
 
   /**
@@ -445,6 +482,9 @@ export class Pacer {
  * @returns {Uint8Array}
  */
 function encodeTargets(flat) {
+  if (flat.length > MAX_TARGETS) {
+    throw new Error(`pacer: ${flat.length} targets exceed the ${MAX_TARGETS}-target limit`);
+  }
   // Pair each target with its UTF-8 name up front so the write loop
   // never re-correlates two arrays by index.
   const encoded = flat.map((target) => ({ target, name: encoder.encode(target.name) }));
@@ -458,6 +498,13 @@ function encodeTargets(flat) {
   for (const { target, name } of encoded) {
     if (target.ncomp < 1 || target.ncomp > 4) {
       throw new Error(`pacer: target ${target.name} has ncomp ${target.ncomp}`);
+    }
+    // The name length rides a u16 on the wire; keep it in 1..65535 so it
+    // neither wraps the field nor encodes an unnamed target.
+    if (name.length < 1 || name.length > 65535) {
+      throw new Error(
+        `pacer: target ${target.name} name is ${name.length} UTF-8 bytes (need 1..65535)`,
+      );
     }
     blob[pos] = target.ncomp;
     blob[pos + 1] = target.registry;

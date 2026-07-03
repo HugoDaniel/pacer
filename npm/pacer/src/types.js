@@ -153,12 +153,14 @@ export {};
  * @property {() => number} drv_docCap
  * @property {() => number} drv_docPtr
  * @property {() => number} drv_targetsPtr
+ * @property {() => number} drv_targetsCap
  * @property {(docLen: number, targetsLen: number) => number} drv_load
  * @property {() => number} drv_diagLen
  * @property {() => number} drv_diagPtr
  * @property {() => number} drv_metaLen
  * @property {() => number} drv_metaPtr
  * @property {() => number} drv_writesPtr
+ * @property {() => number} drv_exprFailures
  * @property {(seconds: number) => number} drv_eval
  * @property {(tick: bigint) => number} drv_evalTicks
  * @property {(slot: number, x: number, y: number, z: number, w: number) => number} drv_setControl

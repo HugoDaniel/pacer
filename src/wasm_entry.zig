@@ -28,10 +28,13 @@
 //!   0 ok — table live, `drv_eval` armed (diag blob has 0 records);
 //!   1 diagnostics — score defects, read the `'PACD'` blob; not loaded;
 //!   2 bad call — lengths out of range or malformed `'PACT'` (host bug);
+//!       the arguments are validated first, so nothing changed — any
+//!       previously loaded table, evaluator, meta, and diags stay live;
 //!   3 out of memory.
-//! Reloading is safe at any time: the previous table and evaluator are
-//! torn down first — including ALL control state (held values, dynamic
-//! slots); hosts re-apply held widgets after a reload. `drv_eval`/
+//! Reloading is safe at any time: once the arguments validate, the
+//! previous table and evaluator are torn down — including ALL control
+//! state (held values, dynamic slots); hosts re-apply held widgets after
+//! a reload. `drv_eval`/
 //! `drv_evalTicks` return the encoded `'PACW'` length, or 0 when
 //! nothing is loaded / the host clock is out of range (non-finite or
 //! beyond the 2^53 tick ceiling).
@@ -166,13 +169,18 @@ export fn drv_writesPtr() [*]const u8 {
 // ---------------------------------------------------------------------------
 
 export fn drv_load(doc_len: u32, targets_len: u32) u32 {
-    unload();
-    diags_len = 0;
+    // Validate the host's arguments BEFORE tearing anything down, so a
+    // bad call is a true no-op: the previously loaded table, evaluator,
+    // meta, and diags all stay live. `targets_scratch` (aliasing
+    // `targets_buffer`) is transient here and not held by the live
+    // evaluator, so decoding ahead of `unload` is safe.
     if (doc_len > MAX_DOC_SIZE or targets_len > MAX_TARGETS_BLOB)
         return @intFromEnum(LoadStatus.bad_call);
     const targets = Abi.decodeTargets(targets_buffer[0..targets_len], &targets_scratch) orelse
         return @intFromEnum(LoadStatus.bad_call);
 
+    unload();
+    diags_len = 0;
     doc_buffer[doc_len] = 0;
     const source: [:0]const u8 = doc_buffer[0..doc_len :0];
 
@@ -235,6 +243,15 @@ export fn drv_evalTicks(tick: i64) u32 {
     const entries = ev.evalTicks(tick);
     const out = Writes.encode(entries, &writes_buffer) catch unreachable;
     return @intCast(out.len);
+}
+
+/// Debugging probe: lifetime count of expr-track evaluations omitted for
+/// a runtime failure since the current load. 0 when nothing is loaded;
+/// a fresh evaluator (every load) resets it. The low 32 bits of the
+/// u64 counter — a probe, not a semantic counter.
+export fn drv_exprFailures() u32 {
+    const ev = if (evaluator) |*e| e else return 0;
+    return @truncate(ev.expr_failures);
 }
 
 fn unload() void {

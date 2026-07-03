@@ -247,6 +247,100 @@ test('setBpm rescales seconds; tick positions stand still', async () => {
   assert.equal(driver.setBpm(0), false);
 });
 
+// --- boundary hardening (chunk 1) -----------------------------------------
+
+/** Hand-encode a single-target 'PACT' blob (magic, count, then one record). */
+function encodePactSingle(name, ncomp, registry) {
+  const nameBytes = new TextEncoder().encode(name);
+  const blob = new Uint8Array(8 + 4 + nameBytes.length);
+  const dv = new DataView(blob.buffer);
+  dv.setUint32(0, 0x54434150, true); // 'PACT'
+  dv.setUint32(4, 1, true); // count
+  dv.setUint8(8, ncomp);
+  dv.setUint8(9, registry);
+  dv.setUint16(10, nameBytes.length, true);
+  blob.set(nameBytes, 12);
+  return blob;
+}
+
+test('encodeTargets rejects a registry list past MAX_TARGETS', async () => {
+  const registries = [Array.from({ length: 1025 }, (_, i) => ({ name: `t${i}` }))];
+  await assert.rejects(Pacer.load(wasmModule, '(transport :bpm 120)', { registries }), /1024/);
+});
+
+test('encodeTargets rejects an empty or over-long target name', async () => {
+  await assert.rejects(
+    Pacer.load(wasmModule, '(transport :bpm 120)', { registries: [[{ name: '' }]] }),
+    /name/,
+  );
+  await assert.rejects(
+    Pacer.load(wasmModule, '(transport :bpm 120)', {
+      registries: [[{ name: 'x'.repeat(65536) }]],
+    }),
+    /name/,
+  );
+});
+
+test('constructor rejects a targets blob larger than drv_targetsCap', async () => {
+  // One target under the count + name-length caps, but its 'PACT' blob
+  // (8 + 4 + 65535 = 65547 bytes) overruns the 64 KiB targets zone —
+  // the constructor must reject before reload() scribbles wasm memory.
+  await assert.rejects(
+    Pacer.load(wasmModule, '(transport :bpm 120)', {
+      registries: [[{ name: 'x'.repeat(65535) }]],
+    }),
+    /drv_targetsCap/,
+  );
+});
+
+test('drv_load validates before teardown: a bad call is a no-op', async () => {
+  const inst = await WebAssembly.instantiate(wasmModule, {
+    env: { sjon_host_invoke_plugin: () => 0 },
+  });
+  const e = inst.exports;
+  assert.equal(e.drv_abiVersion(), 1);
+
+  const doc = new TextEncoder().encode(
+    '(transport :bpm 120)\n(track :target r (key :at 0b :value 1))',
+  );
+  const pact = encodePactSingle('r', 1, 0);
+  new Uint8Array(e.memory.buffer).set(pact, e.drv_targetsPtr());
+  new Uint8Array(e.memory.buffer).set(doc, e.drv_docPtr());
+  assert.equal(e.drv_load(doc.length, pact.length), 0); // ok
+
+  const goodLen = e.drv_eval(0);
+  assert.ok(goodLen > 0, 'a loaded score evaluates');
+
+  // Malformed lengths must change nothing — the live table survives.
+  assert.equal(e.drv_load(0xffffffff, 0), 2); // bad_call
+  assert.equal(e.drv_eval(0), goodLen, 'the previous table stays live after a bad load');
+});
+
+test('setControl / clearControl return false for an unknown id (no throw)', async () => {
+  const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
+  assert.equal(driver.setControl('nope', 1), false);
+  assert.equal(driver.clearControl('nope'), false);
+});
+
+test('exprFailures counts omitted expr writes and resets on reload', async () => {
+  const score = `(transport :bpm 120)
+(track :target radius :expr (/ 1 (- 2 beat)))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  assert.equal(driver.exprFailures, 0);
+  driver.eval(0); // beat 0 → 1/2, no failure
+  assert.equal(driver.exprFailures, 0);
+  driver.eval(1.0); // beat 2 → divide by zero, write omitted
+  assert.equal(driver.exprFailures, 1);
+  driver.reload(score); // fresh evaluator
+  assert.equal(driver.exprFailures, 0);
+});
+
+test('exprFailures is 0 while nothing is loaded', async () => {
+  const driver = await Pacer.load(wasmModule, '(broken', { registries: REGISTRIES });
+  assert.equal(driver.ok, false);
+  assert.equal(driver.exprFailures, 0);
+});
+
 test('masterClock: audio masters when playing, falls back otherwise', () => {
   let playing = false;
   const audio = { clock: () => ({ seconds: 42, playing }) };
