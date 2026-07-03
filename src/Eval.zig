@@ -135,7 +135,7 @@ pub const Evaluator = struct {
             &.{};
         const ctl_bindings = try arena.allocator().alloc(ExprTrack.ControlBinding, table.controls.len);
         for (ctl_bindings, table.controls) |*b, ctl| {
-            b.* = .{ .name = ctl.id, .value = ctl.value, .ncomp = ctl.ncomp };
+            b.* = ExprTrack.ControlBinding.fromControl(ctl);
         }
         const slots = try arena.allocator().alloc(ControlSlot, table.controls.len + MAX_DYNAMIC_CONTROLS);
         for (slots[0..table.controls.len], table.controls) |*s, ctl| {

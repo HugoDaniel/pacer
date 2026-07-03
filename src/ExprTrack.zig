@@ -85,6 +85,13 @@ pub const ControlBinding = struct {
     name: []const u8,
     value: [4]f32,
     ncomp: u8,
+
+    /// Project a table control into its evaluation binding (name + value +
+    /// arity). The single home for this map — `Compile`'s dry-run and
+    /// `Eval`'s per-frame refresh both build bindings from controls.
+    pub fn fromControl(ctl: TrackTable.Control) ControlBinding {
+        return .{ .name = ctl.id, .value = ctl.value, .ncomp = ctl.ncomp };
+    }
 };
 
 /// Evaluate an expr node at a tick. `tree` must be the tree `node`

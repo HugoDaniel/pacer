@@ -355,7 +355,7 @@ const Builder = struct {
                 return;
             }
             if (try self.buildControl(ta, idx, controls.items)) |ctl| {
-                self.ctl_bindings[controls.items.len] = .{ .name = ctl.id, .value = ctl.value, .ncomp = ctl.ncomp };
+                self.ctl_bindings[controls.items.len] = ExprTrack.ControlBinding.fromControl(ctl);
                 controls.append(ta, ctl) catch return error.OutOfMemory;
                 self.ctl_count = controls.items.len;
             }
