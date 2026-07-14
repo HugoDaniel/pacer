@@ -110,7 +110,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 0 | 04 transport-lanes | ☑ |
 | 0 | 11 P1–P2 corpus pins | ☑ |
 | 0 | 03 P0 pattern spike | ☑ |
-| 0 | studio refresh + `:emit` template | ☐ |
+| 0 | studio refresh + `:emit` template | ☑ |
 | 1 | 'PACM' framing decision | ☐ |
 | 1 | 01 scenes-cues | ☐ |
 | 1 | 02 trigger-lanes | ☐ |
@@ -128,15 +128,28 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 0 studio refresh** — the last Wave 0 item, now that the three core steps
-(04, 11 P1–P2, 03 P0) are done. Rebuild `pacer.wasm` (`zig build wasm`) and update the
-copies the studio loads — `studio/public/pacer.wasm` and `editor/public/` (first check
-whether a script syncs these before copying by hand). Run the editor's real-wasm tests
-(`score-uniforms.test.js`). Then switch `demoscene.score.sjon` to `:emit [beat]` (04's
-deferred follow-up — gated on the studio's `pacer.wasm` now carrying emit eval) and
-eyeball it. The npm triple-pin is untouched this wave (no npm surface changed), so no
-version bump. When done, tick the board box and open Wave 1 with the 'PACM' framing
-decision.
+→ **Wave 1: the 'PACM' framing decision** — the first Wave 1 item, a design gate before
+01 Phase 4. Settle how appended `'PACM'` meta sections are framed and how old/new
+decoders tolerate each other (section id + length prefix? version-gated skip?). Both 01
+(scenes → meta) and 11 Phase 3 (ease programs → meta) append sections, so decide the
+convention ONCE here and write it into 01, 11 Phase 3, and the Decision log. Load
+`src/Abi.zig` (the `'PACM'` encoder + extern-record pattern) and
+`npm/pacer/src/index.js` (the DataView meta decode) as the two sides that must stay in
+lockstep. This is a decision + a written convention, not a code phase — no gate to run
+beyond capturing it; the first code that consumes it is 01.
+
+Wave 0 is **COMPLETE** (2026-07-14). The studio refresh: rebuilt `pacer.wasm`
+(`a0a6edd4`, carries 04's emit eval) and synced it via `npm run build:wasm-copy` (the
+studio's `public/pacer.wasm` → `editor/public/pacer.wasm` → `npm/pacer/pacer.wasm` are
+symlinks, so that one copy is the sync; it is gitignored, so no pacer commit). Editor
+real-wasm tests green (`score-uniforms.test.js` + full suite 1526/1526). The
+`:emit [beat]` migration did NOT fit the demoscene as plan 04 assumed — its `motion`
+buffer had no `beat` field and no identity `beat` track (that idiom lives in the impulse
+benchmark score). Per the user's choice, the demoscene shader gained a `beat` uniform
+(reclaiming the struct's `_pad` slot, buffer still 16 B) so the flagship template now
+demonstrates `:emit`; committed in **pngine** (`46f492b`), not pacer. The impulse
+`live.score.sjon` identity-track → `:emit [beat]` swap remains for Wave 1's benchmark
+ritual. See 04's progress log for the corrected follow-up.
 
 03 P0 pattern spike is **DONE** (2026-07-14) — **VERDICT: FEASIBLE**, no SJON change.
 SJON's `Pattern`/`PatternQuery` is already re-exported to path consumers and its
@@ -180,3 +193,20 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   meta must append a meta section (append-only) and bump nothing else. The studio
   `demoscene.score.sjon` → `:emit [beat]` switch is a Wave 0 studio-refresh item, gated
   on the studio's `pacer.wasm` carrying emit eval.
+- 2026-07-14 — Wave 0 complete (studio refresh). Two cross-plan facts. (1) **The studio
+  loads pacer.wasm by symlink** — `studio/public/pacer.wasm` → `editor/public/pacer.wasm`
+  → `pacer/npm/pacer/pacer.wasm`; the canonical sync is `npm run build:wasm-copy` (the
+  npm `pretest` hook rebuilds only `zig-out/`, so it does NOT refresh the studio — run
+  the copy step explicitly). The npm copy is gitignored: a studio refresh produces no
+  pacer commit. (2) **04's `:emit [beat]` follow-up was mis-targeted at the demoscene.**
+  The identity-track idiom `(track :target beat :expr beat)` + a `motion.beat` uniform
+  live in the impulse benchmark score (`~/Dev/2026_impulse/live.score.sjon`), NOT the
+  demoscene, whose `motion` buffer is `{sceneMix, spin, chromaAmt, _pad}`. Adding
+  `:emit [beat]` there was proven to break the load (`unknown_target`, code 0). Resolution
+  (user's choice): give the demoscene shader a real `beat` field (reclaiming `_pad`; buffer
+  stays 16 B) so the flagship template demonstrates `:emit` — committed in **pngine**
+  (`46f492b`: shader + score + `score-uniforms.test.js`), leaving pacer untouched. The
+  impulse-score identity-track → `:emit [beat]` swap moves to Wave 1's benchmark ritual.
+  Verified empirically: wgslender reflection lists all struct members (so `beat` registers
+  in the real studio at offset 12), editor suite 1526/1526 green. Render output is
+  unchanged (the shader can read `motion.beat` but doesn't yet).

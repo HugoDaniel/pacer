@@ -118,3 +118,21 @@ Gate: `zig build verify` + npm gate.
   emit-lane eval. Byte-for-byte the rendered `beat` write is unchanged (emit routes the
   same env value through the same f32 truncation as the identity expr track), so the A/B
   is a no-op by construction — the win is deleting the boilerplate track.
+
+- **Follow-up RESOLVED (2026-07-14, Wave 0 studio refresh) — but re-targeted.** This
+  note assumed the *demoscene* starter score carried the identity-track idiom. It does
+  not: that idiom (`(track :target beat :expr beat)`) and its `motion.beat` uniform live
+  in the *impulse benchmark* score (`~/Dev/2026_impulse/live.score.sjon`), not the
+  demoscene, whose `motion` buffer is `{sceneMix, spin, chromaAmt, _pad}` with no `beat`
+  target. Adding `:emit [beat]` to the demoscene was proven to break its load
+  (`unknown_target`, code 0 — `beat` in no host registry). Resolution (user's choice):
+  the demoscene shader gained a real `beat` field (reclaiming the struct's `_pad` slot;
+  buffer stays 16 B) so the studio's flagship template demonstrates `:emit` end to end —
+  the pacer emit lane joins by name to `motion.beat` at offset 12 (confirmed via
+  wgslender reflection). Committed in **pngine** (`46f492b`: `demoscene.sjon` +
+  `demoscene.score.sjon` + `score-uniforms.test.js`, which now pins the emitted lane
+  against the transport clock and cross-checks it vs the `spin` expr). Render output is
+  unchanged (the shader can read `motion.beat` but doesn't yet). The impulse-score
+  identity-track → `:emit [beat]` swap (a genuine boilerplate deletion, since that score
+  has the real `motion.beat` uniform) is folded into **Wave 1's impulsos benchmark #1**
+  ritual.
