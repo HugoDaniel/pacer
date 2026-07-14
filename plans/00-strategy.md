@@ -128,9 +128,12 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **04 transport-lanes, Phase 2** (eval: emit lanes evaluated before tracks, bit-exact
-against an equivalent `:expr` track; write order emit → tracks → controls). Phase 1
-(schema + validation) landed 2026-07-14 — see 04's progress log.
+→ **04 transport-lanes, Phase 3** (corpus + migration note: a `transport-emit` golden
+case — emit + track-override + `:end hold` edge — via `zig build corpus -- --update`
+with the diff reviewed, then a follow-up note to switch the studio's
+`demoscene.score.sjon` to `:emit [beat]` once its wasm is rebuilt). Gate: `zig build
+verify` + npm gate. Phases 1–2 (schema/validation, eval) landed 2026-07-14 — see 04's
+progress log.
 
 ## Decision log
 

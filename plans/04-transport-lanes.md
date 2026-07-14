@@ -78,3 +78,17 @@ Gate: `zig build verify` + npm gate.
   tests, confirmed failing because `:emit` was unknown to the schema), then green.
   Gate: `zig build test` ✓, `zig build audit-diagnostics` ✓ (23/23, unchanged),
   `zig build wasm` ✓ (shared `TrackTable` still compiles freestanding).
+
+- **Phase 2 — eval (done, 2026-07-14).** Emit lanes are now evaluated. The value seam
+  is one new public seam, `ExprTrack.emitValue(transport, tick, name)`: it reads the
+  requested name straight out of the env `bindTime` already builds (no formula
+  re-derived), so a lane and an equivalent `:expr` track share the exact same f64 →
+  `@floatCast` path and land bit-identically. `Eval.evalTicks` writes the emit lanes
+  FIRST (a new loop before the track loop, at the already-wrapped tick), so a `(track …)`
+  or `(control …)` on the same target — written later — overrides the lane for in-order
+  consumers; the `entries` buffer in `init` grew by `transport.emit.len`. `end`
+  wrap/hold falls out for free: the loop reads the same wrapped `t` the tracks do
+  (`:end hold` freezes `beat` at the score length, `:end loop` wraps it). Reds first
+  (three tests, confirmed failing: bit-exact-vs-`:expr` saw `len 4≠8`, ordering saw
+  `2≠3`, wrap/hold crashed on the empty buffer), then green. Gate: `zig build test` ✓,
+  `zig build wasm` ✓.
