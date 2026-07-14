@@ -156,4 +156,36 @@ schema header roadmap note and `CLAUDE.md` if the surface list changes.
 Gate: `zig build verify` (native + wasm parity green).
 
 ## Progress log
-(append phase completions here)
+
+- **Phase 1 — schema + validation (done, 2026-07-14).** RED first: four Zig tests in
+  `Compile.zig` referencing enum members that did not exist yet — `zig build test`
+  failed to compile (`enum 'Compile.Code' has no member named 'scene_invalid'`;
+  `TrackTable has no member named 'MAX_SCENES'`), the intended red. GREEN in three
+  edits:
+  - **Schema** (`schema/pacer.sjon`): two value-kinds — `scene-name` (`:underlying
+    symbol`, next to `target-name`) and `track-section` (`:underlying form :heads
+    (head-set :names [track])`, next to `key-section`/`stage-section`) — plus the form
+    `(form :name scene :positional track-section (key :name name :type scene-name
+    :optional true) (key :name at :type time-pos :optional true) (key :name dur :type
+    time-pos :optional true))`, inserted between `transport` and `track`.
+  - **Diagnostics** (`Compile.zig` `Code` enum, append-only): `scene_invalid` = **23**,
+    `scene_duplicate_name` = **24**, `scene_cap_exceeded` = **25** (26 codes total, 0…25).
+  - **Validation** (`Compile.zig`): `Builder.validateScenes`, called from `build()`
+    after `buildTracks` and before the diag-count gate. Walks the top-level forest for
+    `(scene …)` forms; enforces the `MAX_SCENES = 64` cap (added to `TrackTable.zig` with
+    a `comptime <= maxInt(u16)` layout assert); emits `scene_invalid` when any of
+    `:name`/`:at`/`:dur` is absent; tracks seen names (arena-backed) and emits
+    `scene_duplicate_name` on a repeat (span on the `:name` node).
+
+  **Design frozen (the carry-forward):** `:name`/`:at`/`:dur` are schema-**optional** on
+  purpose — a missing one must surface as the pacer `scene_invalid` code (wire-stable,
+  with a span the studio can show), NOT a generic SJON missing-key error. If they were
+  schema-required, the absence would set `hasErrors()`, `build()` would never run, and no
+  pacer diagnostic would exist — the RED could not be satisfied. So presence is a pacer
+  check, uniformity of the `*_invalid` family (cf. `transport_invalid`, `control_invalid`).
+  Scene children are NOT walked into the table yet (that is Phase 2); nested `(track …)`
+  forms are children, not forest entries, so `buildTracks` never sees them and a valid
+  scene compiles clean with an empty tracks table. Gate: `zig build test` ✓,
+  `zig build audit-diagnostics` ✓ (26/26, the three scene codes covered by name); also ran
+  `zig build corpus` ✓ (13/13 — the manifest grew but diagnostics are stored in user
+  coordinates via `userOffset`, so goldens stayed byte-identical). No JS/TS touched.

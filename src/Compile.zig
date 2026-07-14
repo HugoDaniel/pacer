@@ -157,6 +157,9 @@ pub const Code = enum(u16) {
     control_duplicate_id,
     control_cap_exceeded,
     control_invalid,
+    scene_invalid,
+    scene_duplicate_name,
+    scene_cap_exceeded,
 };
 
 /// One pacer load diagnostic. `span` indexes the combined text (same
@@ -326,6 +329,11 @@ const Builder = struct {
         try self.buildTracks(ta, &transport, &tracks, &keys, &track_spans, &key_spans);
         std.debug.assert(track_spans.items.len == tracks.items.len);
         std.debug.assert(key_spans.items.len == keys.items.len);
+
+        // Phase 1: validate `(scene …)` forms (presence, uniqueness, cap).
+        // Compiling scene children into the table is Phase 2 — any defect
+        // here nulls the table via the diag-count gate below.
+        try self.validateScenes();
 
         if (self.diags.items.len != before_diags) {
             table_arena.deinit();
@@ -606,6 +614,44 @@ const Builder = struct {
                 .source = .{ .keys = .{ .start = keys_start, .len = @intCast(track_keys.len) } },
             }) catch return error.OutOfMemory;
             track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
+        }
+    }
+
+    /// Validate every top-level `(scene …)` form. Phase 1 checks shape
+    /// only — presence of the schema-optional `:name`/`:at`/`:dur`
+    /// (missing any → `scene_invalid`), name uniqueness across scenes
+    /// (`scene_duplicate_name`), and the `MAX_SCENES` cap. Scene children
+    /// are NOT walked into the table yet (Phase 2); this pass only emits
+    /// diagnostics, which the caller's diag-count gate turns into a null
+    /// table.
+    fn validateScenes(self: *Builder) Error!void {
+        const tree = self.tree;
+        var seen: std.ArrayList([]const u8) = .empty;
+        var count: usize = 0;
+        for (self.forest) |idx| {
+            if (!isForm(tree, idx, "scene")) continue;
+            if (count == TrackTable.MAX_SCENES) {
+                try self.emit(.scene_cap_exceeded, tree.spanOf(idx), "more than {d} scenes", .{TrackTable.MAX_SCENES});
+                return;
+            }
+            count += 1;
+
+            const children = tree.formHeader(idx).children;
+            const name_node = kvNode(tree, children, "name");
+            if (name_node == null or kvNode(tree, children, "at") == null or kvNode(tree, children, "dur") == null) {
+                try self.emit(.scene_invalid, tree.spanOf(idx), "scene requires :name, :at, and :dur", .{});
+                continue;
+            }
+
+            const name = tree.symbolText(name_node.?);
+            for (seen.items) |prev| {
+                if (std.mem.eql(u8, prev, name)) {
+                    try self.emit(.scene_duplicate_name, tree.spanOf(name_node.?), "duplicate scene name `{s}`", .{name});
+                    break;
+                }
+            } else {
+                seen.append(self.arena, name) catch return error.OutOfMemory;
+            }
         }
     }
 
@@ -1498,6 +1544,69 @@ test "compile diagnostics: table + program caps fire by name" {
         defer r.deinit();
         try t.expect(r.findDiag(.ease_cap_exceeded) != null);
     }
+}
+
+// --- scenes (plan 01 Phase 1: schema + validation) -------------------
+
+test "compile diagnostics: scene missing :name/:at/:dur → scene_invalid" {
+    // :name/:at/:dur are schema-OPTIONAL so their absence surfaces as a
+    // pacer scene_invalid (with a span), not a generic SJON missing-key
+    // error — one wire-stable code for every scene-shape defect.
+    const cases = [_][:0]const u8{
+        "(transport :bpm 120)\n(scene :at 0b :dur 8b (track :target circle-radius (key :at 0b :value 0)))",
+        "(transport :bpm 120)\n(scene :name intro :dur 8b (track :target circle-radius (key :at 0b :value 0)))",
+        "(transport :bpm 120)\n(scene :name intro :at 0b (track :target circle-radius (key :at 0b :value 0)))",
+    };
+    for (cases) |src| {
+        var r = try compile(t.allocator, src, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.scene_invalid) != null);
+    }
+}
+
+test "compile diagnostics: two scenes named drop → scene_duplicate_name" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(scene :name drop :at 0b :dur 8b
+        \\  (track :target circle-radius (key :at 0b :value 0)))
+        \\(scene :name drop :at 8b :dur 8b
+        \\  (track :target tint (key :at 0b :value [0 0 0])))
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.scene_duplicate_name) != null);
+}
+
+test "compile diagnostics: 65 scenes → scene_cap_exceeded" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(a, "(transport :bpm 120)\n");
+    for (0..TrackTable.MAX_SCENES + 1) |i|
+        try src.appendSlice(a, try std.fmt.allocPrint(a, "(scene :name s{d} :at {d}b :dur 4b (track :target circle-radius (key :at 0b :value 0)))\n", .{ i, i }));
+    try src.append(a, 0);
+    const source = src.items[0 .. src.items.len - 1 :0];
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    try t.expect(r.findDiag(.scene_cap_exceeded) != null);
+}
+
+test "compile accepts a valid scene: no diagnostics" {
+    // Phase 1 is validation-only: the scene's nested (track …) is not yet
+    // walked into the table, so a well-formed scene simply compiles clean.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(scene :name drop :at 160b :dur 60b
+        \\  (track :target circle-radius
+        \\    (key :at 0b :value 0)
+        \\    (key :at 4b :value 1 :ease out-cubic)))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    try t.expectEqual(@as(usize, 0), r.diagnostics.len);
 }
 
 test "compile never panics on stray top-level atoms (fuzz regression)" {

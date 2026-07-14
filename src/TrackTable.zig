@@ -35,6 +35,7 @@ pub const MAX_TRACKS = 256;
 pub const MAX_KEYS = 4096;
 pub const MAX_EASE_PROGRAMS = 128;
 pub const MAX_CONTROLS = 64;
+pub const MAX_SCENES = 64;
 
 pub const EndBehavior = enum { loop, hold };
 
@@ -171,4 +172,5 @@ test {
     comptime std.debug.assert(MAX_TRACKS <= std.math.maxInt(u16));
     comptime std.debug.assert(MAX_EASE_PROGRAMS <= std.math.maxInt(u16));
     comptime std.debug.assert(MAX_CONTROLS <= std.math.maxInt(u16));
+    comptime std.debug.assert(MAX_SCENES <= std.math.maxInt(u16));
 }

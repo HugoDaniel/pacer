@@ -128,16 +128,25 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: 01 scenes-cues — Phase 1 (schema + validation, RED first).** Open only
-`plans/01-scenes-cues.md` and execute its Phase 1: add the `(scene …)` form to
-`schema/pacer.sjon` (name, time-pos `:at`, time-pos `:dur`, positional track children)
-and append the three `Compile.Code` variants **in this order** — `scene_invalid`,
-`scene_duplicate_name`, `scene_cap_exceeded`. Reds first (four Zig tests in
-`Compile.zig`: missing `:name`/`:at`/`:dur` → `scene_invalid`; two `drop` scenes →
-`scene_duplicate_name`; 65 scenes → `scene_cap_exceeded`; a valid scene → zero
-diagnostics), then green; validation only (compile may still ignore scene children).
-Freeze the exact schema spelling + the three code numbers as the carry-forward. Gate:
-`zig build test`, `zig build audit-diagnostics`. `MAX_SCENES = 64` in `TrackTable.zig`.
+→ **Wave 1: 01 scenes-cues — Phase 2 (compile into the table, RED first).** Open only
+`plans/01-scenes-cues.md` and execute its Phase 2: give `TrackTable` a `SceneTable` slice
+(`{name_span, start_tick, dur_ticks}` per scene) and each `Track` a scene index
+(`NO_SCENE = maxInt(u16)` sentinel), then walk scene children in `Compile.zig` with the
+scene's `:at` offset added to each key tick. Reds first (compile-unit tests: a scened
+track's keys land at absolute ticks = scene `:at` + key `:at`; the scene table holds the
+right `{name_span, start_tick, dur_ticks}`; tracks carry the scene index; scene-relative
+overflow → `tick_overflow`), then green. Gate: `zig build test`. The carry-forward from
+Phase 1 is in 01's progress log (schema spelling + code numbers 23/24/25); `validateScenes`
+already exists and must now feed the table rather than only emitting diagnostics.
+
+**01 Phase 1 (schema + validation) is DONE** (2026-07-14): the `(scene …)` form + two
+value-kinds (`scene-name`, `track-section`) landed in `schema/pacer.sjon`; three
+append-only `Compile.Code` variants (`scene_invalid`=23, `scene_duplicate_name`=24,
+`scene_cap_exceeded`=25); `MAX_SCENES = 64`; a `Builder.validateScenes` pass emitting all
+three. Frozen design: `:name`/`:at`/`:dur` are schema-OPTIONAL so a missing one routes to
+the pacer `scene_invalid` code (not a SJON missing-key error) — see 01's progress log +
+the Decision log below. Gate green: `zig build test`, `audit-diagnostics` (26/26), corpus
+(13/13, byte-stable). Board box `01 scenes-cues` stays ☐ until Phases 2–5 land.
 
 The **'PACM' framing decision** (the design gate before 01 Phase 4) is **DONE**
 (2026-07-14): a TLV section stream after the controls array, walked to end-of-buffer,
@@ -218,6 +227,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   it into the `Abi.zig` `//!` header; 11 Phase 3 (`'EASE'`) is the second (emitted after
   `'SCEN'`, fixed order). Sections omit-when-empty so no-scenes / no-program blobs stay
   byte-identical to today's. No code changed this step — decision + written convention only.
+- 2026-07-14 — 01 scenes-cues Phase 1 complete (schema + validation). Wire-stable
+  carry-forward: three append-only `Compile.Code` variants — `scene_invalid` = **23**,
+  `scene_duplicate_name` = **24**, `scene_cap_exceeded` = **25** (these ride in `'PACD'`;
+  never renumber). Design frozen: `(scene …)`'s `:name`/`:at`/`:dur` are schema-**optional**
+  by deliberate choice, so a missing one surfaces as the pacer `scene_invalid` code with a
+  span — NOT a bare SJON missing-key error. Rationale: schema-required keys would set
+  `hasErrors()` and skip the whole pacer `build()`, leaving no pacer diagnostic; routing
+  presence through pacer keeps one wire-stable code per scene-shape defect (the
+  `transport_invalid`/`control_invalid` family). `MAX_SCENES = 64`. No `'PACM'`/`'PACT'`
+  surface moved — the scenes meta section (`'SCEN'`) is Phase 4, per the framing convention
+  above. Scene→table compilation and eval (windows, `scene-beat`/`scene-phase`) are Phases
+  2–3 and unstarted.
 - 2026-07-14 — Wave 0 complete (studio refresh). Two cross-plan facts. (1) **The studio
   loads pacer.wasm by symlink** — `studio/public/pacer.wasm` → `editor/public/pacer.wasm`
   → `pacer/npm/pacer/pacer.wasm`; the canonical sync is `npm run build:wasm-copy` (the

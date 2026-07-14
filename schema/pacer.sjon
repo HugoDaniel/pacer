@@ -79,6 +79,11 @@
     :description "Target resolved at load() against the host registries (visual uniforms, audio params)."
     :underlying symbol)
 
+  ; ---- scenes ----
+  (value-kind :name scene-name
+    :description "Scene identifier: names a window [at, at+dur) on the transport grid. Unique per score; the studio timeline displays it and scene-local expr env keys off it."
+    :underlying symbol)
+
   ; ---- controls ----
   (value-kind :name control-id
     :description "Expression-environment binding name for a control. Unique per score; the reserved time names (t, tick, beat, bar, cycle, phase, bpm, dur) are rejected at load."
@@ -171,6 +176,10 @@
     :description "Stage children of (seq …)."
     :underlying form
     :heads (head-set :names [stage]))
+  (value-kind :name track-section
+    :description "Track children of (scene …)."
+    :underlying form
+    :heads (head-set :names [track]))
 
   ; =====================================================================
   ; Top-level forms
@@ -188,6 +197,16 @@
       :description "Playhead behavior past :dur; defaults to hold.")
     (key :name emit :type emit-lanes :optional true
       :description "Reserved time names (beat, bar, phase, bpm, t) broadcast as write lanes, each resolved against the host registries by that exact name. Emitted lanes land before track writes, so an explicit (track …) on the same target overrides an emitted lane; controls still land last."))
+
+  (form :name scene
+    :description "A named window [at, at+dur) on the transport tick grid; child tracks resolve their positions scene-relative. Scenes may overlap and hand a target off by write order. :name/:at/:dur are schema-optional so a scene missing any surfaces as a pacer scene_invalid diagnostic (with a span), not a bare SJON missing-key error."
+    :positional track-section
+    (key :name name :type scene-name :optional true
+      :description "Scene identifier; unique per score.")
+    (key :name at :type time-pos :optional true
+      :description "Window start on the transport grid; beats/bars convert exactly.")
+    (key :name dur :type time-pos :optional true
+      :description "Window length; the child tracks play over [at, at+dur)."))
 
   (form :name track
     :description "One animated target with exactly one value source: keyframe children interpolated with easing programs, XOR an :expr evaluated every frame. Hosts receive final values and never interpolate."
