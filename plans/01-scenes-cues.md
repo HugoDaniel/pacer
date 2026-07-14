@@ -261,3 +261,41 @@ Gate: `zig build verify` (native + wasm parity green).
   case exists yet; the change is compile+eval only), `zig build audit-diagnostics` ✓
   (26/26 — no new codes), `zig build wasm` ✓, `zig build fuzz` ✓ (the new hot-path add/sub
   never panic). No JS/TS touched (ABI is Phase 4).
+
+- **Phase 4 — ABI + npm meta (done, 2026-07-14).** RED first: two Zig tests in `Abi.zig`
+  referencing `SCENES_SECTION_ID`/`SCENE_REC_LEN`/`META_SECTION_HEADER_LEN` before they
+  existed (`zig build test` failed to compile — `use of undeclared identifier
+  'SCENES_SECTION_ID'`), plus two npm tests reading `driver.meta.scenes` (undefined →
+  assertion fail). Green after the edits. This is the **first consumer of the 'PACM'
+  section-framing convention** (§ above): the convention text is now transcribed verbatim
+  into the `Abi.zig` `//!` header (the format's doc of record), alongside the encoder.
+  - **`src/Abi.zig`**: `MetaSceneRec` extern struct `{ start_tick i64, dur_ticks i64,
+    name_span_start u32, name_span_end u32 }` = 24 B, with a `comptime @sizeOf` pin and an
+    `@offsetOf(name_span_start) == 16` spot-check (mirrors `MetaTrackRec`). New pub consts
+    `META_SECTION_HEADER_LEN = 8`, `SCENES_SECTION_ID = 0x4e454353` (`'SCEN'` LE),
+    `SCENE_REC_LEN = 24`. `metaEncodedLen` adds `8 + 4 + n·24` **only when `scenes.len >
+    0`**; `encodeMeta` appends the `'SCEN'` TLV frame (`[id][payload_len][count][rec×n]`)
+    after the last control, name via `userSpan` (like every other meta span). Omit-when-
+    empty keeps a no-scenes blob byte-identical to a pre-Phase-4 one.
+  - **`src/wasm_entry.zig`**: the `META_CAP` comptime bound now includes a full `'SCEN'`
+    section (`+ 8 + 4 + MAX_SCENES·24`); 192 KiB still has ample headroom.
+  - **`npm/pacer/src/index.js`**: a post-controls `while (off < len)` TLV walk — read
+    `id`/`payload_len`, decode `'SCEN'`, **always** `off += 8 + payload_len` (unknown ids
+    skip by length). `meta.scenes` = `[{ name, startTick, durTicks, nameSpan }]`, `[]` when
+    none. A new `#docBytes` field (the reload's UTF-8 doc) is the slice source for scene
+    names — spans are USER coordinates, matching those bytes exactly.
+  - **`npm/pacer/src/types.js`**: `MetaScene` typedef + `scenes` on `Meta`.
+
+  **Design frozen (carry-forward for Phase 5 / plan 11):** (a) **`'SCEN'` = 0x4e454353 is
+  now claimed** in the section stream — 11 Phase 3 (ease programs) must pick a distinct 4-CC
+  (`'EASE'`) and the encoder emits scenes BEFORE ease-programs (fixed documented order,
+  though decoders dispatch by id and must not rely on order). (b) **Scene names ride as
+  spans, not inline bytes** — the glue slices from `#docBytes`, so any consumer producing a
+  scene `name` needs the score source (the editor already has it). (c) The unknown-id
+  tolerance is the convention's whole point (rule §3): a `while (off < len)` walk that always
+  advances by `8 + payload_len` skips sections it predates without a throw — pinned by a Zig
+  test that walks a synthetic `[unknown 'ZZZZ' frame][real 'SCEN' frame]` stream and still
+  finds the scene. Gate: `zig build verify` ✓ (native test + corpus **13/13 byte-identical**
+  — omit-when-empty holds; + npm **45/45** wasm parity), `zig build audit-diagnostics` ✓
+  (26/26 — no new codes), npm `lint`/`typecheck` ✓. Corpus `scenes-basic` (Phase 5) is the
+  first case to exercise the `'SCEN'` bytes end-to-end.

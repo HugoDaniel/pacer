@@ -32,6 +32,10 @@ const PACM_TRACK_LEN = 24;
 const PACM_KEY_LEN = 32;
 const PACM_CONTROL_LEN = 64;
 const PACM_NO_TARGET = 0xffff;
+// Post-controls section stream (see Abi.zig): [id u32][len u32][payload].
+const PACM_SECTION_HEADER_LEN = 8;
+const PACM_SCENES_ID = 0x4e454353; // 'SCEN' read little-endian
+const PACM_SCENE_REC_LEN = 24;
 const NO_SLOT = 0xffffffff;
 /** Mirror of `Abi.MAX_TARGETS` — the flat registry join's ceiling. */
 const MAX_TARGETS = 1024;
@@ -74,6 +78,13 @@ export class Pacer {
   #entries = [];
   /** @type {Meta | null} Decoded 'PACM', cached until the next reload. */
   #meta = null;
+  /**
+   * The current score's UTF-8 bytes — the source for span slicing. Scene
+   * names ride 'PACM' as spans (not inline bytes), so `meta` slices them
+   * from here; meta spans are USER coordinates, matching these bytes.
+   * @type {Uint8Array}
+   */
+  #docBytes = new Uint8Array(0);
 
   /** Table live, eval armed. @type {boolean} */
   ok = false;
@@ -150,6 +161,7 @@ export class Pacer {
     }
     new Uint8Array(e.memory.buffer).set(this.#targetsBlob, e.drv_targetsPtr());
     new Uint8Array(e.memory.buffer).set(doc, e.drv_docPtr());
+    this.#docBytes = doc;
     const status = e.drv_load(doc.length, this.#targetsBlob.length);
     this.diagnostics = this.#readDiags();
     this.ok = status === LOAD_OK;
@@ -162,9 +174,11 @@ export class Pacer {
 
   /**
    * Score metadata ('PACM'), decoded lazily and cached until the next
-   * reload: `{ transport, tracks, controls }` with key ticks (BigInt)
-   * and spans in the score's own coordinates — a control's `valueSpan`
-   * is the commit-to-text anchor for its widget. Null when not loaded.
+   * reload: `{ transport, tracks, controls, scenes }` with key ticks
+   * (BigInt) and spans in the score's own coordinates — a control's
+   * `valueSpan` is the commit-to-text anchor for its widget, and each
+   * scene's `nameSpan` anchors its `:name`. `scenes` is `[]` when the
+   * score declares none. Null when not loaded.
    *
    * Spans (like diagnostic spans) are BYTE offsets into the UTF-8
    * score; they equal string indices only while the score is ASCII —
@@ -252,6 +266,32 @@ export class Pacer {
       off += PACM_CONTROL_LEN + idLen;
     }
 
+    // Section stream: TLV frames after the last control, walked to the
+    // buffer end. Dispatch known ids, skip unknown ones by length — so a
+    // blob carrying a section this glue predates decodes without a throw.
+    /** @type {import('./types.js').MetaScene[]} */
+    const scenes = [];
+    while (off < len) {
+      const id = dv.getUint32(off, true);
+      const plen = dv.getUint32(off + 4, true);
+      const body = off + PACM_SECTION_HEADER_LEN;
+      if (id === PACM_SCENES_ID) {
+        const count = dv.getUint32(body, true);
+        let s = body + 4;
+        for (let i = 0; i < count; i++, s += PACM_SCENE_REC_LEN) {
+          const nameStart = dv.getUint32(s + 16, true);
+          const nameEnd = dv.getUint32(s + 20, true);
+          scenes.push({
+            name: decoder.decode(this.#docBytes.subarray(nameStart, nameEnd)),
+            startTick: dv.getBigInt64(s, true),
+            durTicks: dv.getBigInt64(s + 8, true),
+            nameSpan: { start: nameStart, end: nameEnd },
+          });
+        }
+      }
+      off = body + plen;
+    }
+
     this.#meta = {
       transport,
       tracks: rawTracks.map((t) => ({
@@ -264,6 +304,7 @@ export class Pacer {
         keys: keys.slice(t.keyStart, t.keyStart + t.keyLen),
       })),
       controls,
+      scenes,
     };
     return this.#meta;
   }

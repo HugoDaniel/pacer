@@ -226,6 +226,31 @@ test('meta: transport, key ticks, and the commit-to-text anchors', async () => {
   assert.equal(score.slice(knob.valueSpan.start, knob.valueSpan.end), '0.4');
 });
 
+test('meta.scenes: named windows decode from the SCEN section', async () => {
+  const score = `(transport :bpm 120 :meter [4 4])
+(scene :name intro :at 0b :dur 4b
+  (track :target radius (key :at 0b :value 0.1)))
+(scene :name drop :at 8b :dur 4b
+  (track :target radius (key :at 0b :value 0.9)))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  const scenes = driver.meta.scenes;
+
+  assert.equal(scenes.length, 2);
+  assert.equal(scenes[0].name, 'intro');
+  assert.equal(scenes[0].startTick, 0n);
+  assert.equal(scenes[0].durTicks, 4n * TICKS_PER_BEAT);
+  assert.equal(scenes[1].name, 'drop');
+  assert.equal(scenes[1].startTick, 8n * TICKS_PER_BEAT);
+  assert.equal(scenes[1].durTicks, 4n * TICKS_PER_BEAT);
+  // The name span is a commit-to-text anchor in the score's own coordinates.
+  assert.equal(score.slice(scenes[1].nameSpan.start, scenes[1].nameSpan.end), 'drop');
+});
+
+test('meta.scenes: a score with no scenes yields an empty array', async () => {
+  const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
+  assert.deepEqual(driver.meta.scenes, []);
+});
+
 test('registerControl drives an unpinned target while held', async () => {
   const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
   const slot = driver.registerControl('cutoff');

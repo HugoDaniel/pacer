@@ -44,6 +44,27 @@
 //!         id_len u16, value f32×4, min f32×4, max f32×4,
 //!         value_span_start u32, value_span_end u32, id bytes }
 //!
+//! After the last control comes a SECTION STREAM — zero or more
+//! length-prefixed TLV sections, walked to end-of-buffer, each:
+//!
+//!     [section_id u32][payload_len u32][payload : payload_len bytes]
+//!
+//! `section_id` is a 4-CC read LE (house magic style); `payload_len`
+//! counts the payload only. A decoder loops to end-of-buffer, dispatching
+//! known ids and skipping unknown ones by length (`off += 8 + payload_len`),
+//! so a decoder predating a section ignores it and adding a section never
+//! bumps `META_VERSION`. Each id appears at most once, encoder-emitted in a
+//! fixed order; a section is OMITTED when its count is 0 (an empty and an
+//! absent section are equivalent to a decoder), keeping a no-section blob
+//! byte-stable. Payload shape is the section's own business — the house
+//! pattern is `[count u32][fixed extern-struct record × count]`. Defined:
+//!
+//!     'SCEN' scenes — [count u32] then count × 24 {
+//!         start_tick i64, dur_ticks i64,
+//!         name_span_start u32, name_span_end u32 }
+//!       (the scene's name rides as a span like a track's — the editor
+//!       slices it from source; scenes aren't a setControl lookup key.)
+//!
 //! Both formats are wire-stable from day one: append/version, never
 //! reorder. The third boundary format, `'PACW'`, lives in `Writes`.
 
@@ -75,6 +96,12 @@ pub const META_KEY_LEN: usize = 32;
 pub const META_CONTROL_LEN: usize = 64;
 /// `target_id` of an env-only control in a meta record.
 pub const META_NO_TARGET: u16 = 0xffff;
+/// Frame header of a post-controls TLV section: `section_id`+`payload_len`.
+pub const META_SECTION_HEADER_LEN: usize = 8;
+/// `"SCEN"` read LE — the scenes section id in the meta section stream.
+pub const SCENES_SECTION_ID: u32 = 0x4e454353;
+/// Bytes per scene record inside the `'SCEN'` payload.
+pub const SCENE_REC_LEN: usize = 24;
 
 /// Most registries any host may join at load. Generous: pngine uniform
 /// tables run tens of fields, not hundreds.
@@ -240,15 +267,26 @@ const MetaControlRec = extern struct {
     value_span_start: u32,
     value_span_end: u32,
 };
+/// One `'SCEN'` payload record — 24 bytes, mirrors SCENE_REC_LEN. The
+/// scene's name rides as a span (like a track's), not inline bytes: the
+/// editor slices it from source, and scenes are not a setControl key.
+const MetaSceneRec = extern struct {
+    start_tick: i64,
+    dur_ticks: i64,
+    name_span_start: u32,
+    name_span_end: u32,
+};
 
 comptime {
     std.debug.assert(@sizeOf(MetaTrackRec) == META_TRACK_LEN);
     std.debug.assert(@sizeOf(MetaKeyRec) == META_KEY_LEN);
     std.debug.assert(@sizeOf(MetaControlRec) == META_CONTROL_LEN);
+    std.debug.assert(@sizeOf(MetaSceneRec) == SCENE_REC_LEN);
     // spot-check a couple of offsets so a field reorder is a build break
     std.debug.assert(@offsetOf(MetaTrackRec, "key_start") == 8);
     std.debug.assert(@offsetOf(MetaControlRec, "value") == 8);
     std.debug.assert(@offsetOf(MetaControlRec, "value_span_start") == 56);
+    std.debug.assert(@offsetOf(MetaSceneRec, "name_span_start") == 16);
 }
 
 /// Exact encoded size of the meta blob. Asserts a live table.
@@ -258,6 +296,10 @@ pub fn metaEncodedLen(result: *const Compile.CompileResult) usize {
         table.tracks.len * META_TRACK_LEN +
         table.keys.len * META_KEY_LEN;
     for (table.controls) |c| len += META_CONTROL_LEN + c.id.len;
+    // 'SCEN' section (omitted when there are no scenes, so a no-scenes
+    // blob stays byte-identical to a pre-scenes one).
+    if (table.scenes.len > 0)
+        len += META_SECTION_HEADER_LEN + 4 + table.scenes.len * SCENE_REC_LEN;
     return len;
 }
 
@@ -345,6 +387,27 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
         @memcpy(dest[pos..][0..ctl.id.len], ctl.id);
         pos += ctl.id.len;
     }
+
+    // The section stream: a 'SCEN' TLV frame when the score has scenes.
+    if (table.scenes.len > 0) {
+        std.mem.writeInt(u32, dest[pos..][0..4], SCENES_SECTION_ID, .little);
+        std.mem.writeInt(u32, dest[pos + 4 ..][0..4], @intCast(4 + table.scenes.len * SCENE_REC_LEN), .little);
+        pos += META_SECTION_HEADER_LEN;
+        std.mem.writeInt(u32, dest[pos..][0..4], @intCast(table.scenes.len), .little);
+        pos += 4;
+        for (table.scenes) |scene| {
+            const us = userSpan(v, scene.name_span);
+            const rec: MetaSceneRec = .{
+                .start_tick = scene.start_tick,
+                .dur_ticks = scene.dur_ticks,
+                .name_span_start = us.start,
+                .name_span_end = us.end,
+            };
+            @memcpy(dest[pos..][0..SCENE_REC_LEN], std.mem.asBytes(&rec));
+            pos += SCENE_REC_LEN;
+        }
+    }
+
     std.debug.assert(pos == total);
     return dest[0..pos];
 }
@@ -588,4 +651,106 @@ test "encodeDiags truncates whole records when the buffer is tight" {
     const encoded = encodeDiags(&r, buf[0 .. one_record + 8]);
     try t.expectEqual(@as(u32, 1), std.mem.readInt(u32, encoded[8..12], .little));
     try t.expectEqual(one_record, encoded.len);
+}
+
+test "encodeMeta: a scenes section rides after the controls as a 'SCEN' TLV frame" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4])
+        \\(scene :name intro :at 0b :dur 4b
+        \\  (track :target circle-radius (key :at 0b :value 0.1)))
+        \\(scene :name drop :at 8b :dur 4b
+        \\  (track :target circle-radius (key :at 0b :value 0.9)))
+    ;
+    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    var buf: [4096]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    try t.expectEqual(metaEncodedLen(&r), m.len);
+
+    // 2 scened tracks, 2 keys, 0 controls → the section follows directly.
+    try t.expectEqual(@as(u32, 2), std.mem.readInt(u32, m[28..32], .little)); // tracks
+    try t.expectEqual(@as(u32, 2), std.mem.readInt(u32, m[32..36], .little)); // keys
+    try t.expectEqual(@as(u32, 0), std.mem.readInt(u32, m[36..40], .little)); // controls
+    const sec = META_HEADER_LEN + 2 * META_TRACK_LEN + 2 * META_KEY_LEN;
+
+    // Frame header: id 'SCEN', payload_len = 4 (count) + 2 × 24 (records).
+    try t.expectEqual(SCENES_SECTION_ID, std.mem.readInt(u32, m[sec..][0..4], .little));
+    const plen = std.mem.readInt(u32, m[sec + 4 ..][0..4], .little);
+    try t.expectEqual(@as(u32, 4 + 2 * SCENE_REC_LEN), plen);
+    // The frame accounts for exactly the rest of the blob (self-delimiting).
+    try t.expectEqual(m.len, sec + META_SECTION_HEADER_LEN + plen);
+
+    const body = sec + META_SECTION_HEADER_LEN;
+    try t.expectEqual(@as(u32, 2), std.mem.readInt(u32, m[body..][0..4], .little)); // count
+    const ppb: i64 = 180180;
+
+    const rec0 = body + 4;
+    try t.expectEqual(@as(i64, 0), std.mem.readInt(i64, m[rec0..][0..8], .little));
+    try t.expectEqual(@as(i64, 4 * ppb), std.mem.readInt(i64, m[rec0 + 8 ..][0..8], .little));
+    const n0s = std.mem.readInt(u32, m[rec0 + 16 ..][0..4], .little);
+    const n0e = std.mem.readInt(u32, m[rec0 + 20 ..][0..4], .little);
+    try t.expectEqualStrings("intro", source[n0s..n0e]);
+
+    const rec1 = rec0 + SCENE_REC_LEN;
+    try t.expectEqual(@as(i64, 8 * ppb), std.mem.readInt(i64, m[rec1..][0..8], .little));
+    try t.expectEqual(@as(i64, 4 * ppb), std.mem.readInt(i64, m[rec1 + 8 ..][0..8], .little));
+    const n1s = std.mem.readInt(u32, m[rec1 + 16 ..][0..4], .little);
+    const n1e = std.mem.readInt(u32, m[rec1 + 20 ..][0..4], .little);
+    try t.expectEqualStrings("drop", source[n1s..n1e]);
+}
+
+test "encodeMeta: a score with no scenes emits no 'SCEN' frame" {
+    var r = try Compile.compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius (key :at 0b :value 0.1))
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    var buf: [512]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    // 1 track, 1 key, 0 controls, 0 scenes → the blob ends at the last
+    // record with no trailing section (byte-identical to a pre-scenes blob).
+    try t.expectEqual(META_HEADER_LEN + META_TRACK_LEN + META_KEY_LEN, m.len);
+}
+
+test "PACM section walk: an unknown-id section is skipped, scenes still decode" {
+    var r = try Compile.compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(scene :name intro :at 0b :dur 4b
+        \\  (track :target circle-radius (key :at 0b :value 0.1)))
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    var buf: [4096]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+
+    // The real 'SCEN' frame sits after 1 track, 1 key, 0 controls.
+    const sec = META_HEADER_LEN + META_TRACK_LEN + META_KEY_LEN;
+    const scen = m[sec..];
+
+    // Synthetic stream: an unknown 'ZZZZ' frame, then the real 'SCEN' frame.
+    var stream: [512]u8 = undefined;
+    const unknown_payload = [_]u8{ 0xde, 0xad, 0xbe, 0xef };
+    std.mem.writeInt(u32, stream[0..4], 0x5a5a5a5a, .little); // 'ZZZZ'
+    std.mem.writeInt(u32, stream[4..8], @intCast(unknown_payload.len), .little);
+    @memcpy(stream[8..][0..unknown_payload.len], &unknown_payload);
+    const after_unknown = META_SECTION_HEADER_LEN + unknown_payload.len;
+    @memcpy(stream[after_unknown..][0..scen.len], scen);
+    const stream_len = after_unknown + scen.len;
+
+    // Walk the TLV stream: dispatch only 'SCEN', always skip by length.
+    var off: usize = 0;
+    var scenes_seen: usize = 0;
+    while (off < stream_len) {
+        const id = std.mem.readInt(u32, stream[off..][0..4], .little);
+        const plen = std.mem.readInt(u32, stream[off + 4 ..][0..4], .little);
+        if (id == SCENES_SECTION_ID)
+            scenes_seen = std.mem.readInt(u32, stream[off + META_SECTION_HEADER_LEN ..][0..4], .little);
+        off += META_SECTION_HEADER_LEN + plen;
+    }
+    try t.expectEqual(stream_len, off); // landed exactly at end-of-stream
+    try t.expectEqual(@as(usize, 1), scenes_seen); // the unknown frame didn't disturb it
 }

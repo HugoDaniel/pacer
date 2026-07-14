@@ -128,19 +128,31 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: 01 scenes-cues — Phase 4 (ABI + npm meta, RED first).** Open only
-`plans/01-scenes-cues.md` and execute its Phase 4 (`src/Abi.zig` meta encode,
-`npm/pacer/src/index.js` meta decode, `npm/pacer/src/types.js`). This is the FIRST consumer
-of the frozen **'PACM' section-framing convention** (canonical in 01, recorded in the
-Decision log): append a `'SCEN'` section — payload `[count u32][SceneRec × count]`, recommended
-`SceneRec` = `{ start_tick i64, dur_ticks i64, name_span_start u32, name_span_end u32 }` =
-24 B, `comptime @sizeOf` pin + an `@offsetOf` spot-check (mirror `MetaTrackRec`), **omit
-when 0 scenes** (keeps the no-scenes blob byte-identical). Also transcribe the framing
-convention into the `Abi.zig` `//!` header, and add the post-controls TLV walk to `get meta`.
-Reds first (Zig `Abi` round-trip of a 2-scene section + a no-scene score emits NO `'SCEN'`
-frame + a synthetic unknown-id section is skipped by the walk; npm `pacer.meta.scenes` =
-`[{name, startTick, durTicks}]` and `[]` for no scenes), then green. Gate: `zig build verify`
-+ npm gate (`cd npm/pacer && npm run lint && npm run typecheck && npm test`).
+→ **Wave 1: 01 scenes-cues — Phase 5 (corpus + docs).** Open only `plans/01-scenes-cues.md`
+and execute its Phase 5 (the LAST phase — ticking `01 scenes-cues` on the board). Use
+`corpus/keys-basic/` as the template + read `src/corpus_runner.zig`'s `//!` header. New case
+`scenes-basic`: overlapping scenes with the handoff-by-write-order guarantee, scene expr
+bindings (`scene-beat` AND the new `scene-phase` f64 division — this case is what PINS its
+exact bytes native==wasm, per Phase 3's carry-forward), and loop-wrap re-entry into a scene.
+The golden now also carries the `'SCEN'` block, so review the `(meta …)` echo diff closely.
+Run `zig build corpus -- --update`, REVIEW the diff (never hand-edit a golden), then update
+the `schema/pacer.sjon` header roadmap note and `CLAUDE.md` if the wire-surface list changes
+(`'SCEN'` is now a real section — decide whether it earns a row in CLAUDE's wire-stable
+table). Gate: `zig build verify` (native + wasm parity green).
+
+**01 Phase 4 (ABI + npm meta) is DONE** (2026-07-14): the FIRST consumer of the frozen
+'PACM' section-framing convention. `Abi.zig` gained `MetaSceneRec` (24 B, `@sizeOf`/`@offsetOf`
+pinned) and pub consts `META_SECTION_HEADER_LEN = 8`, `SCENES_SECTION_ID = 0x4e454353`
+(`'SCEN'` LE), `SCENE_REC_LEN = 24`; `encodeMeta` appends a `'SCEN'` TLV frame
+(`[id][payload_len][count][rec×n]`) after the last control **only when `scenes.len > 0`** (a
+no-scenes blob stays byte-identical to pre-Phase-4). The convention is now transcribed into the
+`Abi.zig` `//!` header (its doc of record). `wasm_entry.zig`'s `META_CAP` bound grew a `'SCEN'`
+term. `index.js` `get meta` gained the post-controls `while (off < len)` walk (dispatch by id,
+always `off += 8 + payload_len`); `meta.scenes` = `[{name, startTick, durTicks, nameSpan}]`,
+`[]` when none; a `#docBytes` field slices scene names from the reload's UTF-8 source. Types +
+JSDoc extended. Gate green: `zig build verify` (test + corpus 13/13 byte-identical + npm 45/45
+wasm parity), `audit-diagnostics` (26/26 — no new codes), npm lint/typecheck. Board box `01
+scenes-cues` stays ☐ until Phase 5 lands the corpus.
 
 **01 Phase 3 (eval semantics) is DONE** (2026-07-14): `Eval.zig` gained a window gate — a
 `Track.scene != NO_SCENE` track writes only while the WRAPPED tick is in `[start, start+dur)`,
@@ -289,6 +301,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   so the eval gate never overflows; a non-positive `:dur` stays a lenient never-active window
   (phase 0, no new diagnostic — code set stays 26). No `'PACM'`/`'PACD'`/`'PACT'`/`'PACW'`
   bytes moved — corpus stayed 13/13 byte-identical (no scene case yet; it lands in Phase 5).
+- 2026-07-14 — 01 scenes-cues Phase 4 complete (ABI + npm meta). The **'PACM' section-framing
+  convention is now REALIZED** — `'PACM'` grew a post-controls TLV section stream, with the
+  convention transcribed into the `Abi.zig` `//!` header (the format's doc of record). Two
+  cross-plan facts. (1) **`'SCEN'` = 0x4e454353 is a claimed section id.** 11 Phase 3 (ease
+  programs) must mint a distinct 4-CC (`'EASE'`); the encoder emits sections in a fixed order
+  (scenes before ease-programs), though decoders dispatch by id and MUST NOT rely on order or
+  presence. Adding a section never bumps `META_VERSION` (stays 1); omit-when-count-0 keeps
+  older blobs byte-stable (corpus stayed 13/13). (2) **The npm glue now retains the reload's
+  UTF-8 doc bytes** (`#docBytes`) to slice scene names from spans — the pattern any future
+  span-only meta record (no inline bytes) reuses. `'PACT'`/`'PACD'`/`'PACW'` untouched; the
+  `'PACM'` addition is append-only, no `META_VERSION` bump. Corpus `scenes-basic` (Phase 5)
+  is the first case to exercise the `'SCEN'` bytes end-to-end (native == wasm).
 - 2026-07-14 — Wave 0 complete (studio refresh). Two cross-plan facts. (1) **The studio
   loads pacer.wasm by symlink** — `studio/public/pacer.wasm` → `editor/public/pacer.wasm`
   → `pacer/npm/pacer/pacer.wasm`; the canonical sync is `npm run build:wasm-copy` (the

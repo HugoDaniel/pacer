@@ -117,11 +117,24 @@ export {};
  */
 
 /**
+ * A scene (named window) in score metadata. Its name is sliced from the
+ * score source via `nameSpan` — scenes carry no target, so the name is
+ * their identity.
+ * @typedef {object} MetaScene
+ * @property {string} name The scene's `:name` symbol, sliced from source.
+ * @property {bigint} startTick Window start on the PPC tick grid.
+ * @property {bigint} durTicks Window length; the scene plays over
+ *   `[startTick, startTick + durTicks)`.
+ * @property {Span} nameSpan Byte span of the `:name` symbol (commit anchor).
+ */
+
+/**
  * Decoded score metadata ('PACM'): the editor's timeline anchors.
  * @typedef {object} Meta
  * @property {Transport} transport
  * @property {ReadonlyArray<MetaTrack>} tracks
  * @property {ReadonlyArray<MetaControl>} controls
+ * @property {ReadonlyArray<MetaScene>} scenes Named windows; `[]` when none.
  */
 
 /**

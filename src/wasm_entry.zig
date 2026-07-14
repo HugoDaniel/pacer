@@ -85,11 +85,13 @@ comptime {
     std.debug.assert(MAX_DOC_SIZE + Compile.manifest_src.len + 2 <= sjon.Binary.MAX_FILE_SIZE);
     // A full diag buffer still fits useful records (16-byte fixed part).
     std.debug.assert(DIAGS_CAP >= Abi.DIAGS_HEADER_LEN + 64 * (Abi.DIAG_RECORD_LEN + 256));
-    // Meta at the caps fits with a generous control-id allowance.
+    // Meta at the caps fits with a generous control-id allowance, plus a
+    // full 'SCEN' section.
     std.debug.assert(META_CAP >= Abi.META_HEADER_LEN +
         TrackTable.MAX_TRACKS * Abi.META_TRACK_LEN +
         TrackTable.MAX_KEYS * Abi.META_KEY_LEN +
-        TrackTable.MAX_CONTROLS * (Abi.META_CONTROL_LEN + 256));
+        TrackTable.MAX_CONTROLS * (Abi.META_CONTROL_LEN + 256) +
+        Abi.META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_SCENES * Abi.SCENE_REC_LEN);
     // A registered slot index always fits the u32 return.
     std.debug.assert(TrackTable.MAX_CONTROLS + Eval.MAX_DYNAMIC_CONTROLS < NO_SLOT);
 }
