@@ -86,3 +86,57 @@ gaps, and a wrap; `zig build corpus -- --update`, review; wasm parity via
 Gate: `zig build verify` + npm gate.
 
 ## Progress log
+
+- **Phase 0 — feasibility spike (done, 2026-07-14). VERDICT: FEASIBLE, no
+  SJON change needed.** The `Pattern`/`PatternQuery` surface is already
+  re-exported to path consumers (`sjon.Pattern`, `sjon.PatternQuery` in SJON's
+  `root.zig`), so no re-export wiring was required. Kept artifact: one native
+  Zig test in pacer's `src/root.zig` (sibling to the existing sjon-wiring test)
+  that parses `[bd hh sn cp]`, calls `PatternQuery.queryTree(gpa, &tree,
+  tree.root[0], Schema.init(&.{}), Span.init(0, PPC), 0)`, and asserts the
+  fastcat's four haps land on exact quarter-bar tick boundaries (`i·PPC/4`)
+  carrying symbols `bd/hh/sn/cp`, zero diagnostics. Green native first run
+  (`zig build test`).
+  - **wasm32-freestanding proof.** `zig build test` only compiles native and Zig
+    is lazy, so a green test does *not* prove the engine links freestanding. To
+    force it, a TEMPORARY probe `_ = &sjon.PatternQuery.queryTree;` was added to
+    `wasm_entry.zig`'s comptime block and `zig build wasm` run: it built clean,
+    proving `queryTree`'s whole transitive closure (compileTree + the query
+    walker + all combinators + the per-hap `Expr` leaf eval + `Pattern` tick
+    math + `Schema`) **semantically compiles for wasm32-freestanding under
+    `plugin-exec = false`** — nothing in the pattern surface reaches for
+    libwasmtime / the filesystem / a native-only builtin. The probe was then
+    removed (`wasm_entry.zig` is byte-identical to HEAD); Phase 3 re-adds a real
+    call site.
+  - **Code-size finding.** Baseline `pacer.wasm` 455941 B → with the probe
+    455943 B (**+2 B**). Nearly the entire engine was *already* linked, because
+    pacer already consumes SJON's `Expr`/`Schema`/`Ast`/`Pattern` — exactly the
+    closure PatternQuery imports. So `:pattern` adds only the engine's own code
+    (compile/query walkers, combinators, hap machinery) on top of dependencies
+    already present; the shipped delta (measured for real once Phase 3 *calls*
+    queryTree) is bounded and modest, not a new subsystem.
+  - **Design bearing (record now; freeze in Phase 1).**
+    - *Cycle↔bar mapping — SETTLED as identity.* `Pattern.PPC` (720720) IS
+      pacer's per-bar tick count, so "1 pattern cycle = 1 bar" is not a
+      conversion — it is identity on the shared grid. The spike's window
+      `Span.init(0, PPC)` == one bar == one cycle, and the four haps fell on
+      exact `PPC/4` boundaries with pure integer math (no f64). Recommend
+      freezing 1 cycle = 1 bar in Phase 1; it is the zero-cost choice.
+    - *Env merge — OPEN, and the spike sharpened it.* PatternQuery evaluates a
+      `(pure <form>)` leaf as an `Expr` with `cycle` (f64), `tick` (i64), `seed`
+      (i64) bound; pacer's expr env (`ExprTrack.bindTime`) binds
+      `t/tick/beat/bar/cycle/phase/bpm/dur` + controls. `cycle` and `tick`
+      **collide by name** between the two envs — Phase 1 must decide the merge
+      (recommend: pattern-local `cycle`/`tick`/`seed` shadow pacer's inside a
+      hap value, since a hap's cycle is the pattern's, not the transport's; the
+      names still agree numerically when 1 cycle = 1 bar). The spike used a
+      pure-*literal* pattern, so it did not exercise this path — it only
+      surfaced the collision.
+    - *Hap-selection rule — UNTOUCHED (still the plan's recommendation).* The
+      spike queried the whole cycle and read all haps; it did not implement the
+      eval-time point-sample. The plan's rule (at tick T, take the hap active at
+      T with the latest onset; no active hap → omit the write, mirroring expr
+      NaN rejection) stands as the Phase 1 freeze target.
+  Gate: `zig build test` ✓ + `zig build wasm` ✓. No JS/TS touched. **STOP** —
+  per Wave 0 this is the spike only; Phases 1–4 are scheduled in Wave 3,
+  informed by this verdict.

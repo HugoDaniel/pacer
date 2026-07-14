@@ -109,7 +109,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 |---|---|---|
 | 0 | 04 transport-lanes | ☑ |
 | 0 | 11 P1–P2 corpus pins | ☑ |
-| 0 | 03 P0 pattern spike | ☐ |
+| 0 | 03 P0 pattern spike | ☑ |
 | 0 | studio refresh + `:emit` template | ☐ |
 | 1 | 'PACM' framing decision | ☐ |
 | 1 | 01 scenes-cues | ☐ |
@@ -128,13 +128,25 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **03 pattern-tracks, Phase 0 ONLY** — the PatternQuery feasibility spike: can SJON's
-`Pattern`/`PatternQuery` surface run under wasm32-freestanding with `.@"plugin-exec" =
-false` (no libwasmtime)? Build a minimal spike, record the verdict in the Decision log,
-and STOP — do not continue into 03's later phases (they're scheduled in Wave 3). Then
-the Wave 0 studio refresh: rebuild `pacer.wasm`, copy into `studio/public/` +
-`editor/public/`, run `score-uniforms.test.js`, and switch `demoscene.score.sjon` to
-`:emit [beat]` (04's deferred follow-up).
+→ **Wave 0 studio refresh** — the last Wave 0 item, now that the three core steps
+(04, 11 P1–P2, 03 P0) are done. Rebuild `pacer.wasm` (`zig build wasm`) and update the
+copies the studio loads — `studio/public/pacer.wasm` and `editor/public/` (first check
+whether a script syncs these before copying by hand). Run the editor's real-wasm tests
+(`score-uniforms.test.js`). Then switch `demoscene.score.sjon` to `:emit [beat]` (04's
+deferred follow-up — gated on the studio's `pacer.wasm` now carrying emit eval) and
+eyeball it. The npm triple-pin is untouched this wave (no npm surface changed), so no
+version bump. When done, tick the board box and open Wave 1 with the 'PACM' framing
+decision.
+
+03 P0 pattern spike is **DONE** (2026-07-14) — **VERDICT: FEASIBLE**, no SJON change.
+SJON's `Pattern`/`PatternQuery` is already re-exported to path consumers and its
+`queryTree` closure compiles clean under wasm32-freestanding (`plugin-exec = false`),
+proven by a temporary `_ = &sjon.PatternQuery.queryTree;` probe in `wasm_entry.zig` that
+built green then was removed. A kept native test in `src/root.zig` queries `[bd hh sn cp]`
+and asserts the fastcat's four haps on exact quarter-bar ticks. Code-size delta with the
+probe was +2 B (the engine's deps — `Expr`/`Schema`/`Ast`/`Pattern` — are already linked
+by pacer). See 03's progress log for the full verdict and the Phase-1 design bearing.
+Board box `03 P0 pattern spike` is ticked; Phases 1–4 stay in Wave 3.
 
 11 P1–P2 is **DONE** (2026-07-14) — Phase 1's `ease-primitives` golden pins all 18 named
 eases + `cubic-bezier` + both `steps` jumps across `u = 0…1`; Phase 2's three cases pin
@@ -153,6 +165,15 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   (Wave 1 gate); PatternQuery wasm32 feasibility (Wave 0 spike); array-write delivery
   option a/b (05 Phase 0); scene out-of-window semantics recommended as write-omitted
   (01, confirm at its Phase 1 design freeze).
+- 2026-07-14 — 03 Phase 0 spike complete. **PatternQuery is feasible under
+  wasm32-freestanding with `plugin-exec = false`** (verdict grounded in a green
+  `zig build wasm` with `queryTree` referenced; probe removed after). Two cross-plan
+  facts for Wave 3's 03 Phases 1–4: (1) **cycle↔bar is identity** — `Pattern.PPC` is
+  pacer's per-bar tick count, so freeze "1 cycle = 1 bar" at no cost; (2) **env-merge is
+  the real open decision** — PatternQuery binds `cycle`/`tick`/`seed` per hap, which
+  *collide by name* with pacer's expr env (`cycle`/`tick`); recommend pattern-local names
+  shadow inside a hap value. The hap-selection point-sample rule is untouched (still the
+  plan's recommendation to freeze in 03 Phase 1). No wire surface moved.
 - 2026-07-14 — 04 transport-lanes complete. Cross-plan note: `(transport :emit …)`
   lanes are pinned in the corpus via `(eval …)` write buffers only, NOT the `'PACM'`
   meta blob — emit added no wire surface. Any later plan that wants emit lanes echoed in
