@@ -185,10 +185,10 @@
     :description "Stage children of (seq …)."
     :underlying form
     :heads (head-set :names [stage]))
-  (value-kind :name track-section
-    :description "Track children of (scene …)."
+  (value-kind :name scene-section
+    :description "Track and trigger children of (scene …); both resolve their positions scene-relative."
     :underlying form
-    :heads (head-set :names [track]))
+    :heads (head-set :names [track trigger]))
 
   ; =====================================================================
   ; Top-level forms
@@ -208,8 +208,8 @@
       :description "Reserved time names (beat, bar, phase, bpm, t) broadcast as write lanes, each resolved against the host registries by that exact name. Emitted lanes land before track writes, so an explicit (track …) on the same target overrides an emitted lane; controls still land last."))
 
   (form :name scene
-    :description "A named window [at, at+dur) on the transport tick grid; child tracks resolve their positions scene-relative. Scenes may overlap and hand a target off by write order. :name/:at/:dur are schema-optional so a scene missing any surfaces as a pacer scene_invalid diagnostic (with a span), not a bare SJON missing-key error."
-    :positional track-section
+    :description "A named window [at, at+dur) on the transport tick grid; child tracks and triggers resolve their positions scene-relative. Scenes may overlap and hand a target off by write order. :name/:at/:dur are schema-optional so a scene missing any surfaces as a pacer scene_invalid diagnostic (with a span), not a bare SJON missing-key error."
+    :positional scene-section
     (key :name name :type scene-name :optional true
       :description "Scene identifier; unique per score.")
     (key :name at :type time-pos :optional true

@@ -583,7 +583,12 @@ fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult,
         w.print("\n  (mtrack :id {d} :target {s} :registry {d} :ncomp {d} :source {s} :span [{d} {d}]", .{
             target_id,                        harness.targets[target_id].name,
             rec[2],                           rec[3],
-            if (source == 0) "keys" else "expr",
+            switch (source) {
+                0 => "keys",
+                1 => "expr",
+                2 => "trigger",
+                else => unreachable,
+            },
             std.mem.readInt(u32, rec[16..20], .little), std.mem.readInt(u32, rec[20..24], .little),
         }) catch return error.OutOfMemory;
         for (0..key_len) |k| {

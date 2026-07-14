@@ -336,10 +336,11 @@ const Builder = struct {
         var scenes: std.ArrayList(TrackTable.Scene) = .empty;
         try self.buildScenes(ta, &transport, &scenes, &tracks, &keys, &track_spans, &key_spans);
 
-        // Triggers (plan 02 Phase 1): validate each (trigger …) form's
-        // shape only — the table row lands in Phase 2. A defect emits and
-        // nulls the table via the diag gate below.
-        try self.validateTriggers(&transport);
+        // Triggers: build each top-level (trigger …) into the table as a
+        // third row kind. Scened triggers were already walked by
+        // buildScenes (scene start folded into their schedule). A defect
+        // emits and nulls the table via the diag gate below.
+        try self.buildTriggers(ta, &transport, &tracks, &track_spans);
 
         std.debug.assert(track_spans.items.len == tracks.items.len);
         std.debug.assert(key_spans.items.len == keys.items.len);
@@ -725,89 +726,163 @@ const Builder = struct {
             };
             scenes.append(ta, scene) catch return error.OutOfMemory;
 
-            // Child tracks resolve scene-relative (offset = scene start) and
-            // carry the window into their expr env.
+            // Child tracks and triggers resolve scene-relative (offset =
+            // scene start): a track carries the window into its expr env, a
+            // trigger folds it into its schedule. Both count as table rows.
             for (children) |child| {
-                if (!isForm(tree, child, "track")) continue;
+                const is_track = isForm(tree, child, "track");
+                if (!is_track and !isForm(tree, child, "trigger")) continue;
                 if (tracks.items.len == TrackTable.MAX_TRACKS) {
                     try self.emit(.track_cap_exceeded, tree.spanOf(child), "more than {d} tracks", .{TrackTable.MAX_TRACKS});
                     return;
                 }
-                if (!try self.buildTrackForm(ta, transport, child, scene, scene_index, tracks, keys, track_spans, key_spans)) return;
+                if (is_track) {
+                    if (!try self.buildTrackForm(ta, transport, child, scene, scene_index, tracks, keys, track_spans, key_spans)) return;
+                } else {
+                    try self.buildTriggerForm(ta, transport, child, scene, scene_index, tracks, track_spans);
+                }
             }
         }
     }
 
-    /// Validate every top-level `(trigger …)` form's shape (plan 02
-    /// Phase 1: validation only — the resolved schedule and table row land
-    /// in Phase 2). A trigger fires on an event schedule that is EITHER
-    /// periodic (`:every`, phased by optional `:offset`) XOR an explicit
-    /// ascending `:at` list; exactly one source is required. Checks: the
-    /// source XOR (neither/both → `trigger_invalid`), a resolvable target
-    /// (`unknown_target`, reusing the track code), `:every` > 0 ticks, and
-    /// a non-empty strictly-ascending `:at`. Diagnostics only; any one
-    /// nulls the table via the caller's diag gate. Scened triggers arrive
-    /// with the Phase 2 compile walk (schema-widened then).
-    fn validateTriggers(self: *Builder, transport: *const TrackTable.Transport) Error!void {
+    /// Build every top-level `(trigger …)` into the table. A trigger fires
+    /// on an event schedule that is EITHER periodic (`:every`, phased by
+    /// optional `:offset`) XOR an explicit ascending `:at` list; exactly
+    /// one source is required. It joins its target like a track and lands
+    /// as a third `Track` row (a `Source.trigger`, no keys), counted
+    /// against `MAX_TRACKS`. Scened triggers are walked by `buildScenes`
+    /// (scene start folded in); this pass handles the top-level forest.
+    fn buildTriggers(
+        self: *Builder,
+        ta: Allocator,
+        transport: *const TrackTable.Transport,
+        tracks: *std.ArrayList(TrackTable.Track),
+        track_spans: *std.ArrayList(Ast.Span),
+    ) Error!void {
         const tree = self.tree;
-        const map = &transport.map;
         for (self.forest) |idx| {
             if (!isForm(tree, idx, "trigger")) continue;
-            const children = tree.formHeader(idx).children;
-
-            const every_node = kvNode(tree, children, "every");
-            const at_node = kvNode(tree, children, "at");
-            // Exactly one source: `(a == null) == (b == null)` is true iff
-            // both are present or both absent.
-            if ((every_node == null) == (at_node == null)) {
-                try self.emit(.trigger_invalid, tree.spanOf(idx), "trigger needs exactly one of :every (periodic) or :at (explicit hits)", .{});
-                continue;
+            if (tracks.items.len == TrackTable.MAX_TRACKS) {
+                try self.emit(.track_cap_exceeded, tree.spanOf(idx), "more than {d} tracks", .{TrackTable.MAX_TRACKS});
+                return;
             }
-
-            const target_node = kvNode(tree, children, "target").?;
-            const target_name = tree.symbolText(target_node);
-            if (self.resolveTarget(target_name) == null) {
-                try self.emit(.unknown_target, tree.spanOf(target_node), "unknown target `{s}` — not in any host registry", .{target_name});
-                continue;
-            }
-
-            if (every_node) |en| {
-                // Periodic interval must be a positive tick count (overflow
-                // already emitted tick_overflow and returned null).
-                if (try self.posToTick(map, en)) |every_ticks| {
-                    if (every_ticks <= 0) {
-                        try self.emit(.trigger_invalid, tree.spanOf(en), ":every must be a positive interval", .{});
-                    }
-                }
-            } else {
-                try self.validateAtList(map, at_node.?);
-            }
+            // Top-level triggers: no owning scene (offset 0, no window env).
+            try self.buildTriggerForm(ta, transport, idx, null, TrackTable.NO_SCENE, tracks, track_spans);
         }
     }
 
-    /// Validate an explicit `:at` event list: non-empty and strictly
-    /// ascending in TICK order (equal or descending positions are a
-    /// `trigger_invalid`, since which event a tie selects would be
-    /// source-order luck). Emits at the list node; a position overflow
-    /// raises `tick_overflow` (via `posToTick`) and stops the scan.
-    fn validateAtList(self: *Builder, map: *const TimeMap, at_node: NodeIndex) Error!void {
+    /// Build one `(trigger …)` form into the table. `scene_win` is the
+    /// owning scene (null for a top-level trigger): its start tick folds
+    /// into the schedule — added to each `:at` position and to the periodic
+    /// `:offset` with a checked add (overflow → `tick_overflow`) — so a
+    /// scened trigger's ticks are absolute, exactly like a scened track's
+    /// keys. `scene_index` is recorded on the row. Every per-trigger defect
+    /// emits at its span and returns (skip this trigger; the diag gate
+    /// nulls the table). The caller checks the track cap first — it depends
+    /// on the running row count.
+    fn buildTriggerForm(
+        self: *Builder,
+        ta: Allocator,
+        transport: *const TrackTable.Transport,
+        idx: NodeIndex,
+        scene_win: ?TrackTable.Scene,
+        scene_index: u16,
+        tracks: *std.ArrayList(TrackTable.Track),
+        track_spans: *std.ArrayList(Ast.Span),
+    ) Error!void {
+        const tree = self.tree;
+        const map = &transport.map;
+        const children = tree.formHeader(idx).children;
+        const offset: TrackTable.Tick = if (scene_win) |w| w.start_tick else 0;
+
+        const every_node = kvNode(tree, children, "every");
+        const at_node = kvNode(tree, children, "at");
+        // Exactly one source: `(a == null) == (b == null)` is true iff both
+        // are present or both absent.
+        if ((every_node == null) == (at_node == null)) {
+            try self.emit(.trigger_invalid, tree.spanOf(idx), "trigger needs exactly one of :every (periodic) or :at (explicit hits)", .{});
+            return;
+        }
+
+        const target_node = kvNode(tree, children, "target").?;
+        const target_name = tree.symbolText(target_node);
+        const target = self.resolveTarget(target_name) orelse {
+            try self.emit(.unknown_target, tree.spanOf(target_node), "unknown target `{s}` — not in any host registry", .{target_name});
+            return;
+        };
+
+        const schedule: TrackTable.Trigger = if (every_node) |en| blk: {
+            // Periodic interval must be a positive tick count (overflow
+            // already emitted tick_overflow and returned null).
+            const every_ticks = try self.posToTick(map, en) orelse return;
+            if (every_ticks <= 0) {
+                try self.emit(.trigger_invalid, tree.spanOf(en), ":every must be a positive interval", .{});
+                return;
+            }
+            // :offset defaults to 0; the scene start folds in. A top-level
+            // offset never overflows (offset is 0 and the local tick is a
+            // valid grid position), exactly like buildKey's scene fold — so
+            // the overflow below is reachable only with :offset present, and
+            // the span points at that value.
+            var offset_local: TrackTable.Tick = 0;
+            var offset_span = tree.spanOf(idx);
+            if (kvNode(tree, children, "offset")) |on| {
+                offset_local = try self.posToTick(map, on) orelse return;
+                offset_span = tree.spanOf(on);
+            }
+            const offset_abs = std.math.add(TrackTable.Tick, offset, offset_local) catch {
+                try self.emit(.tick_overflow, offset_span, "scene-relative trigger offset overflows the tick grid", .{});
+                return;
+            };
+            break :blk .{ .periodic = .{ .every = every_ticks, .offset = offset_abs } };
+        } else blk: {
+            const at = try self.buildAtList(ta, map, at_node.?, offset) orelse return;
+            break :blk .{ .at = at };
+        };
+
+        tracks.append(ta, .{
+            .target_id = target.id,
+            .registry = target.registry,
+            .ncomp = target.ncomp,
+            .source = .{ .trigger = schedule },
+            .scene = scene_index,
+        }) catch return error.OutOfMemory;
+        track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
+    }
+
+    /// Resolve an explicit `:at` event list into an arena-owned tick slice:
+    /// non-empty, strictly ascending in TICK order, with `offset` (the
+    /// scene start, 0 at the top level) folded into each position. Empty,
+    /// descending, or tied positions are a `trigger_invalid` (which event a
+    /// tie selects would be source-order luck); a position overflowing the
+    /// grid — or the scene-relative fold overflowing — is a `tick_overflow`.
+    /// The uniform `offset` add preserves order, so ascending-in-local ⇔
+    /// ascending-in-absolute. Returns null after emitting on any defect.
+    fn buildAtList(self: *Builder, ta: Allocator, map: *const TimeMap, at_node: NodeIndex, offset: TrackTable.Tick) Error!?[]const TrackTable.Tick {
         const tree = self.tree;
         const elems = tree.vectorElements(at_node);
         if (elems.len == 0) {
             try self.emit(.trigger_invalid, tree.spanOf(at_node), ":at needs at least one event position", .{});
-            return;
+            return null;
         }
+        var ticks: std.ArrayList(TrackTable.Tick) = .empty;
         var prev: ?TrackTable.Tick = null;
         for (elems) |elem| {
-            const tick = try self.posToTick(map, elem) orelse return;
+            const local = try self.posToTick(map, elem) orelse return null;
+            const tick = std.math.add(TrackTable.Tick, local, offset) catch {
+                try self.emit(.tick_overflow, tree.spanOf(elem), "scene-relative trigger position overflows the tick grid", .{});
+                return null;
+            };
             if (prev) |p| {
                 if (tick <= p) {
                     try self.emit(.trigger_invalid, tree.spanOf(at_node), ":at positions must be strictly ascending in time", .{});
-                    return;
+                    return null;
                 }
             }
             prev = tick;
+            ticks.append(ta, tick) catch return error.OutOfMemory;
         }
+        return ticks.items;
     }
 
     /// Dry-run an expr track through the SAME code path the frame uses
@@ -1918,6 +1993,135 @@ test "compile accepts valid triggers: periodic + explicit list" {
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
     try t.expectEqual(@as(usize, 0), r.diagnostics.len);
+}
+
+// --- triggers (plan 02 Phase 2: compile into the table) --------------
+
+test "compile triggers: periodic schedule builds a table row" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(trigger :target circle-radius :every 2b :offset 1b)
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const table = r.table.?;
+    // A trigger is a third table row, joined against the registry like a
+    // track, but with no keys (its lanes are eval-derived).
+    try t.expectEqual(@as(usize, 1), table.tracks.len);
+    try t.expectEqual(@as(usize, 0), table.keys.len);
+    const tr = table.tracks[0];
+    try t.expectEqual(@as(u16, 0), tr.target_id);
+    try t.expectEqual(@as(u8, 0), tr.registry);
+    try t.expectEqual(@as(u8, 1), tr.ncomp);
+    try t.expectEqual(TrackTable.NO_SCENE, tr.scene);
+    try t.expect(tr.source == .trigger);
+    const sched = tr.source.trigger;
+    try t.expect(sched == .periodic);
+    const ppb: i64 = 180180;
+    try t.expectEqual(@as(i64, 2 * ppb), sched.periodic.every);
+    try t.expectEqual(@as(i64, 1 * ppb), sched.periodic.offset);
+}
+
+test "compile triggers: periodic :offset defaults to 0" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(trigger :target circle-radius :every 4b)
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    const sched = r.table.?.tracks[0].source.trigger;
+    try t.expectEqual(@as(i64, 4 * 180180), sched.periodic.every);
+    try t.expectEqual(@as(i64, 0), sched.periodic.offset);
+}
+
+test "compile triggers: explicit :at builds an owned ascending tick slice" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(trigger :target cutoff :at [160b 220b 256b])
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const tr = r.table.?.tracks[0];
+    try t.expectEqual(@as(u8, 1), tr.registry); // cutoff is a registry-1 target
+    try t.expectEqual(@as(u8, 1), tr.ncomp);
+    try t.expect(tr.source == .trigger);
+    const sched = tr.source.trigger;
+    try t.expect(sched == .at);
+    const ppb: i64 = 180180;
+    try t.expectEqual(@as(usize, 3), sched.at.len);
+    try t.expectEqual(@as(i64, 160 * ppb), sched.at[0]);
+    try t.expectEqual(@as(i64, 220 * ppb), sched.at[1]);
+    try t.expectEqual(@as(i64, 256 * ppb), sched.at[2]);
+}
+
+test "compile triggers: a scened trigger walks scene-relative and carries the scene index" {
+    // Both schedule kinds fold the scene start in — the :at ticks and the
+    // periodic :offset become absolute, exactly like a scened track's keys.
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4])
+        \\(scene :name drop :at 160b :dur 60b
+        \\  (trigger :target circle-radius :at [0b 4b])
+        \\  (trigger :target cutoff :every 2b :offset 1b))
+    ;
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const table = r.table.?;
+    const ppb: i64 = 180180;
+    try t.expectEqual(@as(usize, 1), table.scenes.len);
+    try t.expectEqual(@as(usize, 2), table.tracks.len);
+
+    const at_tr = table.tracks[0];
+    try t.expectEqual(@as(u16, 0), at_tr.scene);
+    try t.expectEqual(@as(i64, 160 * ppb), at_tr.source.trigger.at[0]);
+    try t.expectEqual(@as(i64, 164 * ppb), at_tr.source.trigger.at[1]);
+
+    const per_tr = table.tracks[1];
+    try t.expectEqual(@as(u16, 0), per_tr.scene);
+    try t.expectEqual(@as(i64, 2 * ppb), per_tr.source.trigger.periodic.every);
+    try t.expectEqual(@as(i64, 161 * ppb), per_tr.source.trigger.periodic.offset);
+}
+
+test "compile triggers: scene-relative schedule overflow → tick_overflow" {
+    // The scene start and the event position each convert inside the grid,
+    // but their sum overflows i64 — the fold seam raises tick_overflow, for
+    // both an explicit :at position and a periodic :offset.
+    const cases = [_][:0]const u8{
+        \\(transport :bpm 120)
+        \\(scene :name edge :at 30000000000000b :dur 4b
+        \\  (trigger :target circle-radius :at [30000000000000b]))
+        ,
+        \\(transport :bpm 120)
+        \\(scene :name edge :at 30000000000000b :dur 4b
+        \\  (trigger :target circle-radius :every 2b :offset 30000000000000b))
+    };
+    for (cases) |src| {
+        var r = try compile(t.allocator, src, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.tick_overflow) != null);
+    }
+}
+
+test "compile triggers: a trigger past MAX_TRACKS → track_cap_exceeded" {
+    // A trigger counts as a table row: fill the table with plain tracks,
+    // then the trailing trigger is the row that trips the cap.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(a, "(transport :bpm 120)\n");
+    for (0..TrackTable.MAX_TRACKS) |_|
+        try src.appendSlice(a, "(track :target circle-radius (key :at 0b :value 0))\n");
+    try src.appendSlice(a, "(trigger :target circle-radius :every 2b)\n");
+    try src.append(a, 0);
+    const source = src.items[0 .. src.items.len - 1 :0];
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    try t.expect(r.findDiag(.track_cap_exceeded) != null);
 }
 
 test "compile never panics on stray top-level atoms (fuzz regression)" {

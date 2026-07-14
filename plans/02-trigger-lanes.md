@@ -126,3 +126,58 @@ audit-diagnostics` **27/27** (`trigger_invalid` referenced by name); `zig build 
 green — native corpus **14/14 byte-identical** (the schema addition shifted no golden;
 user coords are manifest-independent) + wasm parity **46/46**. No wire surface beyond the
 appended `Compile.Code` variant; `'PACT'`/`'PACD'`/`'PACM'`/`'PACW'` bytes unmoved.
+
+### Phase 2 — compile into the table (done, 2026-07-14)
+
+**RED first.** Added the structural scaffolding so the test file compiles — a `.trigger`
+variant on `TrackTable.Source` (carrying a new `TrackTable.Trigger` union) plus the
+`.trigger` arms the exhaustive switches now demand (`Eval` no-op, `Abi` meta encode,
+`corpus_runner` render) — then wrote six Phase 2 tests and ran `zig build test` → **4 fail
++ 2 crash**: with `validateTriggers` still validation-only, a valid trigger builds no row
+(the direct `tracks[0]` accesses index an empty table → crash; the row-count/scene/cap
+tests fail their expects). Green after replacing `validateTriggers`/`validateAtList` with
+row-building `buildTriggers` / `buildTriggerForm` / `buildAtList`, widening the `scene`
+positional, and walking scene-child triggers.
+
+**The table row.** A trigger is a third `Track` row kind — same target/registry/ncomp/scene
+join, no keys. `Source` gained a `.trigger` variant holding a `TrackTable.Trigger`:
+- `periodic { every: Tick, offset: Tick }` — the interval (> 0) and the ABSOLUTE phase
+  (scene start folded into `:offset`); the schedule is unbounded, so eval will divide
+  rather than materialize it.
+- `at: []const Tick` — an arena-owned, strictly-ascending, ≥ 1-element slice; `buildAtList`
+  folds the scene start into each position and rejects empty/tie/descending (in tick order)
+  as `trigger_invalid`. The uniform offset add preserves order, so the ascending check is
+  equivalent before or after the fold. This union is INTERNAL — it never crosses the wire.
+
+**Scened triggers (the Phase 1 carry-forward).** The `scene` `:positional` value-kind was
+renamed `track-section` → `scene-section` and its head-set widened to `[track trigger]`, so
+`(scene … (trigger …))` validates. `buildScenes`' child loop now dispatches `track` →
+`buildTrackForm` and `trigger` → `buildTriggerForm` (both count against `MAX_TRACKS`,
+cap checked in the caller). A scened trigger folds the scene start into every `:at` tick and
+into the periodic `:offset` with a checked add — overflow raises `tick_overflow` (span on
+the offending position / offset), exactly like `buildKey`'s scene-relative fold. Top-level
+triggers keep offset 0 (the fold can never overflow, matching `buildKey`).
+
+**`:offset` resolved.** Defaults to 0, converted via `posToTick`, and consulted ONLY in the
+periodic branch (ignored with `:at`, as Phase 1 promised). A trigger past the cap fires
+`track_cap_exceeded`; `:every` ≤ 0 and the source XOR stay `trigger_invalid` (unchanged from
+Phase 1, now inside `buildTriggerForm`).
+
+**Wire.** `'PACM'` `MetaTrackRec.source` gained value **2 = trigger** (append-only after
+`0 keys` / `1 expr`; key range 0/0, `META_VERSION` unbumped) — the `Abi` header + struct
+comment and the `corpus_runner` source→name switch (`2 => "trigger"`) were updated to match.
+No `'PACW'` change (a trigger's writes are ordinary entries, landing in Phase 3). No corpus
+case has a trigger yet, so nothing shifted.
+
+**Carry-forward for Phase 3 (eval).** `Eval`'s track loop has a `.trigger => {}` no-op arm
+(a trigger writes nothing yet) — that is where the lane sampling lands: at wrapped tick T,
+find the last event ≤ T (periodic: `floor((T − offset) / every)` with events ≥ 0; explicit:
+binary-search / cached cursor over the `at` slice), then write (phase, count, gate,
+beats-since) truncated to ncomp — before the first event OMIT the write; the last explicit
+event holds phase 1.0. `has_expr` correctly ignores `.trigger` (no scratch needed). The
+scene-window gate already brackets trigger rows (Phase 1/2 scened triggers carry the index).
+
+**Gate.** `zig build test` exit 0 (6 new Phase 2 trigger tests green); `zig build
+audit-diagnostics` **27/27** (no new code — cap/overflow/unknown-target/trigger_invalid all
+reused); `zig build verify` green — native corpus **14/14 byte-identical** + wasm parity
+**46/46**; `zig build corpus` 14/14. No wire bytes moved for the existing corpus.

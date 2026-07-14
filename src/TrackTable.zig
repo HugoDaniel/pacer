@@ -17,6 +17,9 @@
 //!   * every `ease_ref` indexes `programs`; `programs[0]` is linear
 //!     (the shared default for keys without `:ease`);
 //!   * every expr track dry-ran successfully at t = 0 during compile;
+//!   * every trigger source is periodic (`every` > 0) or an explicit
+//!     `at` slice of ≥ 1 tick, strictly ascending; scened-trigger ticks
+//!     are absolute (scene start folded in), like a scened track's keys;
 //!   * `transport.dur`, when present, is > 0;
 //!   * control ids are unique and never shadow a reserved time-env name;
 //!   * every `Track.scene` is `NO_SCENE` or a valid index into `scenes`;
@@ -87,8 +90,26 @@ pub const Key = struct {
     ease_ref: u16,
 };
 
-/// A track's value source — `(key …)` children XOR `:expr`, enforced at
-/// compile with `track_source_conflict`.
+/// A `(trigger …)` event schedule — the grid the evaluator samples for
+/// its lanes. Periodic events land at `offset + k·every` (k ≥ 0, events
+/// ≥ 0); explicit events are the pre-sorted `:at` positions. A scened
+/// trigger's ticks are already absolute (the scene start folded in at
+/// compile), exactly like a scened track's keys. Internal representation
+/// — never crosses the wire — carried by `Source.trigger`.
+pub const Trigger = union(enum) {
+    /// Fire every `every` ticks (> 0), phased by `offset` (absolute, with
+    /// the scene start folded in for a scened trigger). Unbounded — eval
+    /// derives the current event by integer division, never materializing
+    /// the schedule.
+    periodic: struct { every: Tick, offset: Tick },
+    /// Explicit hits: arena-owned, ≥ 1 element, strictly ascending in
+    /// tick order (scene start folded into each for a scened trigger).
+    at: []const Tick,
+};
+
+/// A track's value source — `(key …)` children XOR `:expr` (enforced at
+/// compile with `track_source_conflict`), or a `(trigger …)` schedule (a
+/// third row kind reusing this struct; its lanes are computed at eval).
 pub const Source = union(enum) {
     /// Contiguous run in `keys`: `keys[start..][0..len]`, len ≥ 1,
     /// sorted by `at`, strictly increasing.
@@ -96,6 +117,9 @@ pub const Source = union(enum) {
     /// The `:expr` value node, evaluated against the compile result's
     /// tree each frame with the time env bound (see `ExprTrack`).
     expr: sjon.Ast.NodeIndex,
+    /// A `(trigger …)` event schedule (see `Trigger`); the frame path
+    /// derives its lanes from the schedule, never from `keys`/the AST.
+    trigger: Trigger,
 };
 
 /// One animated target. `target_id`/`registry`/`ncomp` come from the

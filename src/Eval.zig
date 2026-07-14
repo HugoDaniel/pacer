@@ -292,6 +292,11 @@ pub const Evaluator = struct {
                     };
                     n += 1;
                 },
+                .trigger => {
+                    // Phase 2 builds the trigger row into the table; the
+                    // eval lanes (phase/count/gate/beats-since) land in
+                    // Phase 3. Until then a trigger contributes no write.
+                },
             }
         }
         // Control writes land AFTER track writes — consumers apply

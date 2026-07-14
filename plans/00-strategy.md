@@ -128,29 +128,36 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: 02 trigger-lanes — Phase 2 (compile)** is next. Phase 1 (schema + validation)
-is DONE (2026-07-14, see below). Open only `plans/02-trigger-lanes.md`, read its header +
-design-freeze + the Phase 1 progress-log carry-forward, and execute Phase 2 under the
-discipline in `README.md`: RED first, one phase per context window, then update this board +
-What's next and commit. Phase 2 builds the `Track` trigger `source` variant (periodic params
-XOR an arena-owned sorted tick slice) into the table AND widens the `scene` positional so
-scene-child triggers walk scene-relative (scened triggers were deferred from Phase 1). Per-phase
-gate: `zig build verify` (native + wasm parity green); `zig build audit-diagnostics` if
-`Compile.Code` grew; goldens regenerated via `-- --update` with the diff reviewed and noted in
-02's progress log. After all 02 phases land: tick the board box, then **studio refresh + impulsos
-benchmark #1** (the tunnel section, scenes + triggers).
+→ **Wave 1: 02 trigger-lanes — Phase 3 (eval)** is next. Phases 1–2 are DONE (2026-07-14, see
+below). Open only `plans/02-trigger-lanes.md`, read its header + design-freeze + the Phase 2
+progress-log carry-forward, and execute Phase 3 under the discipline in `README.md`: RED first,
+one phase per context window, then update this board + What's next and commit. Phase 3 adds the
+eval arm for `Source.trigger` (currently a `.trigger => {}` no-op in `src/Eval.zig`): at tick T
+find the last event ≤ T and write the (phase, count, gate, beats-since) lanes truncated to the
+target's ncomp — a trigger before its first event OMITS the write; the last explicit event holds
+phase 1.0; phase/beats-since derive through the one documented f64 seam (pin the op order in the
+Phase 3 test names). Load `src/Eval.zig` + `src/TimeMap.zig` (seconds seam). Per-phase gate:
+`zig build test`, then `zig build verify` for safety; `audit-diagnostics` if `Compile.Code` grew
+(it won't for eval). After all 02 phases land (Phase 4 = corpus `trigger-basic` + the npm meta
+`source == 2` decode): tick the board box, then **studio refresh + impulsos benchmark #1** (the
+tunnel section, scenes + triggers).
 
-**02 trigger-lanes Phase 1 (schema + validation) is DONE** (2026-07-14). `(trigger :target T
-:every Nb :offset Mb)` (periodic) XOR `(trigger :target T :at [P …])` (explicit hits) is a new
-top-level form; both `:every`/`:at` are schema-optional so shape defects route through the new
-wire-stable `Compile.Code` variant `trigger_invalid` = **26** (rides in `'PACD'`; append-only) —
-neither/both source, non-positive `:every`, and empty/unsorted `:at` all fire it (a trigger
-REJECTS unsorted `:at`, unlike a track which sorts keys); an unknown target reuses
-`unknown_target`. Validation-only: no table row yet (Phase 2), so a valid trigger compiles clean.
-Schema gained the `trigger` form + a `time-pos-list` value-kind (empty `:at` reaches pacer, not a
-schema error). Scened triggers deferred to Phase 2 (the `scene` positional still allows only
-`track` heads). No `'PACT'`/`'PACM'`/`'PACW'` change; goldens 14/14 byte-identical (user coords
-are manifest-independent). Board box `02 trigger-lanes` stays ☐ until all four phases land.
+**02 trigger-lanes Phase 2 (compile) is DONE** (2026-07-14). A `(trigger …)` now compiles into the
+table as a third `Track` row: `Source` gained a `.trigger` variant (`TrackTable.Trigger` —
+`periodic {every, offset}` XOR an arena-owned strictly-ascending `at` tick slice; internal, never
+wire). The `scene` positional was widened (`track-section` → `scene-section`, head-set `[track
+trigger]`) so scene-child triggers walk scene-relative — the scene start folds into each `:at`
+position and into the periodic `:offset` with a checked add (overflow → `tick_overflow`), exactly
+like a scened track's keys. A trigger counts against `MAX_TRACKS` (`track_cap_exceeded`); `:offset`
+defaults to 0 and is consulted only in the periodic branch. Wire: `'PACM'` `MetaTrackRec.source`
+gained value **2 = trigger** (append-only; key range 0/0, no `'PACW'` change) — no golden shift
+since no corpus case has a trigger yet. Phase 1 (schema + validation) landed earlier the same day:
+the `trigger` form + `time-pos-list` value-kind + `trigger_invalid` = **26** (in `'PACD'`), source
+XOR / `:every` > 0 / non-empty strictly-ascending `:at` (a trigger REJECTS unsorted `:at`, unlike a
+track which sorts), unknown target reusing `unknown_target`. `Eval` has a `.trigger => {}` no-op
+until Phase 3. Gate: `zig build test` + `audit-diagnostics` 27/27 + `zig build verify` green
+(corpus 14/14 byte-identical, wasm 46/46). Board box `02 trigger-lanes` stays ☐ until all four
+phases land.
 
 **01 scenes-cues is COMPLETE** (all 5 phases, 2026-07-14). `(scene :name X :at Nb :dur Mb
 (track …))` is a named window on the transport tick grid: scenes may overlap, child tracks
@@ -343,3 +350,15 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   surface moved — corpus stayed 14/14 byte-identical (user coords are manifest-independent, so
   the new schema form shifted nothing). `scene-beat`/`scene-phase` remain the only reserved env
   names; triggers add none in Phase 1 (lane values are plain writes, not env bindings).
+- 2026-07-14 — 02 trigger-lanes Phase 2 complete (compile into the table). Wire-stable
+  carry-forward: `'PACM'` `MetaTrackRec.source` gained value **2 = trigger** (append-only after
+  `0 keys` / `1 expr`; never renumber, never bump `META_VERSION`) — a trigger meta row carries
+  key range 0/0, no `'PACW'` change. No corpus case has a trigger yet, so nothing shifted (corpus
+  14/14 byte-identical). The trigger schedule is an INTERNAL `TrackTable.Trigger` union
+  (`periodic {every, offset}` XOR arena-owned ascending `at: []Tick`) reached through a new
+  `Source.trigger` variant — never crosses the wire, so adding it is not a wire event. The `scene`
+  positional widened (`track-section` → `scene-section`, head-set `[track trigger]`); scene-child
+  triggers fold the scene start into each `:at` tick and the periodic `:offset` with a checked add
+  (overflow → `tick_overflow`), so a scened trigger's ticks are absolute exactly like a scened
+  track's keys. A trigger counts against `MAX_TRACKS`. `Eval` carries a `.trigger => {}` no-op
+  (writes nothing) until Phase 3 lands the lane sampling.
