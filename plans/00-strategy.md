@@ -107,7 +107,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 | Wave | Item | Status |
 |---|---|---|
-| 0 | 04 transport-lanes | ☐ |
+| 0 | 04 transport-lanes | ☑ |
 | 0 | 11 P1–P2 corpus pins | ☐ |
 | 0 | 03 P0 pattern spike | ☐ |
 | 0 | studio refresh + `:emit` template | ☐ |
@@ -128,12 +128,15 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **04 transport-lanes, Phase 3** (corpus + migration note: a `transport-emit` golden
-case — emit + track-override + `:end hold` edge — via `zig build corpus -- --update`
-with the diff reviewed, then a follow-up note to switch the studio's
-`demoscene.score.sjon` to `:emit [beat]` once its wasm is rebuilt). Gate: `zig build
-verify` + npm gate. Phases 1–2 (schema/validation, eval) landed 2026-07-14 — see 04's
-progress log.
+→ **11 easing-controls-corpus, Phase 1 + 2** (easing + controls/expr-env corpus pins —
+no design risk; deepens the determinism gate before bigger features ride on it). Open
+`plans/11-*.md`, execute its next phase RED-first, gate `zig build verify`. Then Wave 0
+continues: 03 Phase 0 (PatternQuery wasm32 spike, verdict → Decision log), then the
+studio refresh (which also lands 04's deferred `:emit [beat]` template switch).
+
+04 transport-lanes is **DONE** (all 3 phases landed 2026-07-14) — schema/validation,
+bit-exact eval, and the `transport-emit` golden. See 04's progress log; the studio
+`:emit [beat]` migration is deferred to the Wave 0 studio-refresh step.
 
 ## Decision log
 
@@ -141,3 +144,9 @@ progress log.
   (Wave 1 gate); PatternQuery wasm32 feasibility (Wave 0 spike); array-write delivery
   option a/b (05 Phase 0); scene out-of-window semantics recommended as write-omitted
   (01, confirm at its Phase 1 design freeze).
+- 2026-07-14 — 04 transport-lanes complete. Cross-plan note: `(transport :emit …)`
+  lanes are pinned in the corpus via `(eval …)` write buffers only, NOT the `'PACM'`
+  meta blob — emit added no wire surface. Any later plan that wants emit lanes echoed in
+  meta must append a meta section (append-only) and bump nothing else. The studio
+  `demoscene.score.sjon` → `:emit [beat]` switch is a Wave 0 studio-refresh item, gated
+  on the studio's `pacer.wasm` carrying emit eval.

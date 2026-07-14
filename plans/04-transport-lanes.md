@@ -92,3 +92,29 @@ Gate: `zig build verify` + npm gate.
   (three tests, confirmed failing: bit-exact-vs-`:expr` saw `len 4≠8`, ordering saw
   `2≠3`, wrap/hold crashed on the empty buffer), then green. Gate: `zig build test` ✓,
   `zig build wasm` ✓.
+
+- **Phase 3 — corpus + migration note (done, 2026-07-14).** New golden case
+  `corpus/transport-emit/` (modelled on `controls-live/`): `(transport :bpm 120
+  :meter [4 4] :dur 1bar :end hold :emit [beat bar phase])` plus an overriding
+  `(track :target beat …)`. The join names the reserved lanes literally (emit
+  resolves by exact name): `beat` id 0 also carries the track, `bar`/`phase` are
+  emit-only. Four evals pin the three properties the plan asked for: (a) **emit-first
+  ordering** — ids 0,1,2 in `:emit` order, then the track's `beat` write (id 0 again)
+  lands last and wins; (b) **per-name lane values** — at 0.5 s beat 1.0 / bar 0.25 /
+  phase 0.25, distinct; (c) **`:end hold` clamp** — t=2.0 s (exactly dur) and t=3.0 s
+  (past dur) render **byte-identical** write blocks. Emit lanes are pinned via the
+  `(eval …)` write buffers only — they are NOT in the `'PACM'` meta blob (no wire
+  change this plan), so the golden's `(meta …)` shows just the overriding track.
+  `zig build corpus -- --update` regenerated all 9 cases; diff reviewed — only
+  `transport-emit/` changed (the 8 pre-existing goldens were byte-identical, confirming
+  emit eval is isolated). Gate: `zig build verify` ✓ (inline tests + native corpus 9/9 +
+  wasm parity `node --test` 39/39), npm gate ✓ (`biome check` 9 files, `tsc --noEmit`,
+  `npm test` 39/39 against a fresh `pretest` wasm rebuild).
+
+  **Follow-up (deferred to the Wave 0 studio-refresh step, NOT cross-repo here):**
+  switch the studio starter score `~/Dev/pngine/studio/public/shaders/demoscene.score.sjon`
+  from the identity-track idiom `(track :target beat :expr beat)` to `:emit [beat]` on
+  its `(transport …)`, once the studio's `pacer.wasm` is rebuilt to a build that carries
+  emit-lane eval. Byte-for-byte the rendered `beat` write is unchanged (emit routes the
+  same env value through the same f32 truncation as the identity expr track), so the A/B
+  is a no-op by construction — the win is deleting the boilerplate track.
