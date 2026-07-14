@@ -189,3 +189,37 @@ Gate: `zig build verify` (native + wasm parity green).
   `zig build audit-diagnostics` ✓ (26/26, the three scene codes covered by name); also ran
   `zig build corpus` ✓ (13/13 — the manifest grew but diagnostics are stored in user
   coordinates via `userOffset`, so goldens stayed byte-identical). No JS/TS touched.
+
+- **Phase 2 — compile into the table (done, 2026-07-14).** RED first: two Zig tests in
+  `Compile.zig` referencing `table.scenes`, `TrackTable.NO_SCENE`, and `Track.scene`
+  before any existed — `zig build test` failed to compile (`no field named 'scenes' in
+  struct 'TrackTable'`), the intended red. GREEN:
+  - **`TrackTable.zig`**: new `Scene` struct `{ name_span: sjon.Ast.Span, start_tick,
+    dur_ticks : Tick }` and a `scenes: []const Scene = &.{}` table slice (document order);
+    a `scene: u16` field on `Track` (the owning scene index); `pub const NO_SCENE: u16 =
+    maxInt(u16)` sentinel for top-level tracks (comptime-asserted `>= MAX_SCENES`, so it
+    can never alias a real index). Header invariant list + the `//!` doc updated.
+  - **`Compile.zig`**: extracted the per-track body of `buildTracks` into a reusable
+    `buildTrackForm(ta, transport, idx, offset, scene, …) Error!bool` — offset added to
+    every key tick, `scene` recorded on the `Track`; returns `false` only when a key-cap
+    stops the whole walk (the track cap stays a caller-side pre-check). `buildKey` gained
+    an `offset` param and folds the scene start in via `std.math.add` (overflow →
+    `tick_overflow`; offset 0 is a provable no-op, so the top-level tick path is
+    byte-identical). `validateScenes` became `buildScenes`: same three shape checks, but a
+    sound scene now records its window in `scenes` and walks its child `(track …)` forms
+    through `buildTrackForm` with `offset = scene.start_tick`.
+
+  **Design frozen (carry-forward for Phase 3/4):** (a) **write order** — top-level tracks
+  build first (`buildTracks`), then scenes in document order (`buildScenes`), so a later
+  scene's track lands after an earlier one's; that's the handoff order Phase 3's window
+  gate + Phase 5's corpus rely on (last-listed active scene wins by write order). (b)
+  **`name_span` is the `:name` symbol's span** (combined coords, like `track_spans`), so
+  Phase 4's `SceneRec` carries `{start_tick, dur_ticks, name_span}` and the editor slices
+  the name from source — no name bytes in the blob. (c) Phase 2 does NOT yet gate eval on
+  the window — a scened track evaluates unconditionally (its keys just sit at absolute
+  ticks); the window gate + `scene-beat`/`scene-phase` env are Phase 3. (d) No scene
+  `:dur`-positivity check yet — an empty `[at, at)` window is harmless (never active); add
+  it with Phase 3 if the eval gate wants it. Gate: `zig build test` ✓, `zig build corpus`
+  ✓ (13/13 byte-identical — no existing case has scenes, offset-0 add is identity),
+  `zig build audit-diagnostics` ✓ (26/26), `zig build wasm` ✓ (still compiles; ABI
+  untouched — Phase 4). No JS/TS touched.

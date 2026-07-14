@@ -327,13 +327,16 @@ const Builder = struct {
         var track_spans: std.ArrayList(Ast.Span) = .empty;
         var key_spans: std.ArrayList(Ast.Span) = .empty;
         try self.buildTracks(ta, &transport, &tracks, &keys, &track_spans, &key_spans);
+
+        // Scenes: validate each `(scene …)` (presence, uniqueness, cap)
+        // and walk its child tracks scene-relative into the SAME arrays,
+        // scene start folded into every key tick. Any defect nulls the
+        // table via the diag-count gate below.
+        var scenes: std.ArrayList(TrackTable.Scene) = .empty;
+        try self.buildScenes(ta, &transport, &scenes, &tracks, &keys, &track_spans, &key_spans);
+
         std.debug.assert(track_spans.items.len == tracks.items.len);
         std.debug.assert(key_spans.items.len == keys.items.len);
-
-        // Phase 1: validate `(scene …)` forms (presence, uniqueness, cap).
-        // Compiling scene children into the table is Phase 2 — any defect
-        // here nulls the table via the diag-count gate below.
-        try self.validateScenes();
 
         if (self.diags.items.len != before_diags) {
             table_arena.deinit();
@@ -351,6 +354,7 @@ const Builder = struct {
             .controls = controls.items,
             .track_spans = track_spans.items,
             .key_spans = key_spans.items,
+            .scenes = scenes.items,
         };
     }
 
@@ -544,101 +548,138 @@ const Builder = struct {
         key_spans: *std.ArrayList(Ast.Span),
     ) Error!void {
         const tree = self.tree;
-        const map = &transport.map;
         for (self.forest) |idx| {
             if (!isForm(tree, idx, "track")) continue;
-            const hdr = tree.formHeader(idx);
-
             if (tracks.items.len == TrackTable.MAX_TRACKS) {
                 try self.emit(.track_cap_exceeded, tree.spanOf(idx), "more than {d} tracks", .{TrackTable.MAX_TRACKS});
                 return;
             }
-
-            const target_node = kvNode(tree, hdr.children, "target").?;
-            const target_name = tree.symbolText(target_node);
-            const target = self.resolveTarget(target_name) orelse {
-                try self.emit(.unknown_target, tree.spanOf(target_node), "unknown target `{s}` — not in any host registry", .{target_name});
-                continue;
-            };
-
-            if (kvNode(tree, hdr.children, "expr")) |expr_node| {
-                if (firstKeyChild(tree, hdr.children) != null) {
-                    try self.emit(.track_source_conflict, tree.spanOf(expr_node), "track `{s}` has both (key …) children and :expr — exactly one value source", .{target_name});
-                    continue;
-                }
-                if (try self.dryRunExpr(transport, expr_node, target.ncomp)) {
-                    tracks.append(ta, .{
-                        .target_id = target.id,
-                        .registry = target.registry,
-                        .ncomp = target.ncomp,
-                        .source = .{ .expr = expr_node },
-                    }) catch return error.OutOfMemory;
-                    track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
-                }
-                continue;
-            }
-
-            const keys_start: u32 = @intCast(keys.items.len);
-            for (hdr.children) |child| {
-                if (tree.tagOf(child) != .form) continue;
-                std.debug.assert(std.mem.eql(u8, tree.formHeader(child).head, "key"));
-                if (keys.items.len == TrackTable.MAX_KEYS) {
-                    try self.emit(.key_cap_exceeded, tree.spanOf(child), "more than {d} keys", .{TrackTable.MAX_KEYS});
-                    return;
-                }
-                if (try self.buildKey(map, child, target.ncomp)) |k| {
-                    keys.append(ta, k) catch return error.OutOfMemory;
-                    key_spans.append(ta, tree.spanOf(child)) catch return error.OutOfMemory;
-                }
-            }
-            const track_keys = keys.items[keys_start..];
-            const track_key_spans = key_spans.items[keys_start..];
-            if (track_keys.len == 0) {
-                try self.emit(.track_empty, tree.spanOf(idx), "track `{s}` has no value source — give it (key …) children or :expr", .{target_name});
-                continue;
-            }
-
-            // Author order is free; the table is sorted. Equal ticks are
-            // a defect (which value wins would be source-order luck).
-            sortKeysWithSpans(track_keys, track_key_spans);
-            for (track_keys[1..], 0..) |k, i| {
-                if (k.at == track_keys[i].at) {
-                    try self.emit(.duplicate_key_at, track_key_spans[i + 1], "duplicate key at the same tick ({d})", .{k.at});
-                }
-            }
-
-            tracks.append(ta, .{
-                .target_id = target.id,
-                .registry = target.registry,
-                .ncomp = target.ncomp,
-                .source = .{ .keys = .{ .start = keys_start, .len = @intCast(track_keys.len) } },
-            }) catch return error.OutOfMemory;
-            track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
+            // Top-level tracks: no scene offset, no owning scene.
+            if (!try self.buildTrackForm(ta, transport, idx, 0, TrackTable.NO_SCENE, tracks, keys, track_spans, key_spans)) return;
         }
     }
 
-    /// Validate every top-level `(scene …)` form. Phase 1 checks shape
-    /// only — presence of the schema-optional `:name`/`:at`/`:dur`
-    /// (missing any → `scene_invalid`), name uniqueness across scenes
-    /// (`scene_duplicate_name`), and the `MAX_SCENES` cap. Scene children
-    /// are NOT walked into the table yet (Phase 2); this pass only emits
-    /// diagnostics, which the caller's diag-count gate turns into a null
-    /// table.
-    fn validateScenes(self: *Builder) Error!void {
+    /// Build one `(track …)` form into the table. `offset` is added to
+    /// every key tick (0 for a top-level track, the owning scene's start
+    /// tick otherwise) with a checked add; `scene` is the owning scene's
+    /// index or `NO_SCENE`. Returns false only when a key-cap forced the
+    /// whole walk to stop; every per-track defect emits at its span and
+    /// returns true (skip this track, keep collecting). The caller checks
+    /// the track cap first — it depends on the running table count.
+    fn buildTrackForm(
+        self: *Builder,
+        ta: Allocator,
+        transport: *const TrackTable.Transport,
+        idx: NodeIndex,
+        offset: TrackTable.Tick,
+        scene: u16,
+        tracks: *std.ArrayList(TrackTable.Track),
+        keys: *std.ArrayList(TrackTable.Key),
+        track_spans: *std.ArrayList(Ast.Span),
+        key_spans: *std.ArrayList(Ast.Span),
+    ) Error!bool {
         const tree = self.tree;
+        const map = &transport.map;
+        const hdr = tree.formHeader(idx);
+
+        const target_node = kvNode(tree, hdr.children, "target").?;
+        const target_name = tree.symbolText(target_node);
+        const target = self.resolveTarget(target_name) orelse {
+            try self.emit(.unknown_target, tree.spanOf(target_node), "unknown target `{s}` — not in any host registry", .{target_name});
+            return true;
+        };
+
+        if (kvNode(tree, hdr.children, "expr")) |expr_node| {
+            if (firstKeyChild(tree, hdr.children) != null) {
+                try self.emit(.track_source_conflict, tree.spanOf(expr_node), "track `{s}` has both (key …) children and :expr — exactly one value source", .{target_name});
+                return true;
+            }
+            if (try self.dryRunExpr(transport, expr_node, target.ncomp)) {
+                tracks.append(ta, .{
+                    .target_id = target.id,
+                    .registry = target.registry,
+                    .ncomp = target.ncomp,
+                    .source = .{ .expr = expr_node },
+                    .scene = scene,
+                }) catch return error.OutOfMemory;
+                track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
+            }
+            return true;
+        }
+
+        const keys_start: u32 = @intCast(keys.items.len);
+        for (hdr.children) |child| {
+            if (tree.tagOf(child) != .form) continue;
+            std.debug.assert(std.mem.eql(u8, tree.formHeader(child).head, "key"));
+            if (keys.items.len == TrackTable.MAX_KEYS) {
+                try self.emit(.key_cap_exceeded, tree.spanOf(child), "more than {d} keys", .{TrackTable.MAX_KEYS});
+                return false;
+            }
+            if (try self.buildKey(map, child, target.ncomp, offset)) |k| {
+                keys.append(ta, k) catch return error.OutOfMemory;
+                key_spans.append(ta, tree.spanOf(child)) catch return error.OutOfMemory;
+            }
+        }
+        const track_keys = keys.items[keys_start..];
+        const track_key_spans = key_spans.items[keys_start..];
+        if (track_keys.len == 0) {
+            try self.emit(.track_empty, tree.spanOf(idx), "track `{s}` has no value source — give it (key …) children or :expr", .{target_name});
+            return true;
+        }
+
+        // Author order is free; the table is sorted. Equal ticks are
+        // a defect (which value wins would be source-order luck).
+        sortKeysWithSpans(track_keys, track_key_spans);
+        for (track_keys[1..], 0..) |k, i| {
+            if (k.at == track_keys[i].at) {
+                try self.emit(.duplicate_key_at, track_key_spans[i + 1], "duplicate key at the same tick ({d})", .{k.at});
+            }
+        }
+
+        tracks.append(ta, .{
+            .target_id = target.id,
+            .registry = target.registry,
+            .ncomp = target.ncomp,
+            .source = .{ .keys = .{ .start = keys_start, .len = @intCast(track_keys.len) } },
+            .scene = scene,
+        }) catch return error.OutOfMemory;
+        track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
+        return true;
+    }
+
+    /// Validate every top-level `(scene …)` and compile its children into
+    /// the table. Shape checks: presence of the schema-optional
+    /// `:name`/`:at`/`:dur` (missing any → `scene_invalid`), name
+    /// uniqueness (`scene_duplicate_name`), and the `MAX_SCENES` cap. A
+    /// sound scene records its window in `scenes`; its child `(track …)`
+    /// forms are walked scene-relative — each key tick offset by the
+    /// scene start (overflow → `tick_overflow`) — carrying the scene
+    /// index. Any diagnostic nulls the table via the caller's diag gate.
+    fn buildScenes(
+        self: *Builder,
+        ta: Allocator,
+        transport: *const TrackTable.Transport,
+        scenes: *std.ArrayList(TrackTable.Scene),
+        tracks: *std.ArrayList(TrackTable.Track),
+        keys: *std.ArrayList(TrackTable.Key),
+        track_spans: *std.ArrayList(Ast.Span),
+        key_spans: *std.ArrayList(Ast.Span),
+    ) Error!void {
+        const tree = self.tree;
+        const map = &transport.map;
         var seen: std.ArrayList([]const u8) = .empty;
-        var count: usize = 0;
         for (self.forest) |idx| {
             if (!isForm(tree, idx, "scene")) continue;
-            if (count == TrackTable.MAX_SCENES) {
+            if (scenes.items.len == TrackTable.MAX_SCENES) {
                 try self.emit(.scene_cap_exceeded, tree.spanOf(idx), "more than {d} scenes", .{TrackTable.MAX_SCENES});
                 return;
             }
-            count += 1;
 
             const children = tree.formHeader(idx).children;
             const name_node = kvNode(tree, children, "name");
-            if (name_node == null or kvNode(tree, children, "at") == null or kvNode(tree, children, "dur") == null) {
+            const at_node = kvNode(tree, children, "at");
+            const dur_node = kvNode(tree, children, "dur");
+            if (name_node == null or at_node == null or dur_node == null) {
                 try self.emit(.scene_invalid, tree.spanOf(idx), "scene requires :name, :at, and :dur", .{});
                 continue;
             }
@@ -651,6 +692,28 @@ const Builder = struct {
                 }
             } else {
                 seen.append(self.arena, name) catch return error.OutOfMemory;
+            }
+
+            // Window on the tick grid; overflow of either bound skips the
+            // scene (tick_overflow was emitted; the table is doomed).
+            const start_tick = try self.posToTick(map, at_node.?) orelse continue;
+            const dur_ticks = try self.posToTick(map, dur_node.?) orelse continue;
+
+            const scene_index: u16 = @intCast(scenes.items.len);
+            scenes.append(ta, .{
+                .name_span = tree.spanOf(name_node.?),
+                .start_tick = start_tick,
+                .dur_ticks = dur_ticks,
+            }) catch return error.OutOfMemory;
+
+            // Child tracks resolve scene-relative (offset = scene start).
+            for (children) |child| {
+                if (!isForm(tree, child, "track")) continue;
+                if (tracks.items.len == TrackTable.MAX_TRACKS) {
+                    try self.emit(.track_cap_exceeded, tree.spanOf(child), "more than {d} tracks", .{TrackTable.MAX_TRACKS});
+                    return;
+                }
+                if (!try self.buildTrackForm(ta, transport, child, start_tick, scene_index, tracks, keys, track_spans, key_spans)) return;
             }
         }
     }
@@ -680,12 +743,18 @@ const Builder = struct {
         return true;
     }
 
-    fn buildKey(self: *Builder, map: *const TimeMap, key_form: NodeIndex, want_ncomp: u8) Error!?TrackTable.Key {
+    fn buildKey(self: *Builder, map: *const TimeMap, key_form: NodeIndex, want_ncomp: u8, offset: TrackTable.Tick) Error!?TrackTable.Key {
         const tree = self.tree;
         const children = tree.formHeader(key_form).children;
 
         const at_node = kvNode(tree, children, "at").?;
-        const at = try self.posToTick(map, at_node) orelse return null;
+        const local = try self.posToTick(map, at_node) orelse return null;
+        // Scene start folds in here (offset 0 for a top-level track can
+        // never overflow — `local` is already a valid grid position).
+        const at = std.math.add(TrackTable.Tick, local, offset) catch {
+            try self.emit(.tick_overflow, tree.spanOf(at_node), "scene-relative position overflows the tick grid", .{});
+            return null;
+        };
 
         const value_node = kvNode(tree, children, "value").?;
         const val = readValueVec(tree, value_node);
@@ -1607,6 +1676,57 @@ test "compile accepts a valid scene: no diagnostics" {
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
     try t.expectEqual(@as(usize, 0), r.diagnostics.len);
+}
+
+// --- scenes (plan 01 Phase 2: compile into the table) ----------------
+
+test "compile scenes: child keys land at absolute ticks, tracks carry the scene index" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target circle-radius (key :at 0b :value 0.1))
+        \\(scene :name drop :at 160b :dur 60b
+        \\  (track :target tint
+        \\    (key :at 0b :value [1 0 0])
+        \\    (key :at 4b :value [0 0 1] :ease out-cubic)))
+    ;
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const table = r.table.?;
+
+    // The scene records its window on the tick grid (1b = 180180 ticks).
+    const ppb: i64 = 180180;
+    try t.expectEqual(@as(usize, 1), table.scenes.len);
+    try t.expectEqual(@as(i64, 160 * ppb), table.scenes[0].start_tick);
+    try t.expectEqual(@as(i64, 60 * ppb), table.scenes[0].dur_ticks);
+    // The name span slices `drop` out of the user source (combined→user).
+    const ns = table.scenes[0].name_span;
+    try t.expectEqualStrings("drop", source[r.validated.userOffset(ns.start)..r.validated.userOffset(ns.end)]);
+
+    // Two tracks: the top-level one is un-scened, the scened one indexes 0.
+    try t.expectEqual(@as(usize, 2), table.tracks.len);
+    try t.expectEqual(TrackTable.NO_SCENE, table.tracks[0].scene);
+    try t.expectEqual(@as(u16, 0), table.tracks[1].scene);
+
+    // The scened track's keys are offset by the scene start (160b).
+    const scened = table.trackKeys(&table.tracks[1]);
+    try t.expectEqual(@as(i64, 160 * ppb), scened[0].at);
+    try t.expectEqual(@as(i64, 164 * ppb), scened[1].at);
+}
+
+test "compile scenes: scene-relative position overflow → tick_overflow" {
+    // Scene start and child key each convert inside the grid (≈5.4e18
+    // ticks) but their sum overflows i64 — the addition seam, not the
+    // per-position conversion, must raise tick_overflow.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(scene :name edge :at 30000000000000b :dur 4b
+        \\  (track :target circle-radius (key :at 30000000000000b :value 0)))
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.tick_overflow) != null);
 }
 
 test "compile never panics on stray top-level atoms (fuzz regression)" {

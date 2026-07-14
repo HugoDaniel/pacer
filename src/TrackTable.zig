@@ -18,7 +18,10 @@
 //!     (the shared default for keys without `:ease`);
 //!   * every expr track dry-ran successfully at t = 0 during compile;
 //!   * `transport.dur`, when present, is > 0;
-//!   * control ids are unique and never shadow a reserved time-env name.
+//!   * control ids are unique and never shadow a reserved time-env name;
+//!   * every `Track.scene` is `NO_SCENE` or a valid index into `scenes`;
+//!     a scened track's key ticks are already absolute (scene start
+//!     folded in at compile).
 //!
 //! Ownership: SJON convention — arena-backed `.deinit()`, the struct
 //! never retains the caller's GPA.
@@ -36,6 +39,10 @@ pub const MAX_KEYS = 4096;
 pub const MAX_EASE_PROGRAMS = 128;
 pub const MAX_CONTROLS = 64;
 pub const MAX_SCENES = 64;
+
+/// `Track.scene` sentinel: the track is top-level (un-scened). A real
+/// scene index is always < `MAX_SCENES`, so this can never collide.
+pub const NO_SCENE: u16 = std.math.maxInt(u16);
 
 pub const EndBehavior = enum { loop, hold };
 
@@ -98,6 +105,25 @@ pub const Track = struct {
     registry: u8,
     ncomp: u8,
     source: Source,
+    /// Owning `(scene …)` index into `scenes`, or `NO_SCENE` for a
+    /// top-level track. A scened track's key positions are already
+    /// absolute (the scene's start tick was folded in at compile); the
+    /// index carries the window for the eval-time gate (Phase 3).
+    scene: u16,
+};
+
+/// One `(scene …)` window on the transport tick grid. Child tracks were
+/// compiled scene-relative (their key ticks already absolute); this row
+/// carries the window itself, for the eval gate and `drv_meta`.
+pub const Scene = struct {
+    /// Span of the `:name` symbol in COMBINED-text coordinates
+    /// (`drv_meta` maps to user coordinates) — the editor slices the
+    /// scene's name from it; the frame path never reads it.
+    name_span: sjon.Ast.Span,
+    /// Window start on the transport grid.
+    start_tick: Tick,
+    /// Window length; child tracks play over `[start, start+dur)`.
+    dur_ticks: Tick,
 };
 
 /// Editor widget hint, carried verbatim from the document into
@@ -150,6 +176,9 @@ controls: []const Control,
 /// timeline anchors; the frame path never reads them.
 track_spans: []const sjon.Ast.Span,
 key_spans: []const sjon.Ast.Span,
+/// `(scene …)` windows in document order; a track's `scene` field
+/// indexes here. Empty when the score declares no scenes.
+scenes: []const Scene = &.{},
 
 const TrackTable = @This();
 
@@ -173,4 +202,6 @@ test {
     comptime std.debug.assert(MAX_EASE_PROGRAMS <= std.math.maxInt(u16));
     comptime std.debug.assert(MAX_CONTROLS <= std.math.maxInt(u16));
     comptime std.debug.assert(MAX_SCENES <= std.math.maxInt(u16));
+    // The un-scened sentinel must never alias a real scene index.
+    comptime std.debug.assert(NO_SCENE >= MAX_SCENES);
 }

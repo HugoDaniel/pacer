@@ -128,25 +128,38 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: 01 scenes-cues — Phase 2 (compile into the table, RED first).** Open only
-`plans/01-scenes-cues.md` and execute its Phase 2: give `TrackTable` a `SceneTable` slice
-(`{name_span, start_tick, dur_ticks}` per scene) and each `Track` a scene index
-(`NO_SCENE = maxInt(u16)` sentinel), then walk scene children in `Compile.zig` with the
-scene's `:at` offset added to each key tick. Reds first (compile-unit tests: a scened
-track's keys land at absolute ticks = scene `:at` + key `:at`; the scene table holds the
-right `{name_span, start_tick, dur_ticks}`; tracks carry the scene index; scene-relative
-overflow → `tick_overflow`), then green. Gate: `zig build test`. The carry-forward from
-Phase 1 is in 01's progress log (schema spelling + code numbers 23/24/25); `validateScenes`
-already exists and must now feed the table rather than only emitting diagnostics.
+→ **Wave 1: 01 scenes-cues — Phase 3 (eval semantics, RED first).** Open only
+`plans/01-scenes-cues.md` and execute its Phase 3 (`src/Eval.zig`, `src/ExprTrack.zig`):
+window-gate scened tracks (a `Track.scene != NO_SCENE` track writes only when
+`t ∈ [scene.start_tick, start+dur)`; outside, the write is OMITTED like an expr-NaN, so an
+overlapping later scene hands the target off by write order); and bind two scene-local
+expr-env values — `scene-beat` (beats since scene start) and `scene-phase` (0..1 through
+the window) — threaded through `ExprTrack` and added to `reserved_names`, present only
+inside a scened expr track (absent top-level → dry-run diagnostic). Reds first (eval tests:
+inside the window writes, one tick before/after does not; structural landing at scene start;
+`scene-beat`/`scene-phase` bind in a scened expr track and are absent top-level; loop wrap
+re-enters scenes), then green. Gate: `zig build test`. Carry-forward from Phase 2 is in
+01's progress log — the table already carries `scenes` + per-`Track.scene`; the window and
+env are all that's left for eval.
+
+**01 Phase 2 (compile into the table) is DONE** (2026-07-14): `TrackTable` gained a `Scene`
+struct (`{name_span, start_tick, dur_ticks}`) + a `scenes` slice, a `Track.scene: u16`
+index, and the `NO_SCENE = maxInt(u16)` sentinel. `Compile.zig` extracted `buildTrackForm`
+(offset + scene index threaded); `buildKey` folds the scene start in via checked
+`std.math.add` (overflow → `tick_overflow`; offset 0 is a no-op so top-level ticks are
+byte-identical); `validateScenes` became `buildScenes` (records the window, walks child
+tracks scene-relative). Frozen: write order is top-level tracks then scenes in document
+order (handoff basis for Phase 3/5); `name_span` is the `:name` symbol's span; eval is NOT
+yet window-gated (Phase 3). Gate green: `zig build test`, corpus (13/13 byte-stable),
+`audit-diagnostics` (26/26), `zig build wasm` (compiles; ABI untouched). Board box `01
+scenes-cues` stays ☐ until Phases 3–5 land.
 
 **01 Phase 1 (schema + validation) is DONE** (2026-07-14): the `(scene …)` form + two
 value-kinds (`scene-name`, `track-section`) landed in `schema/pacer.sjon`; three
 append-only `Compile.Code` variants (`scene_invalid`=23, `scene_duplicate_name`=24,
-`scene_cap_exceeded`=25); `MAX_SCENES = 64`; a `Builder.validateScenes` pass emitting all
-three. Frozen design: `:name`/`:at`/`:dur` are schema-OPTIONAL so a missing one routes to
-the pacer `scene_invalid` code (not a SJON missing-key error) — see 01's progress log +
-the Decision log below. Gate green: `zig build test`, `audit-diagnostics` (26/26), corpus
-(13/13, byte-stable). Board box `01 scenes-cues` stays ☐ until Phases 2–5 land.
+`scene_cap_exceeded`=25); `MAX_SCENES = 64`. Frozen design: `:name`/`:at`/`:dur` are
+schema-OPTIONAL so a missing one routes to the pacer `scene_invalid` code (not a SJON
+missing-key error) — see 01's progress log + the Decision log below.
 
 The **'PACM' framing decision** (the design gate before 01 Phase 4) is **DONE**
 (2026-07-14): a TLV section stream after the controls array, walked to end-of-buffer,
@@ -239,6 +252,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   surface moved — the scenes meta section (`'SCEN'`) is Phase 4, per the framing convention
   above. Scene→table compilation and eval (windows, `scene-beat`/`scene-phase`) are Phases
   2–3 and unstarted.
+- 2026-07-14 — 01 scenes-cues Phase 2 complete (compile into the table). Two cross-plan
+  assumptions frozen for Phases 3–5. (1) **Scene write order** = top-level tracks first
+  (`buildTracks`), then scenes in document order (`buildScenes`); a later scene's track
+  lands after an earlier one's, so the eval window gate (Phase 3) + the corpus handoff case
+  (Phase 5) can rely on "last-listed active scene wins by write order." (2) **`Scene.name_span`
+  is the `:name` symbol's span** (COMBINED coords, like `track_spans`), so Phase 4's `SceneRec`
+  = `{start_tick, dur_ticks, name_span}` and the editor slices the name from source — no name
+  bytes in `'SCEN'`. Runtime shape (no wire surface yet): `Track.scene: u16` with
+  `NO_SCENE = maxInt(u16)`; a `Scene` = `{name_span, start_tick i64, dur_ticks i64}`. Scene
+  start folds into key ticks at compile via checked `std.math.add` (overflow → `tick_overflow`);
+  eval is deliberately NOT window-gated yet (Phase 3). No `'PACM'`/`'PACD'`/`'PACT'`/`'PACW'`
+  bytes moved — corpus stayed 13/13 byte-identical.
 - 2026-07-14 — Wave 0 complete (studio refresh). Two cross-plan facts. (1) **The studio
   loads pacer.wasm by symlink** — `studio/public/pacer.wasm` → `editor/public/pacer.wasm`
   → `pacer/npm/pacer/pacer.wasm`; the canonical sync is `npm run build:wasm-copy` (the
