@@ -1,0 +1,17 @@
+; controls-vector harness. pan = index 0 (xy, ncomp 2), tint = index 1
+; (color, ncomp 3) in document text order; their write targets follow.
+; A vector set-control overrides every lane at once; clear-control
+; returns each control to its document :value — pinning vector override
+; then revert across the boundary.
+(target pan-out  :registry 0 :ncomp 2)   ; id 0 — pan's target
+(target tint-out :registry 0 :ncomp 3)   ; id 1 — tint's target
+
+(times "0000000000000000")   ; document values: pan [0.25 0.5], tint [0.2 0.4 0.6]
+
+(set-control :index 0 :value ["BF000000" "3F000000" "00000000" "00000000"])  ; pan  → [-0.5 0.5]
+(set-control :index 1 :value ["3F800000" "00000000" "3F800000" "00000000"])  ; tint → [1 0 1]
+(times "0000000000000000")   ; overrides write: pan [-0.5 0.5], tint [1 0 1]
+
+(clear-control :index 0)     ; pan back to document [0.25 0.5]
+(clear-control :index 1)     ; tint back to document [0.2 0.4 0.6]
+(times "0000000000000000")   ; document values again

@@ -1,0 +1,8 @@
+; diag-dur-unbound: referencing `dur` in an expr when the transport
+; declares no :dur is an UnknownBinding at the load-time dry-run — the
+; single code path Compile and Eval share, so what the dry-run rejects
+; the frame never reaches. Pins the expr_eval_failed diagnostic and its
+; span: the compile-time guard for the optional dur binding.
+(transport :bpm 120 :meter [4 4])
+
+(track :target span :expr (* dur 2))

@@ -1,0 +1,14 @@
+; expr-env harness. One bar = 2.0 s at 120 bpm 4/4, so cycle = t/2 s.
+; All four sample times sit inside [0, 2bar] (dur = 2 bars), avoiding
+; any end-behaviour wrap. bpm and dur are constant across frames; cycle
+; (and mix = cycle·bpm/dur) advance with time.
+(target tempo  :registry 0)   ; id 0 — bpm      (120 every frame)
+(target length :registry 0)   ; id 1 — dur      (8 beats every frame)
+(target turn   :registry 0)   ; id 2 — cycle    (bar position)
+(target mix    :registry 0)   ; id 3 — cycle·bpm/dur
+(times
+  "0000000000000000" ; 0.0 s — cycle 0,   mix 0
+  "3FF0000000000000" ; 1.0 s — cycle 0.5, mix 7.5
+  "4000000000000000" ; 2.0 s — cycle 1.0, mix 15
+  "4008000000000000" ; 3.0 s — cycle 1.5, mix 22.5
+)

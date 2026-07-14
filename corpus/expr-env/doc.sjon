@@ -1,0 +1,12 @@
+; expr-env: the time-environment bindings that expr-control does not
+; already pin — bpm, dur (bound only when the transport declares :dur),
+; and cycle (the Pattern alias of bar). dur is in BEATS, so :dur 2bar at
+; 120 bpm 4/4 gives dur = 8; bpm = 120; cycle counts bars continuously.
+; Each track isolates one binding so the golden reads them apart, and a
+; fourth combines all three to pin them under arithmetic.
+(transport :bpm 120 :meter [4 4] :dur 2bar)
+
+(track :target tempo  :expr bpm)
+(track :target length :expr dur)
+(track :target turn   :expr cycle)
+(track :target mix    :expr (/ (* cycle bpm) dur))

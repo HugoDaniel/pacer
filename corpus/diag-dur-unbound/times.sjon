@@ -1,0 +1,3 @@
+; load fails at the expr dry-run (dur is unbound) — times never run.
+(target span :registry 0)
+(times "0000000000000000")
