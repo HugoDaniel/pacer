@@ -108,7 +108,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | Wave | Item | Status |
 |---|---|---|
 | 0 | 04 transport-lanes | ☑ |
-| 0 | 11 P1–P2 corpus pins | ☐ |
+| 0 | 11 P1–P2 corpus pins | ☑ |
 | 0 | 03 P0 pattern spike | ☐ |
 | 0 | studio refresh + `:emit` template | ☐ |
 | 1 | 'PACM' framing decision | ☐ |
@@ -128,17 +128,20 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **11 hardening, Phase 2** (pin controls fully + the expr env: `xy`/`color` control
-types with `:min`/`:max` echoed through `'PACM'`, vector control set/clear over the
-wasm boundary, and an expr case binding `bpm`/`dur`/`cycle` plus the `dur`-absent
-diagnostic path). Templates: `corpus/controls-live/` + `corpus/expr-control/`. Execute
-RED-first, gate `zig build verify`. Then Wave 0 continues: 03 Phase 0 (PatternQuery
-wasm32 spike, verdict → Decision log), then the studio refresh (which also lands 04's
-deferred `:emit [beat]` template switch).
+→ **03 pattern-tracks, Phase 0 ONLY** — the PatternQuery feasibility spike: can SJON's
+`Pattern`/`PatternQuery` surface run under wasm32-freestanding with `.@"plugin-exec" =
+false` (no libwasmtime)? Build a minimal spike, record the verdict in the Decision log,
+and STOP — do not continue into 03's later phases (they're scheduled in Wave 3). Then
+the Wave 0 studio refresh: rebuild `pacer.wasm`, copy into `studio/public/` +
+`editor/public/`, run `score-uniforms.test.js`, and switch `demoscene.score.sjon` to
+`:emit [beat]` (04's deferred follow-up).
 
-11 Phase 1 is **DONE** (2026-07-14) — the `ease-primitives` golden pins all 18 named
-eases + standalone `cubic-bezier` + both `steps` jump variants across `u = 0…1`. See
-11's progress log. Board box `11 P1–P2` stays unticked until Phase 2 lands.
+11 P1–P2 is **DONE** (2026-07-14) — Phase 1's `ease-primitives` golden pins all 18 named
+eases + `cubic-bezier` + both `steps` jumps across `u = 0…1`; Phase 2's three cases pin
+`xy`/`color` controls with vector `:min`/`:max` through `'PACM'`, vector control
+set/clear over the boundary (`controls-vector`), the `bpm`/`dur`/`cycle` expr env
+(`expr-env`), and the `dur`-absent `expr_eval_failed` diagnostic (`diag-dur-unbound`).
+See 11's progress log. Board box `11 P1–P2` is ticked; Phases 3–5 land in Wave 4.
 
 04 transport-lanes is **DONE** (all 3 phases landed 2026-07-14) — schema/validation,
 bit-exact eval, and the `transport-emit` golden. See 04's progress log; the studio

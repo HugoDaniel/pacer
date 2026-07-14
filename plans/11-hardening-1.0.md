@@ -111,3 +111,33 @@ Gate: `zig build verify`.
   touched only this case; the 9 pre-existing goldens stayed byte-identical. Gate:
   `zig build verify` ✓ (native corpus 10/10 + wasm parity `node --test` 40/40). No JS/TS
   touched, so no npm lint/typecheck needed this phase.
+
+- **Phase 2 — pin controls fully + the expr env (done, 2026-07-14).** Three new,
+  purely-additive golden cases (the 10 pre-existing goldens stayed byte-identical —
+  `git diff --stat corpus/` empty, only the three new dirs untracked):
+  - **`corpus/controls-vector/`** — the non-scalar control kinds. `pan` is a `:type xy`
+    widget (ncomp 2, rails `:min [-1 -1]` / `:max [1 1]`); `tint` is a `:type color`
+    widget (ncomp 3, rails `[0 0 0]` / `[1 1 1]`). Both echo `:type` + vector `:min`/`:max`
+    through `'PACM'` (the meta golden's first non-`slider`, non-scalar `mcontrol` rows).
+    Both target a registry-0 slot, so a **vector** `set-control` overrides every lane at
+    once (pan → `[-0.5 0.5]`, tint → `[1 0 1]`) and `clear-control` reverts each to its
+    document `:value` — pinning vector override/revert across the wasm boundary, all
+    directives `:ok true`. **Review:** value lanes `[0.25 0.5]` = `3E800000 3F000000`,
+    `[0.2 0.4 0.6]` = `3E4CCCCD 3ECCCCCD 3F19999A`; rails `-1` = `BF800000`, `1` = `3F800000`
+    — all exact.
+  - **`corpus/expr-env/`** — the time bindings `expr-control` doesn't already pin: `bpm`,
+    `dur`, `cycle`. Transport `:dur 2bar` binds `dur` = 8 beats (`beatOf(1441440)`), so the
+    meta echoes `:dur 1441440 :end hold` — the *hold* dur-meta path (controls-live pins
+    the *loop* one). Four expr tracks isolate `bpm` (=120, `42F00000`, constant), `dur`
+    (=8, `41000000`, constant), `cycle` (=0/0.5/1.0/1.5 over t=0/1/2/3 s inside `[0,2bar]`),
+    and `mix = cycle·bpm/dur` (=0/7.5/15/22.5 = `40F00000`/`41700000`/`41B40000`) — every
+    value exact and hand-verified.
+  - **`corpus/diag-dur-unbound/`** — the `dur`-absent compile guard: referencing `dur`
+    with no `:dur` on the transport is `UnknownBinding` at the shared load-time dry-run
+    (`ExprTrack.evalAt` → `Compile.dryRunExpr` else-branch). Failed-load golden pins
+    `(load :ok false)` + `(diag :source pacer :code 18 …)` (`expr_eval_failed`), message
+    `"expression failed to evaluate at t=0: UnknownBinding"` + its span.
+  The red was the runner failing on three missing goldens (`13 case(s), 3 failed`);
+  `-- --update` generated them. Gate: `zig build verify` ✓ (native corpus 13/13 + wasm
+  parity `node --test` 43/43, +3 for the new cases). No JS/TS touched. **Wave 0's `11
+  P1–P2` obligation is now complete** — Phases 3–5 are scheduled in Wave 4.
