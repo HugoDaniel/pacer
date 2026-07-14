@@ -44,11 +44,17 @@ programs never serialize — an external editor (plan 07) can't render authored 
 without re-parsing ease specs itself.
 Load: `src/Abi.zig` (meta encode + extern-record pattern), `src/Easing.zig`
 (`Program` layout), `npm/pacer/src/index.js` meta decode + `types.js`.
+Framing: obey **the `'PACM'` section-framing convention frozen in plan 01** (TLV, walked
+to end-of-buffer, no version bump; canonical spec in 01's Design, summarized in 00's
+Decision log). This section's id is `'EASE'`; it is emitted AFTER `'SCEN'` if both are
+present (fixed order per the convention), and omitted when there are 0 programs. If 01
+has already landed, `get meta`'s post-controls TLV walk exists — just add an `'EASE'`
+arm; if 11 P3 somehow lands first, it introduces the walk (same code either way).
 Reds: Zig Abi test round-tripping a programs section (op stream + stage weights per
 program, tracks referencing program indices); npm test decoding `meta.easePrograms`
-and tolerating old blobs without the section.
-Green: append the section after existing ones (same framing decision as plan 01
-Phase 4 — coordinate if both land); comptime size pins on any new extern record.
+and tolerating old blobs without the section (absent → `[]`).
+Green: append the `'EASE'` section per the convention; comptime size pins on any new
+extern record.
 Gate: `zig build verify` + npm gate; extend one corpus case so the golden pins the
 `(meta …)` echo of programs.
 

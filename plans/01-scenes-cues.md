@@ -34,8 +34,62 @@ windows names, scene-local time, and something the studio timeline can display.
 - New diagnostics (append, in this order): `scene_invalid`, `scene_duplicate_name`,
   `scene_cap_exceeded`.
 - `'PACM'` gains a scenes section (name span, start tick, dur ticks) appended after
-  the existing sections — verify the blob's section framing tolerates a new trailing
-  section for old decoders before choosing the encoding.
+  the existing sections, framed per **the section-framing convention below** (frozen
+  2026-07-14 as the Wave 1 gate — see 00's Decision log).
+
+## The `'PACM'` section-framing convention (frozen 2026-07-14 — Wave 1 gate)
+
+This is the canonical spec. Both appenders — 01 Phase 4 (scenes) and 11 Phase 3 (ease
+programs) — obey it; the Decision log in `00-strategy.md` points here. Grounded on the
+two sides read at the gate (`src/Abi.zig` `encodeMeta`, `npm/pacer/src/index.js`
+`get meta`) plus `drv_metaLen` returning the exact encoded length (`wasm_entry.zig:205`).
+
+1. **The core body is frozen at `META_VERSION = 1`, append-only.** magic, version, the
+   20-byte transport block, the three counts (`track`/`key`/`control`), then the
+   tracks/keys/controls arrays — never reordered, retyped, or removed. `META_VERSION`
+   moves ONLY for an incompatible change to this core, which append-only forbids in
+   practice. Keep the JS decoder's strict `version !== 1` throw — it stays a genuine
+   corruption check precisely because we never bump for a section addition.
+
+2. **Everything after the last control is a section stream, walked to end-of-buffer.**
+   Zero or more length-prefixed sections (TLV), each:
+
+   ```
+   [section_id u32 LE][payload_len u32 LE][payload : payload_len bytes]
+   ```
+
+   `section_id` is a 4-CC read LE, matching the house magic style (`'SCEN'` scenes,
+   `'EASE'` ease programs — pick distinct 4-CCs, never reuse). `payload_len` counts
+   the payload only, not the 8-byte frame header.
+
+3. **Decoder rule (the tolerance guarantee).** After the `control_count`-th control,
+   loop `while (off < len)`: read `id`, read `plen`; if `id` is known, decode
+   `bytes[off+8 .. off+8+plen]`; **always** `off += 8 + plen`. Unknown ids skip by
+   length — that is the whole point. A decoder that predates the stream (today's
+   shipped glue) never runs this loop — it returns after controls — so it ignores every
+   section with no throw. Verified: `get meta` has no `off === len` check today.
+
+4. **No version bump per section.** A new section = a new id + a longer blob; the
+   version field does not move. If a section's *own* internal layout ever needs a
+   breaking change, mint a NEW id (`'SCE2'`), never touch `META_VERSION`. Every v1
+   decoder then stays valid forever.
+
+5. **Each id appears at most once**; the encoder emits sections in a fixed documented
+   order (scenes before ease-programs). Decoders MUST dispatch by id and MUST NOT rely
+   on order or presence. **Omit a section when its count is 0** — an absent section and
+   an empty one are equivalent to a decoder, and omitting keeps a no-scenes / no-program
+   blob byte-identical to today's (so pre-existing goldens stay byte-stable).
+
+6. **Payload internal shape** is the section's business; the house pattern is
+   `[count u32][fixed extern-struct record × count]` with a `comptime @sizeOf` pin
+   (mirroring `MetaTrackRec`), plus trailing variable-length bytes after the fixed
+   records if needed (as controls append id bytes). A knowing decoder MAY assert
+   `payload_len` matches its computed size as a corruption check; the outer `payload_len`
+   remains authoritative for skipping.
+
+7. **No alignment.** Controls are already variable-length (idLen), so the stream starts
+   at an arbitrary byte; every read is explicit-endian `writeInt`/DataView, so no
+   natural alignment is assumed. Sections never pad.
 
 ## Phases
 
@@ -73,10 +127,25 @@ Gate: `zig build test`.
 ### Phase 4 — ABI + npm meta (RED first)
 Load: `src/Abi.zig` (meta encode), `npm/pacer/src/index.js` (meta decode),
 `npm/pacer/src/types.js`, one npm meta test.
-Reds: Zig `Abi` test round-tripping a scenes section; npm test asserting
+Applies the section-framing convention above — this is its first consumer, so it also
+transcribes the convention into the `Abi.zig` `//!` header (the format's doc of record)
+alongside the actual encoder, and adds the post-controls TLV walk to `get meta`.
+Section: `'SCEN'`, payload `[count u32][SceneRec × count]`. Recommended `SceneRec`
+(finalize here): `{ start_tick i64, dur_ticks i64, name_span_start u32,
+name_span_end u32 }` = 24 B (name carried by span like tracks — the editor has the
+source; no id bytes, scenes aren't a setControl lookup key). `comptime @sizeOf` pin +
+an `@offsetOf` spot-check, mirroring `MetaTrackRec`. Omit the section when there are 0
+scenes (keeps the no-scenes blob byte-identical to today's).
+Reds: Zig `Abi` test round-tripping a scenes section (encode a 2-scene score, decode
+the TLV frame, assert id/len + records); a second Zig test asserting a NO-scenes score
+emits NO `'SCEN'` frame (blob ends exactly at the last control). npm test asserting
 `pacer.meta.scenes` = `[{name, startTick, durTicks}]` and that a score with no scenes
-yields `[]` (old-blob tolerance).
-Green: append the section; mirror in one `DataView` pass; extend the typedef.
+yields `[]` — decoded through the walk, proving old-blob tolerance (an unknown trailing
+id must skip cleanly; add a Zig test that a synthetic unknown-id section is skipped by
+`get meta`'s length walk without disturbing scenes).
+Green: append the section per the convention; add the post-controls walk to `get meta`;
+mirror in one `DataView` pass; extend the typedef; transcribe the convention into the
+`Abi.zig` header.
 Gate: `zig build verify` + npm gate.
 
 ### Phase 5 — corpus + docs

@@ -111,7 +111,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 0 | 11 P1–P2 corpus pins | ☑ |
 | 0 | 03 P0 pattern spike | ☑ |
 | 0 | studio refresh + `:emit` template | ☑ |
-| 1 | 'PACM' framing decision | ☐ |
+| 1 | 'PACM' framing decision | ☑ |
 | 1 | 01 scenes-cues | ☐ |
 | 1 | 02 trigger-lanes | ☐ |
 | 1 | studio refresh + benchmark #1 | ☐ |
@@ -128,15 +128,23 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: the 'PACM' framing decision** — the first Wave 1 item, a design gate before
-01 Phase 4. Settle how appended `'PACM'` meta sections are framed and how old/new
-decoders tolerate each other (section id + length prefix? version-gated skip?). Both 01
-(scenes → meta) and 11 Phase 3 (ease programs → meta) append sections, so decide the
-convention ONCE here and write it into 01, 11 Phase 3, and the Decision log. Load
-`src/Abi.zig` (the `'PACM'` encoder + extern-record pattern) and
-`npm/pacer/src/index.js` (the DataView meta decode) as the two sides that must stay in
-lockstep. This is a decision + a written convention, not a code phase — no gate to run
-beyond capturing it; the first code that consumes it is 01.
+→ **Wave 1: 01 scenes-cues — Phase 1 (schema + validation, RED first).** Open only
+`plans/01-scenes-cues.md` and execute its Phase 1: add the `(scene …)` form to
+`schema/pacer.sjon` (name, time-pos `:at`, time-pos `:dur`, positional track children)
+and append the three `Compile.Code` variants **in this order** — `scene_invalid`,
+`scene_duplicate_name`, `scene_cap_exceeded`. Reds first (four Zig tests in
+`Compile.zig`: missing `:name`/`:at`/`:dur` → `scene_invalid`; two `drop` scenes →
+`scene_duplicate_name`; 65 scenes → `scene_cap_exceeded`; a valid scene → zero
+diagnostics), then green; validation only (compile may still ignore scene children).
+Freeze the exact schema spelling + the three code numbers as the carry-forward. Gate:
+`zig build test`, `zig build audit-diagnostics`. `MAX_SCENES = 64` in `TrackTable.zig`.
+
+The **'PACM' framing decision** (the design gate before 01 Phase 4) is **DONE**
+(2026-07-14): a TLV section stream after the controls array, walked to end-of-buffer,
+no `META_VERSION` bump — canonical spec frozen in `plans/01-scenes-cues.md` ("The
+`'PACM'` section-framing convention"), referenced from 11 Phase 3, recorded in the
+Decision log below. No code changed (the first consumer is 01 Phase 4); grounded on
+reading both wire sides (`Abi.zig` `encodeMeta`, `index.js` `get meta`) + `drv_metaLen`.
 
 Wave 0 is **COMPLETE** (2026-07-14). The studio refresh: rebuilt `pacer.wasm`
 (`a0a6edd4`, carries 04's emit eval) and synced it via `npm run build:wasm-copy` (the
@@ -193,6 +201,23 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   meta must append a meta section (append-only) and bump nothing else. The studio
   `demoscene.score.sjon` → `:emit [beat]` switch is a Wave 0 studio-refresh item, gated
   on the studio's `pacer.wasm` carrying emit eval.
+- 2026-07-14 — **'PACM' section-framing decided (Wave 1 gate).** Appended `'PACM'`
+  sections use a **TLV stream after the controls array, walked to end-of-buffer, with NO
+  `META_VERSION` bump.** Each section: `[section_id u32 LE][payload_len u32 LE][payload]`;
+  the decoder loops `while (off < len)` past the last control, decoding known 4-CC ids
+  and skipping unknown ones by `payload_len`. Chose this over version-gated skip because
+  (a) today's shipped JS `get meta` already returns after the last control with no
+  `off === len` check, so it ignores trailing sections with no throw — new-wasm/old-glue
+  is tolerant for free; (b) `drv_metaLen` (`wasm_entry.zig:205`) returns the exact
+  encoded length, so the EOF walk terminates precisely (no padding to misread as
+  `id = 0`); (c) the strict `version !== 1` throw stays a real corruption check because
+  we never bump for a section — a breaking change to a section's *own* layout mints a new
+  id (`'SCE2'`) instead. Rejected version-gating: a bump hard-throws old decoders and
+  can't express "knows scenes but not ease-programs." Canonical spec lives in
+  `plans/01-scenes-cues.md`; 01 Phase 4 (`'SCEN'`) is the first consumer and transcribes
+  it into the `Abi.zig` `//!` header; 11 Phase 3 (`'EASE'`) is the second (emitted after
+  `'SCEN'`, fixed order). Sections omit-when-empty so no-scenes / no-program blobs stay
+  byte-identical to today's. No code changed this step — decision + written convention only.
 - 2026-07-14 — Wave 0 complete (studio refresh). Two cross-plan facts. (1) **The studio
   loads pacer.wasm by symlink** — `studio/public/pacer.wasm` → `editor/public/pacer.wasm`
   → `pacer/npm/pacer/pacer.wasm`; the canonical sync is `npm run build:wasm-copy` (the
