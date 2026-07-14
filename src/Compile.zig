@@ -554,25 +554,27 @@ const Builder = struct {
                 try self.emit(.track_cap_exceeded, tree.spanOf(idx), "more than {d} tracks", .{TrackTable.MAX_TRACKS});
                 return;
             }
-            // Top-level tracks: no scene offset, no owning scene.
-            if (!try self.buildTrackForm(ta, transport, idx, 0, TrackTable.NO_SCENE, tracks, keys, track_spans, key_spans)) return;
+            // Top-level tracks: no owning scene (no offset, no window env).
+            if (!try self.buildTrackForm(ta, transport, idx, null, TrackTable.NO_SCENE, tracks, keys, track_spans, key_spans)) return;
         }
     }
 
-    /// Build one `(track …)` form into the table. `offset` is added to
-    /// every key tick (0 for a top-level track, the owning scene's start
-    /// tick otherwise) with a checked add; `scene` is the owning scene's
-    /// index or `NO_SCENE`. Returns false only when a key-cap forced the
-    /// whole walk to stop; every per-track defect emits at its span and
-    /// returns true (skip this track, keep collecting). The caller checks
-    /// the track cap first — it depends on the running table count.
+    /// Build one `(track …)` form into the table. `scene_win` is the owning
+    /// scene (null for a top-level track): its start tick is added to every
+    /// key tick with a checked add, and it supplies the scene-local expr env
+    /// (`scene-beat`/`scene-phase`) for the dry-run. `scene_index` is the
+    /// owning scene's index or `NO_SCENE`, recorded on the `Track`. Returns
+    /// false only when a key-cap forced the whole walk to stop; every
+    /// per-track defect emits at its span and returns true (skip this track,
+    /// keep collecting). The caller checks the track cap first — it depends
+    /// on the running table count.
     fn buildTrackForm(
         self: *Builder,
         ta: Allocator,
         transport: *const TrackTable.Transport,
         idx: NodeIndex,
-        offset: TrackTable.Tick,
-        scene: u16,
+        scene_win: ?TrackTable.Scene,
+        scene_index: u16,
         tracks: *std.ArrayList(TrackTable.Track),
         keys: *std.ArrayList(TrackTable.Key),
         track_spans: *std.ArrayList(Ast.Span),
@@ -581,6 +583,7 @@ const Builder = struct {
         const tree = self.tree;
         const map = &transport.map;
         const hdr = tree.formHeader(idx);
+        const offset: TrackTable.Tick = if (scene_win) |w| w.start_tick else 0;
 
         const target_node = kvNode(tree, hdr.children, "target").?;
         const target_name = tree.symbolText(target_node);
@@ -594,13 +597,13 @@ const Builder = struct {
                 try self.emit(.track_source_conflict, tree.spanOf(expr_node), "track `{s}` has both (key …) children and :expr — exactly one value source", .{target_name});
                 return true;
             }
-            if (try self.dryRunExpr(transport, expr_node, target.ncomp)) {
+            if (try self.dryRunExpr(transport, expr_node, target.ncomp, scene_win)) {
                 tracks.append(ta, .{
                     .target_id = target.id,
                     .registry = target.registry,
                     .ncomp = target.ncomp,
                     .source = .{ .expr = expr_node },
-                    .scene = scene,
+                    .scene = scene_index,
                 }) catch return error.OutOfMemory;
                 track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
             }
@@ -641,7 +644,7 @@ const Builder = struct {
             .registry = target.registry,
             .ncomp = target.ncomp,
             .source = .{ .keys = .{ .start = keys_start, .len = @intCast(track_keys.len) } },
-            .scene = scene,
+            .scene = scene_index,
         }) catch return error.OutOfMemory;
         track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
         return true;
@@ -698,34 +701,50 @@ const Builder = struct {
             // scene (tick_overflow was emitted; the table is doomed).
             const start_tick = try self.posToTick(map, at_node.?) orelse continue;
             const dur_ticks = try self.posToTick(map, dur_node.?) orelse continue;
+            // The eval-time window gate compares against `start + dur`;
+            // guarantee that end fits the grid now, so the frame path never
+            // overflows (a non-positive dur is a harmless never-active
+            // window, resolved at eval). Overflow dooms the table, exactly
+            // like buildKey's scene-relative fold.
+            _ = std.math.add(TrackTable.Tick, start_tick, dur_ticks) catch {
+                try self.emit(.tick_overflow, tree.spanOf(dur_node.?), "scene window end overflows the tick grid", .{});
+                continue;
+            };
 
             const scene_index: u16 = @intCast(scenes.items.len);
-            scenes.append(ta, .{
+            const scene: TrackTable.Scene = .{
                 .name_span = tree.spanOf(name_node.?),
                 .start_tick = start_tick,
                 .dur_ticks = dur_ticks,
-            }) catch return error.OutOfMemory;
+            };
+            scenes.append(ta, scene) catch return error.OutOfMemory;
 
-            // Child tracks resolve scene-relative (offset = scene start).
+            // Child tracks resolve scene-relative (offset = scene start) and
+            // carry the window into their expr env.
             for (children) |child| {
                 if (!isForm(tree, child, "track")) continue;
                 if (tracks.items.len == TrackTable.MAX_TRACKS) {
                     try self.emit(.track_cap_exceeded, tree.spanOf(child), "more than {d} tracks", .{TrackTable.MAX_TRACKS});
                     return;
                 }
-                if (!try self.buildTrackForm(ta, transport, child, start_tick, scene_index, tracks, keys, track_spans, key_spans)) return;
+                if (!try self.buildTrackForm(ta, transport, child, scene, scene_index, tracks, keys, track_spans, key_spans)) return;
             }
         }
     }
 
-    /// Dry-run an expr track at t = 0 through the SAME code path the
-    /// frame uses (`ExprTrack.evalAt`), so load-time acceptance and
-    /// frame semantics cannot drift. Control ids are bound with their
-    /// document `:value`s. True = the track is sound at t = 0; false = a
-    /// diagnostic was emitted at the expression's span.
-    fn dryRunExpr(self: *Builder, transport: *const TrackTable.Transport, expr_node: NodeIndex, ncomp: u8) Error!bool {
+    /// Dry-run an expr track through the SAME code path the frame uses
+    /// (`ExprTrack.evalAt`), so load-time acceptance and frame semantics
+    /// cannot drift. Control ids are bound with their document `:value`s.
+    /// A top-level track dry-runs at t = 0; a scened track dry-runs at its
+    /// scene start (the window's first tick, `scene-beat`/`scene-phase` at
+    /// 0) with the scene env bound — so a `(/ 1 beat)` sound over the
+    /// window is not spuriously rejected for beat 0 it never sees, and a
+    /// top-level `scene-beat` reference is caught as `UnknownBinding`. True
+    /// = the track is sound; false = a diagnostic was emitted at its span.
+    fn dryRunExpr(self: *Builder, transport: *const TrackTable.Transport, expr_node: NodeIndex, ncomp: u8, scene: ?TrackTable.Scene) Error!bool {
         const controls = self.ctl_bindings[0..self.ctl_count];
-        _ = ExprTrack.evalAt(self.gpa, self.tree, self.schema, transport, controls, expr_node, 0, ncomp) catch |err| switch (err) {
+        const dry_tick: TrackTable.Tick = if (scene) |s| s.start_tick else 0;
+        _ = ExprTrack.evalAt(self.gpa, self.tree, self.schema, transport, controls, expr_node, dry_tick, scene, ncomp) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ResultShape => {
                 // A misspelled function name lands here too: a head
@@ -1727,6 +1746,24 @@ test "compile scenes: scene-relative position overflow → tick_overflow" {
     defer r.deinit();
     try t.expect(!r.ok());
     try t.expect(r.findDiag(.tick_overflow) != null);
+}
+
+// --- scenes (plan 01 Phase 3: eval semantics) ------------------------
+
+test "compile diagnostics: scene-beat/scene-phase are unbound at the top level" {
+    // The scene-local env exists ONLY inside a (scene …); a top-level
+    // :expr referencing it fails the dry-run (UnknownBinding → the
+    // expr_eval_failed code) — the guard that these names are never bound
+    // globally. Inside a scene they resolve (see the Eval tests).
+    for ([_][:0]const u8{
+        "(transport :bpm 120)\n(track :target circle-radius :expr scene-beat)",
+        "(transport :bpm 120)\n(track :target circle-radius :expr scene-phase)",
+    }) |src| {
+        var r = try compile(t.allocator, src, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.expr_eval_failed) != null);
+    }
 }
 
 test "compile never panics on stray top-level atoms (fuzz regression)" {

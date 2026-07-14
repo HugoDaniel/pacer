@@ -128,19 +128,32 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: 01 scenes-cues — Phase 3 (eval semantics, RED first).** Open only
-`plans/01-scenes-cues.md` and execute its Phase 3 (`src/Eval.zig`, `src/ExprTrack.zig`):
-window-gate scened tracks (a `Track.scene != NO_SCENE` track writes only when
-`t ∈ [scene.start_tick, start+dur)`; outside, the write is OMITTED like an expr-NaN, so an
-overlapping later scene hands the target off by write order); and bind two scene-local
-expr-env values — `scene-beat` (beats since scene start) and `scene-phase` (0..1 through
-the window) — threaded through `ExprTrack` and added to `reserved_names`, present only
-inside a scened expr track (absent top-level → dry-run diagnostic). Reds first (eval tests:
-inside the window writes, one tick before/after does not; structural landing at scene start;
-`scene-beat`/`scene-phase` bind in a scened expr track and are absent top-level; loop wrap
-re-enters scenes), then green. Gate: `zig build test`. Carry-forward from Phase 2 is in
-01's progress log — the table already carries `scenes` + per-`Track.scene`; the window and
-env are all that's left for eval.
+→ **Wave 1: 01 scenes-cues — Phase 4 (ABI + npm meta, RED first).** Open only
+`plans/01-scenes-cues.md` and execute its Phase 4 (`src/Abi.zig` meta encode,
+`npm/pacer/src/index.js` meta decode, `npm/pacer/src/types.js`). This is the FIRST consumer
+of the frozen **'PACM' section-framing convention** (canonical in 01, recorded in the
+Decision log): append a `'SCEN'` section — payload `[count u32][SceneRec × count]`, recommended
+`SceneRec` = `{ start_tick i64, dur_ticks i64, name_span_start u32, name_span_end u32 }` =
+24 B, `comptime @sizeOf` pin + an `@offsetOf` spot-check (mirror `MetaTrackRec`), **omit
+when 0 scenes** (keeps the no-scenes blob byte-identical). Also transcribe the framing
+convention into the `Abi.zig` `//!` header, and add the post-controls TLV walk to `get meta`.
+Reds first (Zig `Abi` round-trip of a 2-scene section + a no-scene score emits NO `'SCEN'`
+frame + a synthetic unknown-id section is skipped by the walk; npm `pacer.meta.scenes` =
+`[{name, startTick, durTicks}]` and `[]` for no scenes), then green. Gate: `zig build verify`
++ npm gate (`cd npm/pacer && npm run lint && npm run typecheck && npm test`).
+
+**01 Phase 3 (eval semantics) is DONE** (2026-07-14): `Eval.zig` gained a window gate — a
+`Track.scene != NO_SCENE` track writes only while the WRAPPED tick is in `[start, start+dur)`,
+else the write is OMITTED (handoff by write order; loop wrap re-enters). `ExprTrack.evalAt`
+/`bindTime` gained a `scene: ?TrackTable.Scene` param binding two child-scope names —
+`scene-beat` (beats since window start) and `scene-phase` (0..1, a new eval-time f64
+division; degenerate window → 0); both joined `reserved_names` (`MAX_BINDINGS` 8→10).
+`Compile.buildScenes` guards the window end with a checked add (overflow → `tick_overflow`),
+and a scened expr track dry-runs at its scene start (scene env at 0) so `(/ 1 beat)` isn't
+rejected for a beat-0 it never sees while a top-level `scene-beat` stays `expr_eval_failed`.
+Gate green: `zig build test`, corpus (13/13 byte-stable — no scene case yet; compile+eval
+only), `audit-diagnostics` (26/26 — no new codes), `zig build wasm`, `zig build fuzz`. No
+JS/TS touched (ABI is Phase 4). Board box `01 scenes-cues` stays ☐ until Phases 4–5 land.
 
 **01 Phase 2 (compile into the table) is DONE** (2026-07-14): `TrackTable` gained a `Scene`
 struct (`{name_span, start_tick, dur_ticks}`) + a `scenes` slice, a `Track.scene: u16`
@@ -264,6 +277,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   start folds into key ticks at compile via checked `std.math.add` (overflow → `tick_overflow`);
   eval is deliberately NOT window-gated yet (Phase 3). No `'PACM'`/`'PACD'`/`'PACT'`/`'PACW'`
   bytes moved — corpus stayed 13/13 byte-identical.
+- 2026-07-14 — 01 scenes-cues Phase 3 complete (eval semantics). Two cross-plan facts.
+  (1) **`scene-beat` and `scene-phase` are now reserved env names** (`ExprTrack.reserved_names`,
+  `MAX_BINDINGS` 8→10) — a control can no longer be named either, and any plan adding new
+  env bindings (02 trigger-lanes, 03 pattern-tracks) must not collide. Bound only inside a
+  scene, like `dur` in a bounded score; a top-level reference is `expr_eval_failed`.
+  (2) **`scene-phase` adds a NEW eval-time f64 division** (`(tick − start)/dur`) — a
+  determinism seam in the same class as the lerp `u` / `beatOf` / `phaseOf` (IEEE-pinned,
+  native == wasm32), NOT the seconds↔ticks `mul+floor` seam; Phase 5's corpus must pin its
+  exact bytes. The window end `start + dur` is guarded at compile (checked add → `tick_overflow`)
+  so the eval gate never overflows; a non-positive `:dur` stays a lenient never-active window
+  (phase 0, no new diagnostic — code set stays 26). No `'PACM'`/`'PACD'`/`'PACT'`/`'PACW'`
+  bytes moved — corpus stayed 13/13 byte-identical (no scene case yet; it lands in Phase 5).
 - 2026-07-14 — Wave 0 complete (studio refresh). Two cross-plan facts. (1) **The studio
   loads pacer.wasm by symlink** — `studio/public/pacer.wasm` → `editor/public/pacer.wasm`
   → `pacer/npm/pacer/pacer.wasm`; the canonical sync is `npm run build:wasm-copy` (the

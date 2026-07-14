@@ -21,7 +21,9 @@
 //!   * control ids are unique and never shadow a reserved time-env name;
 //!   * every `Track.scene` is `NO_SCENE` or a valid index into `scenes`;
 //!     a scened track's key ticks are already absolute (scene start
-//!     folded in at compile).
+//!     folded in at compile), and its window end `start_tick + dur_ticks`
+//!     fits the grid (compile raised `tick_overflow` otherwise), so the
+//!     eval-time window gate never overflows.
 //!
 //! Ownership: SJON convention — arena-backed `.deinit()`, the struct
 //! never retains the caller's GPA.
@@ -108,7 +110,9 @@ pub const Track = struct {
     /// Owning `(scene …)` index into `scenes`, or `NO_SCENE` for a
     /// top-level track. A scened track's key positions are already
     /// absolute (the scene's start tick was folded in at compile); the
-    /// index carries the window for the eval-time gate (Phase 3).
+    /// index carries the window for the eval-time gate (a scened track
+    /// writes only while the playhead is inside `[start, start+dur)`) and
+    /// its scene-local expr env.
     scene: u16,
 };
 

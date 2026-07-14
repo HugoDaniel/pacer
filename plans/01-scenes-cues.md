@@ -223,3 +223,41 @@ Gate: `zig build verify` (native + wasm parity green).
   ✓ (13/13 byte-identical — no existing case has scenes, offset-0 add is identity),
   `zig build audit-diagnostics` ✓ (26/26), `zig build wasm` ✓ (still compiles; ABI
   untouched — Phase 4). No JS/TS touched.
+
+- **Phase 3 — eval semantics (done, 2026-07-14).** RED first: three Zig tests in
+  `Eval.zig` — a scened track that writes one tick before its window (len 1, want 0), a
+  `:expr scene-beat` scored track that fails to compile (`scene-beat` unbound → the
+  `compileScore` helper's `r.ok()` assert trips), and a loop wrap where the pre-window tick
+  still writes. All three failed as intended; green after the edits.
+  - **`Eval.zig`**: a window gate at the top of the track loop — a `Track.scene != NO_SCENE`
+    track is skipped (write OMITTED, like an expr-NaN) unless the WRAPPED tick `t` is in
+    `[start, start+dur)`, so an overlapping later scene hands the target off by write order
+    and loop end-behavior re-enters scenes. The owning `Scene` is also passed to
+    `ExprTrack.evalAt` for the scened expr env.
+  - **`ExprTrack.zig`**: `evalAt`/`bindTime` gained a `scene: ?TrackTable.Scene` param that
+    binds two child-scope names — `scene-beat` = `beatOf(tick − start)` (beats since the
+    window opened) and `scene-phase` = `(tick − start) / dur` in f64 (0..1 through it, a
+    fresh eval-time division like the lerp `u`; a non-positive/degenerate window reports 0
+    rather than dividing). Both join `reserved_names` (a control can no longer shadow them);
+    `MAX_BINDINGS` 8→10. `emitValue` passes `null` (clock lanes are never scene-local).
+  - **`Compile.zig`**: `buildScenes` now guards the window end with a checked
+    `std.math.add(start, dur)` (overflow → `tick_overflow`), so the eval-time `start + dur`
+    compare can never overflow. `buildTrackForm`/`dryRunExpr` thread the owning `Scene`
+    through; a scened expr track **dry-runs at its scene start** (`scene-beat`/`scene-phase`
+    at 0, and a real in-window tick) rather than at t = 0, so a `(/ 1 beat)` sound over the
+    window is not spuriously rejected for a beat-0 it never sees, and a top-level
+    `scene-beat` reference is still caught as `UnknownBinding` (→ `expr_eval_failed`).
+
+  **Design frozen (carry-forward for Phase 4/5):** (a) **`scene-beat`/`scene-phase` are
+  reserved env names** (now in `ExprTrack.reserved_names`) bound only inside a scene, exactly
+  like `dur` in a bounded score — a top-level reference is an `expr_eval_failed` diagnostic.
+  (b) **`scene-phase` is a new eval-time f64 division** — deterministic (IEEE, like `beatOf`
+  /`phaseOf`/lerp), NOT the seconds↔ticks `mul+floor` seam; Phase 5's corpus must pin its
+  exact bytes. (c) The **window-end `tick_overflow` guard** joins buildKey's fold as a
+  determinism seam; a non-positive `:dur` stays lenient (never-active window, phase 0) — no
+  new diagnostic, so the code set stays 26. (d) The window gate uses the WRAPPED tick, so
+  loop wrap re-enters scenes; the compile dry-run tick for a scened expr track is its scene
+  start. Gate: `zig build test` ✓, `zig build corpus` ✓ (13/13 byte-identical — no scene
+  case exists yet; the change is compile+eval only), `zig build audit-diagnostics` ✓
+  (26/26 — no new codes), `zig build wasm` ✓, `zig build fuzz` ✓ (the new hot-path add/sub
+  never panic). No JS/TS touched (ABI is Phase 4).

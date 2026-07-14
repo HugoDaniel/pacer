@@ -24,6 +24,16 @@
 //! |         | transport declares `:dur` (referencing it in an      |
 //! |         | unbounded score is an `UnknownBinding` dry-run catch) |
 //!
+//! Inside a `(scene …)` track two more names bind, derived from the owning
+//! scene passed to `evalAt` — `scene-beat` (beats since the window opened)
+//! and `scene-phase` (0..1 through it). They are absent for a top-level
+//! track, so referencing one there is an `UnknownBinding` dry-run catch,
+//! exactly like `dur` in an unbounded score. `Eval`'s window gate only ever
+//! evaluates a scened track for a tick in `[start, start+dur)`, so
+//! scene-beat ≥ 0 and scene-phase ∈ [0,1); the compile dry-run evaluates at
+//! the scene start (both 0). A non-positive window is degenerate — never
+//! active — and reports phase 0 rather than dividing.
+//!
 //! Every `(control …)` id is bound too, in a parent scope below the
 //! time names (compile rejects collisions with `reserved_names`; the
 //! scope order makes time win even if one slipped through). The caller
@@ -69,13 +79,18 @@ pub const SCRATCH_BYTES: usize = 256 * 1024;
 /// `MemoryBudgetExceeded`, …) plus `OutOfMemory` from the allocator.
 pub const Error = Expr.Error || error{ResultShape};
 
-/// t, tick, beat, bar, cycle, phase, bpm, dur.
-const MAX_BINDINGS = 8;
+/// t, tick, beat, bar, cycle, phase, bpm, dur, scene-beat, scene-phase —
+/// the last two bound only inside a scene, dur only when `:dur` is set.
+const MAX_BINDINGS = 10;
+
+/// Base time names always in reach (7 of them: everything but `dur`,
+/// which is conditional).
+const BASE_BINDINGS = 7;
 
 /// The names `bindTime` owns. `Compile` rejects control ids that
 /// collide with these (`control_invalid`), keeping every expression's
 /// meaning independent of scope-resolution order.
-pub const reserved_names = [_][]const u8{ "t", "tick", "beat", "bar", "cycle", "phase", "bpm", "dur" };
+pub const reserved_names = [_][]const u8{ "t", "tick", "beat", "bar", "cycle", "phase", "bpm", "dur", "scene-beat", "scene-phase" };
 
 /// One control's binding for an evaluation: the document `:value` at
 /// the compile dry-run, the live-overridden effective value on the
@@ -107,6 +122,7 @@ pub fn evalAt(
     controls: []const ControlBinding,
     node: Ast.NodeIndex,
     tick: Tick,
+    scene: ?TrackTable.Scene,
     ncomp: u8,
 ) Error![4]f32 {
     std.debug.assert(ncomp >= 1 and ncomp <= 4);
@@ -120,7 +136,7 @@ pub fn evalAt(
     }
     const ctl_env: Expr.Env = .{ .bindings = ctl_buf[0..controls.len] };
     var buf: [MAX_BINDINGS]Expr.Env.Binding = undefined;
-    const env: Expr.Env = .{ .parent = &ctl_env, .bindings = bindTime(transport, tick, &buf) };
+    const env: Expr.Env = .{ .parent = &ctl_env, .bindings = bindTime(transport, tick, scene, &buf) };
     var result = try Expr.eval(gpa, tree, node, &env, schema);
     defer result.deinit();
     return coerce(result.value, ncomp) orelse error.ResultShape;
@@ -137,8 +153,9 @@ fn bindControl(c: ControlBinding, vals: *[4]Expr.Value) Expr.Value {
 }
 
 /// Fill `buf` with the time environment (see the module header table).
-/// Pure function of (transport, tick); fixed binding order.
-fn bindTime(transport: *const TrackTable.Transport, tick: Tick, buf: *[MAX_BINDINGS]Expr.Env.Binding) []const Expr.Env.Binding {
+/// Pure function of (transport, tick, scene); fixed binding order. `scene`
+/// adds the two scene-local names when present — see `evalAt`.
+fn bindTime(transport: *const TrackTable.Transport, tick: Tick, scene: ?TrackTable.Scene, buf: *[MAX_BINDINGS]Expr.Env.Binding) []const Expr.Env.Binding {
     const map = &transport.map;
     const bar = map.barOf(tick);
     var n: usize = 0;
@@ -160,7 +177,23 @@ fn bindTime(transport: *const TrackTable.Transport, tick: Tick, buf: *[MAX_BINDI
         buf[n] = .{ .name = "dur", .value = .{ .number = map.beatOf(dur) } };
         n += 1;
     }
-    std.debug.assert(n >= MAX_BINDINGS - 1);
+    if (scene) |s| {
+        // Scene-local clock. `Eval`'s gate guarantees tick ∈ [start,
+        // start+dur) here (the compile dry-run uses tick == start), so
+        // `local` is a non-negative offset well inside the grid — plain
+        // subtraction cannot overflow. A non-positive window is degenerate
+        // (never active): report phase 0 instead of dividing.
+        const local = tick - s.start_tick;
+        buf[n] = .{ .name = "scene-beat", .value = .{ .number = map.beatOf(local) } };
+        n += 1;
+        const phase: f64 = if (s.dur_ticks > 0)
+            @as(f64, @floatFromInt(local)) / @as(f64, @floatFromInt(s.dur_ticks))
+        else
+            0;
+        buf[n] = .{ .name = "scene-phase", .value = .{ .number = phase } };
+        n += 1;
+    }
+    std.debug.assert(n >= BASE_BINDINGS);
     std.debug.assert(n <= MAX_BINDINGS);
     return buf[0..n];
 }
@@ -175,7 +208,7 @@ fn bindTime(transport: *const TrackTable.Transport, tick: Tick, buf: *[MAX_BINDI
 pub fn emitValue(transport: *const TrackTable.Transport, tick: Tick, name: TrackTable.EmitName) f64 {
     var buf: [MAX_BINDINGS]Expr.Env.Binding = undefined;
     const wanted = @tagName(name);
-    for (bindTime(transport, tick, &buf)) |b| {
+    for (bindTime(transport, tick, null, &buf)) |b| {
         if (std.mem.eql(u8, b.name, wanted)) return b.value.toF64().?;
     }
     unreachable;
@@ -244,7 +277,7 @@ const test_transport: TrackTable.Transport = .{
 test "evalAt: constant scalar golden" {
     var doc = try TestDoc.init("(+ 1 2)");
     defer doc.deinit();
-    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, 1);
+    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, null, 1);
     try t_.expectEqual([4]f32{ 3, 0, 0, 0 }, v);
 }
 
@@ -259,7 +292,7 @@ test "evalAt: time bindings golden at 6.5 beats (all dyadic-exact)" {
     const tick: Tick = 6 * 180180 + 90090;
     const expect = [_]f32{ 6.5, 1.625, 1.625, 0.625, 3.25, 120, 1171170 };
     for (expect, 0..) |want, i| {
-        const v = try evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(i), tick, 1);
+        const v = try evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(i), tick, null, 1);
         try t_.expectEqual(want, v[0]);
     }
 }
@@ -268,7 +301,7 @@ test "evalAt: phase stays in [0,1) at negative ticks" {
     var doc = try TestDoc.init("(+ phase 0)");
     defer doc.deinit();
     const tick: Tick = -@divExact(sjon.Pattern.PPC, 4);
-    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), tick, 1);
+    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), tick, null, 1);
     try t_.expectEqual(@as(f32, 0.75), v[0]);
 }
 
@@ -277,12 +310,38 @@ test "evalAt: dur is bound only when the transport declares :dur" {
     defer doc.deinit();
     try t_.expectError(
         error.UnknownBinding,
-        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, 1),
+        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, null, 1),
     );
     var bounded = test_transport;
     bounded.dur = 4 * sjon.Pattern.PPC; // 4 bars = 16 beats
-    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &bounded, &.{}, doc.node(0), 0, 1);
+    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &bounded, &.{}, doc.node(0), 0, null, 1);
     try t_.expectEqual(@as(f32, 16), v[0]);
+}
+
+test "evalAt: scene-beat / scene-phase bind only when a scene is supplied" {
+    var doc = try TestDoc.init("(+ scene-beat 0) (+ scene-phase 0)");
+    defer doc.deinit();
+    const tree = &doc.result.tree;
+    // Absent scene → both names are unbound (the top-level rejection).
+    try t_.expectError(
+        error.UnknownBinding,
+        evalAt(t_.allocator, tree, core_schema, &test_transport, &.{}, doc.node(0), 0, null, 1),
+    );
+    // Window [4b, 12b): dur 8 beats. Evaluate at absolute 6b → local 2b.
+    const scene: TrackTable.Scene = .{ .name_span = .{ .start = 0, .end = 0 }, .start_tick = 4 * 180180, .dur_ticks = 8 * 180180 };
+    const tick: Tick = 6 * 180180;
+    const beat = try evalAt(t_.allocator, tree, core_schema, &test_transport, &.{}, doc.node(0), tick, scene, 1);
+    try t_.expectEqual(@as(f32, 2), beat[0]); // 2 beats since the window opened
+    const phase = try evalAt(t_.allocator, tree, core_schema, &test_transport, &.{}, doc.node(1), tick, scene, 1);
+    try t_.expectEqual(@as(f32, 0.25), phase[0]); // 2/8 through the window
+}
+
+test "evalAt: a degenerate (non-positive dur) scene reports phase 0, never divides" {
+    var doc = try TestDoc.init("(+ scene-phase 0)");
+    defer doc.deinit();
+    const scene: TrackTable.Scene = .{ .name_span = .{ .start = 0, .end = 0 }, .start_tick = 0, .dur_ticks = 0 };
+    const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, scene, 1);
+    try t_.expectEqual(@as(f32, 0), v[0]);
 }
 
 test "evalAt: result-shape rejections — boolean, arity, non-finite" {
@@ -291,11 +350,11 @@ test "evalAt: result-shape rejections — boolean, arity, non-finite" {
     const tree = &doc.result.tree;
     const schema = core_schema;
     // Boolean result.
-    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(0), 0, 1));
+    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(0), 0, null, 1));
     // Scalar where a vec3 target expects 3 components.
-    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(1), 0, 3));
+    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(1), 0, null, 3));
     // Overflow to +inf: evaluates fine, rejected by the finiteness gate.
-    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(2), 0, 1));
+    try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(2), 0, null, 1));
 }
 
 test "evalAt: expr failures pass through (division by zero at beat 0)" {
@@ -303,7 +362,7 @@ test "evalAt: expr failures pass through (division by zero at beat 0)" {
     defer doc.deinit();
     try t_.expectError(
         error.DivisionByZero,
-        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, 1),
+        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, null, 1),
     );
 }
 
@@ -318,15 +377,15 @@ test "evalAt: control bindings — scalar, vector, mixed with time" {
         .{ .name = "pick", .value = .{ 1, 0.5, 0, 0 }, .ncomp = 3 },
     };
 
-    const scalar = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(0), 0, 1);
+    const scalar = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(0), 0, null, 1);
     try t_.expectEqual(@as(f32, 0.5), scalar[0]);
 
-    const vec = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(1), 0, 3);
+    const vec = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(1), 0, null, 3);
     try t_.expectEqual([4]f32{ 1, 0.5, 0, 0 }, vec);
 
     // Controls and time names coexist: knob · beat at 2 beats.
     const tick: Tick = 2 * 180180;
-    const mixed = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(2), tick, 1);
+    const mixed = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(2), tick, null, 1);
     try t_.expectEqual(@as(f32, 0.5), mixed[0]);
 }
 
@@ -335,6 +394,6 @@ test "evalAt: an unbound control name is still UnknownBinding" {
     defer doc.deinit();
     try t_.expectError(
         error.UnknownBinding,
-        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, 1),
+        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, null, 1),
     );
 }

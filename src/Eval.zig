@@ -246,6 +246,21 @@ pub const Evaluator = struct {
             n += 1;
         }
         for (table.tracks, 0..) |*track, i| {
+            // Scene window gate: a scened track writes only while the
+            // wrapped playhead sits inside its window [start, start+dur).
+            // Outside, the write is OMITTED (like an expr-NaN) so an
+            // overlapping later scene hands the target off by write order;
+            // wrapping `t` first lets loop end-behavior re-enter scenes.
+            // `start + dur` cannot overflow — compile raised `tick_overflow`
+            // otherwise, so no such table reaches here. The scene also
+            // supplies the `scene-beat`/`scene-phase` expr env.
+            const scene: ?TrackTable.Scene = if (track.scene != TrackTable.NO_SCENE)
+                table.scenes[track.scene]
+            else
+                null;
+            if (scene) |s| {
+                if (t < s.start_tick or t >= s.start_tick + s.dur_ticks) continue;
+            }
             switch (track.source) {
                 .keys => {
                     self.entries[n] = evalKeyTrack(table, track, t, &self.seg_cache[i]);
@@ -263,6 +278,7 @@ pub const Evaluator = struct {
                         self.ctl_bindings,
                         node,
                         t,
+                        scene,
                         track.ncomp,
                     ) catch {
                         self.expr_failures += 1;
@@ -852,4 +868,88 @@ test "emit lanes: end-behavior clamps/wraps the clock like tracks" {
         // beat 5 wraps to beat 1 inside the 4-beat loop.
         try t_.expectEqual(@as(f32, 1), ev.evalTicks(try map.tickFromBeats(5))[0].value[0]);
     }
+}
+
+// ---------------------------------------------------------------------------
+// (scene …) windows — plan 01 Phase 3: eval semantics. A scened track
+// writes ONLY while the playhead sits inside its window [start, start+dur);
+// outside, its write is OMITTED (like an expr-NaN), so an overlapping later
+// scene hands the target off by write order. Scened expr tracks get two
+// scene-local env bindings: scene-beat (beats since the window opened) and
+// scene-phase (0..1 through it).
+// ---------------------------------------------------------------------------
+
+test "scene window gate: a scened track writes only inside [start, start+dur)" {
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(scene :name drop :at 4b :dur 8b
+        \\  (track :target radius
+        \\    (key :at 0b :value 0.2)
+        \\    (key :at 8b :value 0.8)))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+    const start = try map.tickFromBeats(4); // window [4b, 12b)
+    const end = try map.tickFromBeats(12);
+
+    // One tick before the window: nothing written.
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(start - 1).len);
+    // Scene start (inclusive): writes, structural landing on the first key.
+    const at_start = ev.evalTicks(start);
+    try t_.expectEqual(@as(usize, 1), at_start.len);
+    try t_.expectEqual(@as(f32, 0.2), at_start[0].value[0]);
+    // Mid-window: interpolates (absolute 8b = scene-relative 4b, halfway).
+    try t_.expectApproxEqAbs(@as(f32, 0.5), ev.evalTicks(try map.tickFromBeats(8))[0].value[0], 1e-6);
+    // Last tick of the window: still writing.
+    try t_.expectEqual(@as(usize, 1), ev.evalTicks(end - 1).len);
+    // Window end (exclusive): nothing written.
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(end).len);
+}
+
+test "scene expr env: scene-beat and scene-phase bind scene-relative" {
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(scene :name drop :at 4b :dur 8b
+        \\  (track :target radius :expr scene-beat)
+        \\  (track :target tint :expr [scene-phase scene-phase scene-phase]))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // Scene start: scene-beat 0, scene-phase 0.
+    const at_start = ev.evalTicks(try map.tickFromBeats(4));
+    try t_.expectEqual(@as(usize, 2), at_start.len);
+    try t_.expectEqual(@as(f32, 0), at_start[0].value[0]); // scene-beat
+    try t_.expectEqual(@as(f32, 0), at_start[1].value[0]); // scene-phase
+
+    // Halfway (absolute 8b = scene-relative 4b of 8): beat 4, phase 0.5.
+    const mid = ev.evalTicks(try map.tickFromBeats(8));
+    try t_.expectEqual(@as(f32, 4), mid[0].value[0]);
+    try t_.expectEqual(@as(f32, 0.5), mid[1].value[0]);
+    try t_.expectEqual(@as(f32, 0.5), mid[1].value[2]);
+}
+
+test "scene window gate: loop wrap re-enters the scene" {
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4] :dur 4bar :end loop)
+        \\(scene :name drop :at 4b :dur 8b
+        \\  (track :target radius
+        \\    (key :at 0b :value 0.2)
+        \\    (key :at 8b :value 0.8)))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // 16-beat loop; 20 beats wraps to 4 (scene start) → first key writes.
+    const wrapped = ev.evalTicks(try map.tickFromBeats(20));
+    try t_.expectEqual(@as(usize, 1), wrapped.len);
+    try t_.expectEqual(@as(f32, 0.2), wrapped[0].value[0]);
+    // 16 beats wraps to 0 (before the window) → nothing written.
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(try map.tickFromBeats(16)).len);
 }
