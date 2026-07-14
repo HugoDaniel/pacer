@@ -128,13 +128,29 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: 02 trigger-lanes — all phases** (scened triggers included, since 01 landed).
-Open only `plans/02-trigger-lanes.md`, read its header + design-freeze, and execute its next
-phase (start at Phase 1) under the discipline in `README.md`: RED first, one phase per context
-window, then update this board + What's next and commit. Per-phase gate: `zig build verify`
-(native + wasm parity green); `zig build audit-diagnostics` if `Compile.Code` grew; goldens
-regenerated via `-- --update` with the diff reviewed and noted in 02's progress log. After 02
-lands: **studio refresh + impulsos benchmark #1** (the tunnel section, scenes + triggers).
+→ **Wave 1: 02 trigger-lanes — Phase 2 (compile)** is next. Phase 1 (schema + validation)
+is DONE (2026-07-14, see below). Open only `plans/02-trigger-lanes.md`, read its header +
+design-freeze + the Phase 1 progress-log carry-forward, and execute Phase 2 under the
+discipline in `README.md`: RED first, one phase per context window, then update this board +
+What's next and commit. Phase 2 builds the `Track` trigger `source` variant (periodic params
+XOR an arena-owned sorted tick slice) into the table AND widens the `scene` positional so
+scene-child triggers walk scene-relative (scened triggers were deferred from Phase 1). Per-phase
+gate: `zig build verify` (native + wasm parity green); `zig build audit-diagnostics` if
+`Compile.Code` grew; goldens regenerated via `-- --update` with the diff reviewed and noted in
+02's progress log. After all 02 phases land: tick the board box, then **studio refresh + impulsos
+benchmark #1** (the tunnel section, scenes + triggers).
+
+**02 trigger-lanes Phase 1 (schema + validation) is DONE** (2026-07-14). `(trigger :target T
+:every Nb :offset Mb)` (periodic) XOR `(trigger :target T :at [P …])` (explicit hits) is a new
+top-level form; both `:every`/`:at` are schema-optional so shape defects route through the new
+wire-stable `Compile.Code` variant `trigger_invalid` = **26** (rides in `'PACD'`; append-only) —
+neither/both source, non-positive `:every`, and empty/unsorted `:at` all fire it (a trigger
+REJECTS unsorted `:at`, unlike a track which sorts keys); an unknown target reuses
+`unknown_target`. Validation-only: no table row yet (Phase 2), so a valid trigger compiles clean.
+Schema gained the `trigger` form + a `time-pos-list` value-kind (empty `:at` reaches pacer, not a
+schema error). Scened triggers deferred to Phase 2 (the `scene` positional still allows only
+`track` heads). No `'PACT'`/`'PACM'`/`'PACW'` change; goldens 14/14 byte-identical (user coords
+are manifest-independent). Board box `02 trigger-lanes` stays ☐ until all four phases land.
 
 **01 scenes-cues is COMPLETE** (all 5 phases, 2026-07-14). `(scene :name X :at Nb :dur Mb
 (track …))` is a named window on the transport tick grid: scenes may overlap, child tracks
@@ -309,3 +325,21 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   Verified empirically: wgslender reflection lists all struct members (so `beat` registers
   in the real studio at offset 12), editor suite 1526/1526 green. Render output is
   unchanged (the shader can read `motion.beat` but doesn't yet).
+- 2026-07-14 — 02 trigger-lanes Phase 1 complete (schema + validation). Wire-stable
+  carry-forward: one append-only `Compile.Code` variant — `trigger_invalid` = **26** (rides in
+  `'PACD'`; never renumber). Design frozen for Phases 2–4: `(trigger …)`'s source is `:every`
+  (periodic, phased by optional `:offset`) XOR an explicit `:at` list; both keys are
+  schema-**optional** by deliberate choice so every shape defect surfaces as `trigger_invalid`
+  with a span (the scene discipline), and an unknown target reuses `unknown_target` (NO
+  trigger-specific target code, per the plan's design note). Two rules that differ from tracks
+  and matter downstream: (1) a trigger **rejects** an unsorted/duplicate/descending `:at`
+  (checked in TICK order, so `[1bar 2b]` is rejected) rather than sorting it — the Phase 2
+  compiled slice is therefore already ascending and needs no sort; (2) `:every` must be > 0
+  ticks (0/negative → `trigger_invalid`; overflow → `tick_overflow`). Phase 1 is validation-only
+  (no table row), so a valid trigger compiles clean with 0 diagnostics. **Scened triggers are
+  deferred to Phase 2**: the `scene` `:positional track-section` still allows only `track` heads,
+  so Phase 2 both widens that positional and walks scene-child triggers scene-relative (reusing
+  `buildTrackForm`'s scene-start offset + `tick_overflow` fold). No `'PACT'`/`'PACM'`/`'PACW'`
+  surface moved — corpus stayed 14/14 byte-identical (user coords are manifest-independent, so
+  the new schema form shifted nothing). `scene-beat`/`scene-phase` remain the only reserved env
+  names; triggers add none in Phase 1 (lane values are plain writes, not env bindings).

@@ -1,5 +1,5 @@
-; pacer score schema — transport / track / key / scene plus the easing
-; combinator forms.
+; pacer score schema — transport / track / key / scene / trigger plus the
+; easing combinator forms.
 ;
 ; Single source of truth for what a pacer score may contain. The compiler
 ; (`src/Compile.zig`) prepends this manifest to the user source and runs
@@ -83,6 +83,15 @@
   (value-kind :name scene-name
     :description "Scene identifier: names a window [at, at+dur) on the transport grid. Unique per score; the studio timeline displays it and scene-local expr env keys off it."
     :underlying symbol)
+
+  ; ---- triggers ----
+  ; Explicit event positions for a (trigger …): a vector of time-pos.
+  ; No min-len — an empty :at surfaces as a pacer trigger_invalid (with a
+  ; span), matching the scene :name/:at/:dur schema-optional discipline.
+  (value-kind :name time-pos-list
+    :description "Explicit event positions for a (trigger …): a vector of time-pos values (b/bar/s). Emptiness and ordering are joined at compile as trigger_invalid, not schema errors."
+    :underlying vector
+    :vector (vector-shape :element time-pos))
 
   ; ---- controls ----
   (value-kind :name control-id
@@ -227,6 +236,17 @@
       :description "Value reached exactly at :at.")
     (key :name ease :type ease-spec :optional true
       :description "Easing applied over the segment ENDING at this key; defaults to linear."))
+
+  (form :name trigger
+    :description "An event lane. At each frame it finds the last scheduled event <= the playhead and writes (phase, count, gate, beats-since) lanes truncated to the target's ncomp. The schedule is EITHER periodic (:every, phased by optional :offset) XOR an explicit ascending :at list — both keys are schema-optional so a missing/duplicated source, a non-positive :every, or an empty/unsorted :at surface as a pacer trigger_invalid diagnostic (with a span), not a bare SJON error."
+    (key :name target :type target-name
+      :description "Resolved at load() against the ordered host registries, like a track's target.")
+    (key :name every :type time-pos :optional true
+      :description "Periodic interval between events; must be > 0 ticks. Exclusive with :at.")
+    (key :name offset :type time-pos :optional true
+      :description "Phase of the periodic schedule — event k lands at :offset + k*:every; defaults to 0. Ignored without :every.")
+    (key :name at :type time-pos-list :optional true
+      :description "Explicit event positions, strictly ascending in time. Exclusive with :every."))
 
   (form :name control
     :description "A pinned editor widget — pins ARE text. :value is the document authority: written to :target every frame while the control is idle, and bound under :id in every track expression. A live drv_setControl override wins until drv_clearControl returns authority to the document. Control writes land after track writes; consumers apply entries in order, so a pin outranks a track on the same target."

@@ -160,6 +160,7 @@ pub const Code = enum(u16) {
     scene_invalid,
     scene_duplicate_name,
     scene_cap_exceeded,
+    trigger_invalid,
 };
 
 /// One pacer load diagnostic. `span` indexes the combined text (same
@@ -334,6 +335,11 @@ const Builder = struct {
         // table via the diag-count gate below.
         var scenes: std.ArrayList(TrackTable.Scene) = .empty;
         try self.buildScenes(ta, &transport, &scenes, &tracks, &keys, &track_spans, &key_spans);
+
+        // Triggers (plan 02 Phase 1): validate each (trigger …) form's
+        // shape only — the table row lands in Phase 2. A defect emits and
+        // nulls the table via the diag gate below.
+        try self.validateTriggers(&transport);
 
         std.debug.assert(track_spans.items.len == tracks.items.len);
         std.debug.assert(key_spans.items.len == keys.items.len);
@@ -729,6 +735,78 @@ const Builder = struct {
                 }
                 if (!try self.buildTrackForm(ta, transport, child, scene, scene_index, tracks, keys, track_spans, key_spans)) return;
             }
+        }
+    }
+
+    /// Validate every top-level `(trigger …)` form's shape (plan 02
+    /// Phase 1: validation only — the resolved schedule and table row land
+    /// in Phase 2). A trigger fires on an event schedule that is EITHER
+    /// periodic (`:every`, phased by optional `:offset`) XOR an explicit
+    /// ascending `:at` list; exactly one source is required. Checks: the
+    /// source XOR (neither/both → `trigger_invalid`), a resolvable target
+    /// (`unknown_target`, reusing the track code), `:every` > 0 ticks, and
+    /// a non-empty strictly-ascending `:at`. Diagnostics only; any one
+    /// nulls the table via the caller's diag gate. Scened triggers arrive
+    /// with the Phase 2 compile walk (schema-widened then).
+    fn validateTriggers(self: *Builder, transport: *const TrackTable.Transport) Error!void {
+        const tree = self.tree;
+        const map = &transport.map;
+        for (self.forest) |idx| {
+            if (!isForm(tree, idx, "trigger")) continue;
+            const children = tree.formHeader(idx).children;
+
+            const every_node = kvNode(tree, children, "every");
+            const at_node = kvNode(tree, children, "at");
+            // Exactly one source: `(a == null) == (b == null)` is true iff
+            // both are present or both absent.
+            if ((every_node == null) == (at_node == null)) {
+                try self.emit(.trigger_invalid, tree.spanOf(idx), "trigger needs exactly one of :every (periodic) or :at (explicit hits)", .{});
+                continue;
+            }
+
+            const target_node = kvNode(tree, children, "target").?;
+            const target_name = tree.symbolText(target_node);
+            if (self.resolveTarget(target_name) == null) {
+                try self.emit(.unknown_target, tree.spanOf(target_node), "unknown target `{s}` — not in any host registry", .{target_name});
+                continue;
+            }
+
+            if (every_node) |en| {
+                // Periodic interval must be a positive tick count (overflow
+                // already emitted tick_overflow and returned null).
+                if (try self.posToTick(map, en)) |every_ticks| {
+                    if (every_ticks <= 0) {
+                        try self.emit(.trigger_invalid, tree.spanOf(en), ":every must be a positive interval", .{});
+                    }
+                }
+            } else {
+                try self.validateAtList(map, at_node.?);
+            }
+        }
+    }
+
+    /// Validate an explicit `:at` event list: non-empty and strictly
+    /// ascending in TICK order (equal or descending positions are a
+    /// `trigger_invalid`, since which event a tie selects would be
+    /// source-order luck). Emits at the list node; a position overflow
+    /// raises `tick_overflow` (via `posToTick`) and stops the scan.
+    fn validateAtList(self: *Builder, map: *const TimeMap, at_node: NodeIndex) Error!void {
+        const tree = self.tree;
+        const elems = tree.vectorElements(at_node);
+        if (elems.len == 0) {
+            try self.emit(.trigger_invalid, tree.spanOf(at_node), ":at needs at least one event position", .{});
+            return;
+        }
+        var prev: ?TrackTable.Tick = null;
+        for (elems) |elem| {
+            const tick = try self.posToTick(map, elem) orelse return;
+            if (prev) |p| {
+                if (tick <= p) {
+                    try self.emit(.trigger_invalid, tree.spanOf(at_node), ":at positions must be strictly ascending in time", .{});
+                    return;
+                }
+            }
+            prev = tick;
         }
     }
 
@@ -1764,6 +1842,82 @@ test "compile diagnostics: scene-beat/scene-phase are unbound at the top level" 
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.expr_eval_failed) != null);
     }
+}
+
+// --- triggers (plan 02 Phase 1: schema + validation) -----------------
+
+test "compile diagnostics: trigger source shape → trigger_invalid" {
+    // Exactly one of :every (periodic) / :at (explicit hits). Both keys
+    // are schema-OPTIONAL, so neither, both, and a non-positive :every all
+    // surface as a pacer trigger_invalid (with a span), not a bare SJON
+    // missing-key error — one wire-stable code per trigger-shape defect.
+    const cases = [_][:0]const u8{
+        "(transport :bpm 120)\n(trigger :target circle-radius)",
+        "(transport :bpm 120)\n(trigger :target circle-radius :every 2b :at [4b 8b])",
+        "(transport :bpm 120)\n(trigger :target circle-radius :every 0b)",
+    };
+    for (cases) |src| {
+        var r = try compile(t.allocator, src, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.trigger_invalid) != null);
+    }
+}
+
+test "compile diagnostics: trigger empty or unsorted :at → trigger_invalid" {
+    // The explicit list must be non-empty and strictly ascending in TICK
+    // order (so [1bar 2b] — descending once converted — is rejected too),
+    // since which event a tie resolves to would be source-order luck.
+    const cases = [_][:0]const u8{
+        "(transport :bpm 120)\n(trigger :target circle-radius :at [])",
+        "(transport :bpm 120)\n(trigger :target circle-radius :at [8b 4b])",
+        "(transport :bpm 120)\n(trigger :target circle-radius :at [4b 4b])",
+        "(transport :bpm 120)\n(trigger :target circle-radius :at [1bar 2b])",
+    };
+    for (cases) |src| {
+        var r = try compile(t.allocator, src, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.trigger_invalid) != null);
+    }
+}
+
+test "compile diagnostics: trigger unknown target → unknown_target" {
+    // A trigger joins its target like a track — an unresolved name reuses
+    // the existing unknown_target code (no trigger-specific target code).
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(trigger :target nonexistent :every 2b)
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.unknown_target) != null);
+}
+
+test "compile trigger diagnostics carry a user span" {
+    const source: [:0]const u8 = "(transport :bpm 120)\n(trigger :target circle-radius :every 0b)";
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    const d = r.findDiag(.trigger_invalid).?;
+    // The :every value is the offending node; its span maps into the user
+    // text (no manifest-region trap) and slices `0b`.
+    const start = r.validated.userOffset(d.span.start);
+    const end = r.validated.userOffset(d.span.end);
+    try t.expectEqualStrings("0b", source[start..end]);
+}
+
+test "compile accepts valid triggers: periodic + explicit list" {
+    // Phase 1 is validation-only: a well-formed trigger emits no
+    // diagnostic and (not yet a table row) simply compiles clean.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(trigger :target circle-radius :every 2b :offset 1b)
+        \\(trigger :target cutoff :at [160b 220b 256b])
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    try t.expectEqual(@as(usize, 0), r.diagnostics.len);
 }
 
 test "compile never panics on stray top-level atoms (fuzz regression)" {

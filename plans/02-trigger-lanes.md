@@ -78,3 +78,51 @@ trigger write flows through `toUniforms`; update `CLAUDE.md` surface table if ne
 Gate: `zig build verify` + npm gate.
 
 ## Progress log
+
+### Phase 1 — schema + validation (done, 2026-07-14)
+
+**RED first.** Appended `trigger_invalid` (= **26**) to `Compile.Code` (so the tests
+compile), then wrote five tests and ran `zig build test` → 4 fail + 1 crash: with no
+schema `trigger` form, `(trigger …)` is an unknown head, so SJON rejects the doc and
+*no* pacer diagnostic is emitted (`findDiag(.trigger_invalid)` is null, the valid case
+never reaches `ok()`). Green after the schema form + a `validateTriggers` stage.
+
+**Design frozen.** `(trigger :target T :every Nb :offset Mb)` (periodic) XOR
+`(trigger :target T :at [P …])` (explicit hits). Both `:every` and `:at` are
+**schema-optional**, so every trigger-shape defect routes through the pacer
+`trigger_invalid` code (with a span), not a bare SJON missing-key error — the scene
+discipline. Rules validated in Phase 1:
+- **Source XOR** — neither or both → `trigger_invalid` (span on the form).
+- **`:every` > 0 ticks** — a non-positive interval → `trigger_invalid` (span on the
+  `:every` value). Overflow is `tick_overflow` via `posToTick`.
+- **`:at` non-empty + strictly ascending in TICK order** — empty, descending, or a
+  tie → `trigger_invalid` (span on the list). NOTE this DIFFERS from tracks, which
+  *sort* their keys; triggers *reject* unsorted `:at` (so `[1bar 2b]`, descending once
+  converted, is rejected). Overflow of any element is `tick_overflow`.
+- **Unknown target reuses `unknown_target`** — no trigger-specific target code (per
+  the design). `:offset` is unvalidated in Phase 1 (any tick; ignored without
+  `:every`); it resolves in Phase 2.
+
+**Validation-only.** A well-formed trigger emits nothing and builds *no* table row yet
+(Phase 2) — it just passes the diag gate, so a `(transport …)` + valid triggers with no
+tracks compiles clean (`ok()`, 0 diagnostics). Any trigger defect nulls the whole table
+via the existing `build()` diag-count gate.
+
+**Schema.** Added the `trigger` top-level form + a `time-pos-list` value-kind (a
+`(vector-shape :element time-pos)` with **no** min-len, so an empty `:at` reaches pacer
+rather than tripping a schema type error). Header comment now lists `trigger`.
+
+**Carry-forward for Phase 2 (compile).** (1) **Scened triggers are DEFERRED to Phase
+2**: the `scene` form's `:positional track-section` still allows only `track` heads, so
+a `(trigger …)` inside a `(scene …)` is currently a schema error. Phase 2 widens that
+positional AND walks scene-child triggers scene-relative (reusing the scene start offset
++ `tick_overflow` fold from `buildTrackForm`), so the schema widening and the compile
+walk land together. `validateTriggers` walks the top-level forest only for now. (2) The
+Phase 2 table row reuses `Track` with a new `source` variant (periodic params or an
+arena-owned sorted tick slice) + `Track.scene` for the owning window.
+
+**Gate.** `zig build test` exit 0 (5 new trigger tests green); `zig build
+audit-diagnostics` **27/27** (`trigger_invalid` referenced by name); `zig build verify`
+green — native corpus **14/14 byte-identical** (the schema addition shifted no golden;
+user coords are manifest-independent) + wasm parity **46/46**. No wire surface beyond the
+appended `Compile.Code` variant; `'PACT'`/`'PACD'`/`'PACM'`/`'PACW'` bytes unmoved.
