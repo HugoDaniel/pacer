@@ -83,6 +83,39 @@ test('routing: registry split and pngine-style uniforms', async () => {
   assert.equal(typeof params.cutoff, 'number');
 });
 
+test('trigger writes: meta source and toUniforms lane routing', async () => {
+  // A periodic ncomp-4 target (all four lanes) on the visual bus and an
+  // explicit ncomp-1 target (phase only) on the audio bus.
+  const score = `(transport :bpm 120 :meter [4 4])
+(trigger :target pulse :every 1b :offset 1b)
+(trigger :target hit :at [2b 4b])`;
+  const driver = await Pacer.load(wasmModule, score, {
+    registries: [[{ name: 'pulse', ncomp: 4 }], [{ name: 'hit' }]],
+  });
+  assert.equal(driver.ok, true);
+
+  // The meta mirror names the new source byte (2 → 'trigger'); triggers
+  // carry no keyframes.
+  assert.deepEqual(
+    driver.meta.tracks.map((t) => t.source),
+    ['trigger', 'trigger'],
+  );
+  assert.deepEqual(driver.meta.tracks[0].keys, []);
+
+  // Before the first event the write is omitted — the lane never appears.
+  assert.equal(toUniforms(driver.eval(0), 0).pulse, undefined);
+
+  // On the exact event tick (beat 1 = 0.5 s) all four lanes flow through
+  // as an array: phase 0, count 0, gate 1, beats-since 0.
+  assert.deepEqual(toUniforms(driver.eval(0.5), 0).pulse, [0, 0, 1, 0]);
+
+  // The explicit ncomp-1 hit writes phase only, on its own (audio) bus:
+  // silent before its first event (2b), then phase 0 landing exactly on it
+  // (span = 4b − 2b, so this first-of-two event is not the held-1.0 last).
+  assert.equal(toUniforms(driver.eval(0.5), 1).hit, undefined);
+  assert.equal(toUniforms(driver.eval(1.0), 1).hit, 0);
+});
+
 test('diagnostics: pacer + SJON codes with user-coordinate spans', async () => {
   const badTarget = `(transport :bpm 120)
 (track :target nonexistent (key :at 0b :value 1))`;

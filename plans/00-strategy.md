@@ -113,7 +113,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 0 | studio refresh + `:emit` template | ☑ |
 | 1 | 'PACM' framing decision | ☑ |
 | 1 | 01 scenes-cues | ☑ |
-| 1 | 02 trigger-lanes | ☐ |
+| 1 | 02 trigger-lanes | ☑ |
 | 1 | studio refresh + benchmark #1 | ☐ |
 | 2 | 09 workflow fixes | ☐ |
 | 2 | 07 timeline editor P1–P4 | ☐ |
@@ -128,49 +128,37 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: 02 trigger-lanes — Phase 4 (corpus + parity + docs)** is next — the LAST phase of
-02. Phases 1–3 are DONE (2026-07-14, see below). Open only `plans/02-trigger-lanes.md`, read its
-header + the Phase 3 progress-log carry-forward, and execute Phase 4 under the discipline in
-`README.md`: one phase per context window, then tick the board box + move this pointer and commit.
-Phase 4 adds a new golden corpus case `trigger-basic` — a periodic ncomp-4 target + an
-explicit-list ncomp-1 target, `times.sjon` hitting a pre-first-event tick (omitted write), exact
-event ticks (gate 1), a mid-interval, a held-last-event, and a loop wrap — the FIRST golden to
-carry a `source == 2` / `"trigger"` meta row plus trigger writes. Load `corpus/scenes-basic/` (or
-`corpus/expr-control/`) as a template. `zig build corpus -- --update` then REVIEW the diff (never
-hand-edit a golden). npm needs no driver code (trigger writes are ordinary `'PACW'` entries) but
-add one `npm/pacer` test asserting a trigger write flows through `toUniforms`, and decode `source
-== 2` in the meta mirror if the JS names track sources. Gate: `zig build verify` + the npm gate
-(`cd npm/pacer && npm run lint && npm run typecheck && npm test`). After 02 fully lands: tick the
-board box, then **studio refresh + impulsos benchmark #1** (the tunnel section, scenes + triggers).
+→ **Wave 1: studio refresh + impulsos benchmark #1** is next (strategy Wave 1 item 8) — 02
+trigger-lanes is COMPLETE (all 4 phases, 2026-07-14, see below), board box ticked. This is a
+studio / cross-repo step, not a pacer-core phase, so there is no single plan file: work from
+Wave 1 item 8 + the "Studio refresh" standing checklist + the impulsos notes
+(`examples/impulsos_camaradas.sjon`). The refresh: rebuild `pacer.wasm`, sync the copies the
+studio/editor load, run the editor's real-wasm tests, and **bump-check the npm triple-pin —
+the npm surface grew this wave** (`MetaTrack.source` now admits `'trigger'`; a new `TRACK_SOURCES`
+mirror), so decide whether that warrants a version bump before the next publish. Then rewrite the
+impulsos tunnel section as score forms — scenes (01) + triggers (02) — lifting the per-beat pulse
+/ backbeat-gate / beats-since WGSL idioms `02` was built to replace, and measure expressiveness
+against the hand-rolled original (benchmark #1). Wave 2 (09 → 07 → 05 → benchmark #2) follows.
 
-**02 trigger-lanes Phase 3 (eval) is DONE** (2026-07-14). `Eval`'s `.trigger` arm now samples the
-schedule (was a `.trigger => {}` no-op): `evalTrigger(map, track, sched, t, cache)` finds the last
-event ≤ the already-wrapped, already-scene-gated tick `t` (periodic: one `@divFloor`, `k < 0` ⇒
-omit; explicit `:at`: the same near-monotonic cursor cache keyframes use, `t < at[0]` ⇒ omit) and
-returns `?Writes.Entry` — `null` OMITS the write, so *whether* a trigger writes at t is a pure
-function of t. It writes four lanes, frozen order, truncated to the target's ncomp: `phase`
-(`(t−event)/span`, last explicit event holds 1.0), `count` (event index as f32), `gate` (1.0 on
-the exact event tick, structural), `beats-since` (`map.beatOf(t−event)`). `phase`/`beats-since`
-are each one f64 division in the documented op order; f32 only at emission. Loop wrap resets
-count/gate/phase for free (the caller wraps `t` first); scened triggers reuse the caller's window
-gate + the Phase 2 absolute-tick fold, so `evalTrigger` is scene-agnostic. Eval-only: no
-`Compile.Code`, no `'PAC*'` byte moved, no corpus case yet (Phase 4). Gate: `zig build test` (5 new
-tests) + `zig build verify` green (corpus 14/14 byte-identical, wasm 46/46) + `audit-diagnostics`
-27/27 (unchanged).
-
-**02 trigger-lanes Phases 1–2 are DONE** (2026-07-14). Phase 2 (compile) built a `(trigger …)` into
-the table as a third `Track` row: `Source` gained a `.trigger` variant (`TrackTable.Trigger` —
-`periodic {every, offset}` XOR an arena-owned strictly-ascending `at` tick slice; internal, never
-wire). The `scene` positional was widened (`track-section` → `scene-section`, head-set `[track
-trigger]`) so scene-child triggers walk scene-relative — the scene start folds into each `:at`
-position and into the periodic `:offset` with a checked add (overflow → `tick_overflow`), exactly
-like a scened track's keys. A trigger counts against `MAX_TRACKS` (`track_cap_exceeded`); `:offset`
-defaults to 0 and is consulted only in the periodic branch. Wire: `'PACM'` `MetaTrackRec.source`
-gained value **2 = trigger** (append-only; key range 0/0, no `'PACW'` change) — no golden shift
-since no corpus case has a trigger yet. Phase 1 (schema + validation): the `trigger` form +
-`time-pos-list` value-kind + `trigger_invalid` = **26** (in `'PACD'`), source XOR / `:every` > 0 /
-non-empty strictly-ascending `:at` (a trigger REJECTS unsorted `:at`, unlike a track which sorts),
-unknown target reusing `unknown_target`. Board box `02 trigger-lanes` stays ☐ until Phase 4 lands.
+**02 trigger-lanes is COMPLETE** (all 4 phases, 2026-07-14). A `(trigger …)` form emits event
+lanes off the tick grid — `periodic { every, offset }` (`:every N :offset M`) XOR an explicit
+strictly-ascending `:at` list — as a third `Track` row kind (internal `Source.trigger` /
+`TrackTable.Trigger`, never wire; counts against `MAX_TRACKS`; scene-relative under a `(scene …)`,
+start folded into every tick at compile). At the already-wrapped, already-scene-gated tick `t`,
+`Eval.evalTrigger` finds the last event ≤ t and writes four lanes in FROZEN order truncated to the
+target's ncomp — `phase` `(t−event)/span` ∈ [0,1) (last explicit event holds 1.0 unconditionally),
+`count` (event index f32), `gate` (1.0 only on the exact tick, structural), `beats-since`
+(`map.beatOf(t−event)`); **before the first event the write is OMITTED** (a pure function of t),
+and **loop wrap resets count/gate/phase for free** (the caller wraps t first). Wire: one
+`Compile.Code` variant `trigger_invalid` = **26** (in `'PACD'`) and `'PACM'` `MetaTrackRec.source`
+value **2 = trigger** (both append-only; `META_VERSION` unbumped, no `'PACW'` change — a trigger's
+writes are ordinary entries). The `trigger-basic` golden pins the whole contract byte-for-byte
+(pre-first omit, exact-tick gate 1, mid-interval phase, held-last-event 1.0, loop-wrap count
+reset) — the FIRST golden with a `"trigger"` meta row; the npm meta mirror decodes `source == 2`
+via a `TRACK_SOURCES` table and a `toUniforms` test flows a trigger write through the routing
+helper. Gate: `zig build verify` (corpus **15/15** byte-identical, wasm **48/48**) +
+`audit-diagnostics` 27/27 + npm lint/typecheck/test. Per-phase detail lives in 02's progress log;
+durable cross-plan facts in the Decision log below.
 
 **01 scenes-cues is COMPLETE** (all 5 phases, 2026-07-14). `(scene :name X :at Nb :dur Mb
 (track …))` is a named window on the transport tick grid: scenes may overlap, child tracks
@@ -390,3 +378,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   the arm. `phase`/`beats-since` are each ONE f64 division in the documented op order, f32 only at
   emission. `evalTrigger` is scene-agnostic (reuses the caller's window gate + the Phase 2
   absolute-tick fold) and reuses the keyframe `seg_cache` slot as the `:at` cursor.
+- 2026-07-14 — **02 trigger-lanes COMPLETE** (Phase 4: corpus + parity + docs). No new wire
+  surface (Phase 4 pins existing bytes): the `trigger-basic` golden — a periodic ncomp-4 target
+  (all four lanes) + an explicit-list ncomp-1 target (phase only), over a 2-bar 120 bpm loop —
+  pins the frozen contract byte-for-byte across native == wasm (corpus 15/15, wasm 48/48): a
+  pre-first-event omit (also at the loop-wrap-to-0), exact-tick gate 1, a mid-interval phase
+  (incl. non-dyadic 1/3), the held-last-event phase 1.0, and a loop wrap where `count` resets to
+  0 (not the unwrapped k=8). It is the FIRST golden to carry a `source == 2` / `"trigger"` meta
+  row. Cross-boundary fact for **06 tracker-import** (emits `(trigger …)`) and **07
+  timeline-editor** (reads `meta.tracks`): the npm glue now names the source byte via a
+  `TRACK_SOURCES = ['keys','expr','trigger']` table (was a binary `0 ? 'keys' : 'expr'` that
+  mis-named byte 2), and `MetaTrack.source` in `types.js` admits `'trigger'`. Trigger writes are
+  ordinary `'PACW'` entries, so `route.js`/`toUniforms` needed no code change (a test pins one
+  trigger write flowing through). The npm surface grew (a new source name), so the triple-pin
+  version bump is a studio-refresh decision, deferred to Wave 1 item 8. `CLAUDE.md`'s wire-surface
+  table was already accurate (no row moved).

@@ -1,0 +1,20 @@
+; harness. 120 bpm 4/4: 1 beat = 0.5 s, 2 beats/s = 360360 ticks/s. pulse
+; (ncomp 4, registry 0) is periodic :every 1b :offset 1b — events at
+; 1b,2b,3b,…; hit (ncomp 1, registry 1) fires at 2b,5b,7b. Registry 1 on
+; hit pins that a trigger write carries its bus flag. Times walk the
+; contract: before-first-event omits, exact-tick gate 1, mid-interval
+; phase in (0,1), held-last-event phase 1.0, and a :dur wrap resetting the
+; count on the local timeline.
+(target pulse :registry 0 :ncomp 4)   ; id 0 — periodic, all four lanes
+(target hit :registry 1 :ncomp 1)     ; id 1 — explicit list, phase only
+(times
+  "0000000000000000" ; 0.0 s  beat 0   — before both first events: empty writes
+  "3FE0000000000000" ; 0.5 s  beat 1   — pulse fires k=0 (phase 0, gate 1); hit still silent
+  "3FE8000000000000" ; 0.75 s beat 1.5 — pulse mid (phase 0.5, gate 0, beats-since 0.5)
+  "3FF0000000000000" ; 1.0 s  beat 2   — pulse k=1 exact; hit fires k=0 (phase 0)
+  "3FF8000000000000" ; 1.5 s  beat 3   — pulse k=2 exact; hit mid, phase 1/3 (non-dyadic)
+  "4004000000000000" ; 2.5 s  beat 5   — pulse k=4 exact; hit k=1 exact
+  "400E000000000000" ; 3.75 s beat 7.5 — pulse mid k=6; hit holds its last event, phase 1.0
+  "4010000000000000" ; 4.0 s  = :dur   — wraps to tick 0: both silent again
+  "4012000000000000" ; 4.5 s  beat 9   — wraps to 1b: pulse k=0 (count reset), hit silent
+)

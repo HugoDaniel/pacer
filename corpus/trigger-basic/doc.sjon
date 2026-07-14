@@ -1,0 +1,13 @@
+; triggers: event lanes sampled straight off the tick grid, no keyframes.
+; Two triggers over a 2-bar loop at 120 bpm 4/4 (1 beat = 0.5 s, 1 bar =
+; 2.0 s, :dur 2bar = 4.0 s). `pulse` is periodic — a beat-spaced schedule
+; from beat 1 (:offset 1b) — into an ncomp-4 target, so it writes all four
+; lanes: phase, count, gate, beats-since. `hit` fires on an explicit
+; ascending list into an ncomp-1 target, so it writes phase only. Before a
+; trigger's first event its write is OMITTED (whether it writes is a pure
+; function of time); the last :at event holds phase 1.0; a clock at/after
+; :dur wraps and resets count/gate/phase on the local timeline.
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(trigger :target pulse :every 1b :offset 1b)
+(trigger :target hit :at [2b 5b 7b])

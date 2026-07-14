@@ -40,6 +40,8 @@ const NO_SLOT = 0xffffffff;
 /** Mirror of `Abi.MAX_TARGETS` — the flat registry join's ceiling. */
 const MAX_TARGETS = 1024;
 const CONTROL_TYPES = /** @type {const} */ (['slider', 'xy', 'color']);
+/** Mirror of `MetaTrackRec.source`: keyframes, an expression, or a trigger. */
+const TRACK_SOURCES = /** @type {const} */ (['keys', 'expr', 'trigger']);
 
 const LOAD_OK = 0;
 const LOAD_DIAGNOSTICS = 1;
@@ -221,7 +223,7 @@ export class Pacer {
     let off = PACM_HEADER_LEN;
     /**
      * @type {Array<{ targetId: number, registry: number, ncomp: number,
-     *   source: 'keys' | 'expr', keyStart: number, keyLen: number, span: Span }>}
+     *   source: 'keys' | 'expr' | 'trigger', keyStart: number, keyLen: number, span: Span }>}
      */
     const rawTracks = [];
     for (let i = 0; i < trackCount; i++, off += PACM_TRACK_LEN) {
@@ -229,7 +231,7 @@ export class Pacer {
         targetId: dv.getUint16(off, true),
         registry: dv.getUint8(off + 2),
         ncomp: dv.getUint8(off + 3),
-        source: dv.getUint8(off + 4) === 0 ? 'keys' : 'expr',
+        source: TRACK_SOURCES[dv.getUint8(off + 4)] ?? 'keys',
         keyStart: dv.getUint32(off + 8, true),
         keyLen: dv.getUint32(off + 12, true),
         span: { start: dv.getUint32(off + 16, true), end: dv.getUint32(off + 20, true) },

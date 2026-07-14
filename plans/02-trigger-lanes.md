@@ -236,3 +236,50 @@ npm needs no driver code (trigger writes are ordinary `'PACW'` entries) but add 
 `npm/pacer` test asserting a trigger write flows through `toUniforms`, and decode `source ==
 2` in the meta mirror if the JS names track sources. Update `CLAUDE.md`'s surface table only
 if a row is now inaccurate.
+
+### Phase 4 — corpus + parity + docs (done, 2026-07-14)
+
+**RED first.** Added `corpus/trigger-basic/{doc,times}.sjon` with no `expected.sjon` and ran
+`zig build corpus` → **1 failed** (`trigger-basic: cannot read expected.sjon` — the case is
+wired into the gate but has no golden). Green after `zig build corpus -- --update` generated the
+golden; then the wasm-parity half went RED (`corpus parity: trigger-basic`) because the JS meta
+mirror named the trigger source `expr`, fixed below.
+
+**The case.** `trigger-basic` is a 2-bar 120 bpm 4/4 loop with two top-level triggers:
+`(trigger :target pulse :every 1b :offset 1b)` into an **ncomp-4** target (all four lanes) and
+`(trigger :target hit :at [2b 5b 7b])` into an **ncomp-1** target (phase only, on registry 1 — a
+trigger write carries its bus flag). The nine `times` walk the whole frozen contract and I checked
+every write by hand against the golden before trusting it:
+- **beat 0** — both before their first event → **empty write buffer** (pre-first omit).
+- **beat 1 / 2 / 3 / 5** — pulse on its exact event tick → `gate 1`, `phase 0`, `count` = k
+  (0/1/2/4); **beat 2 / 5** hit exact → phase 0 (first-of-list has a real `span`, not the held
+  1.0).
+- **beat 1.5** — pulse mid → `phase 0.5`, `gate 0`, `beats-since 0.5`; **beat 3** hit mid →
+  `phase 1/3` = `3EAAAAAB` (non-dyadic, pins the f64→f32 seam).
+- **beat 7.5** — hit **holds its last `:at` event at phase 1.0** (span 0); pulse mid k=6.
+- **beat 8 (= :dur)** — wraps to tick 0 → both omit again (empty buffer).
+- **beat 9** — wraps to 1b → pulse fires with `count 0`, **not** the unwrapped k=8 (loop wrap
+  resets the count on the local timeline).
+
+It is the FIRST golden with `:source trigger` meta rows (both with key range 0/0 — no `mkey`
+children).
+
+**Parity fix (the only code this phase).** The npm meta mirror decoded the source byte with a
+binary `dv.getUint8(off+4) === 0 ? 'keys' : 'expr'`, so byte **2** wrongly read as `expr`. Replaced
+it with a `TRACK_SOURCES = ['keys','expr','trigger']` lookup (mirroring the existing `CONTROL_TYPES`
+idiom) indexed by the byte, and widened `MetaTrack.source` in `types.js` (and the internal
+`rawTracks` JSDoc) to `'keys' | 'expr' | 'trigger'`. No driver/routing change — a trigger's writes
+are ordinary `'PACW'` entries. Added one `driver.test.js` test asserting the meta names both
+sources `trigger`, that triggers carry no keys, that a pre-first-event eval omits the lane, and
+that a periodic ncomp-4 write flows through `toUniforms` as `[0,0,1,0]` (phase/count/gate/beats)
+with the ncomp-1 hit landing phase-only on the audio bus.
+
+**Docs.** `CLAUDE.md`'s wire-surface table was already accurate — triggers ride the existing
+`'PACW'`/`'PACM'` surfaces and the `source == 2` byte landed in Phase 2 (append-only within
+`'PACM'`), so no row moved; no edit needed.
+
+**Gate.** `zig build verify` green — native corpus **15/15 byte-identical** (the 14 prior goldens
+regenerated unchanged; only `trigger-basic` is new) + wasm parity **48/48** (46 prior + the
+`trigger-basic` parity case + the new `toUniforms` test); `zig build audit-diagnostics` **27/27**
+(no new code); npm `lint` + `typecheck` + `test` all clean. **02 trigger-lanes is COMPLETE** — the
+board box is ticked and the strategy pointer advances to studio refresh + impulsos benchmark #1.

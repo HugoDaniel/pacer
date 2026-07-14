@@ -95,9 +95,9 @@ export {};
  * @property {string} name
  * @property {number} registry
  * @property {number} ncomp
- * @property {'keys' | 'expr'} source Value source: keyframes or an expression.
+ * @property {'keys' | 'expr' | 'trigger'} source Value source: keyframes, an expression, or an event schedule.
  * @property {Span} span
- * @property {ReadonlyArray<MetaKey>} keys Empty for expr tracks.
+ * @property {ReadonlyArray<MetaKey>} keys Empty for expr and trigger tracks.
  */
 
 /**
