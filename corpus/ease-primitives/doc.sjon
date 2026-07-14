@@ -1,0 +1,30 @@
+; ease-primitives: one track per easing primitive under the corpus gate.
+; Every key runs 0 → 1 over one bar (0b..4b), so each write value IS e(u)
+; directly — the golden pins e at u = 0, 0.25, 0.5, 0.75, 1 for all 18
+; named eases plus a standalone (cubic-bezier …) and both (steps …) jump
+; variants. u = 0 and u = 1 are exact key ticks (structural landing);
+; 0.25/0.5/0.75 sample segment interiors. steps use :n 2 so the 0.25/0.75
+; interior samples fall inside a tread and separate end- from start-jump.
+(transport :bpm 120 :meter [4 4])
+
+(track :target linear       (key :at 0b :value 0) (key :at 4b :value 1 :ease linear))
+(track :target hold         (key :at 0b :value 0) (key :at 4b :value 1 :ease hold))
+(track :target smoothstep   (key :at 0b :value 0) (key :at 4b :value 1 :ease smoothstep))
+(track :target in-quad      (key :at 0b :value 0) (key :at 4b :value 1 :ease in-quad))
+(track :target out-quad     (key :at 0b :value 0) (key :at 4b :value 1 :ease out-quad))
+(track :target in-out-quad  (key :at 0b :value 0) (key :at 4b :value 1 :ease in-out-quad))
+(track :target in-cubic     (key :at 0b :value 0) (key :at 4b :value 1 :ease in-cubic))
+(track :target out-cubic    (key :at 0b :value 0) (key :at 4b :value 1 :ease out-cubic))
+(track :target in-out-cubic (key :at 0b :value 0) (key :at 4b :value 1 :ease in-out-cubic))
+(track :target in-quart     (key :at 0b :value 0) (key :at 4b :value 1 :ease in-quart))
+(track :target out-quart    (key :at 0b :value 0) (key :at 4b :value 1 :ease out-quart))
+(track :target in-out-quart (key :at 0b :value 0) (key :at 4b :value 1 :ease in-out-quart))
+(track :target in-sine      (key :at 0b :value 0) (key :at 4b :value 1 :ease in-sine))
+(track :target out-sine     (key :at 0b :value 0) (key :at 4b :value 1 :ease out-sine))
+(track :target in-out-sine  (key :at 0b :value 0) (key :at 4b :value 1 :ease in-out-sine))
+(track :target in-expo      (key :at 0b :value 0) (key :at 4b :value 1 :ease in-expo))
+(track :target out-expo     (key :at 0b :value 0) (key :at 4b :value 1 :ease out-expo))
+(track :target in-out-expo  (key :at 0b :value 0) (key :at 4b :value 1 :ease in-out-expo))
+(track :target bezier       (key :at 0b :value 0) (key :at 4b :value 1 :ease (cubic-bezier :p [0.42 0 0.58 1])))
+(track :target steps-end    (key :at 0b :value 0) (key :at 4b :value 1 :ease (steps :n 2 :jump end)))
+(track :target steps-start  (key :at 0b :value 0) (key :at 4b :value 1 :ease (steps :n 2 :jump start)))

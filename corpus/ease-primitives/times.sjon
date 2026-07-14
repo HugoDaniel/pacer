@@ -1,0 +1,34 @@
+; ease-primitives harness. One target per easing primitive, id order =
+; track order in doc.sjon (id 0 linear … id 20 steps-start). The segment
+; is one bar (0b..4b) = 2.0 s at 120 bpm, so the sampled seconds map to
+; u = 0, 0.25, 0.5, 0.75, 1. Because every key runs 0 → 1, each write
+; value IS e(u) — the golden reads as a table of easing outputs.
+(target linear       :registry 0)   ; id 0
+(target hold         :registry 0)   ; id 1
+(target smoothstep   :registry 0)   ; id 2
+(target in-quad      :registry 0)   ; id 3
+(target out-quad     :registry 0)   ; id 4
+(target in-out-quad  :registry 0)   ; id 5
+(target in-cubic     :registry 0)   ; id 6
+(target out-cubic    :registry 0)   ; id 7
+(target in-out-cubic :registry 0)   ; id 8
+(target in-quart     :registry 0)   ; id 9
+(target out-quart    :registry 0)   ; id 10
+(target in-out-quart :registry 0)   ; id 11
+(target in-sine      :registry 0)   ; id 12
+(target out-sine     :registry 0)   ; id 13
+(target in-out-sine  :registry 0)   ; id 14
+(target in-expo      :registry 0)   ; id 15
+(target out-expo     :registry 0)   ; id 16
+(target in-out-expo  :registry 0)   ; id 17
+(target bezier       :registry 0)   ; id 18
+(target steps-end    :registry 0)   ; id 19
+(target steps-start  :registry 0)   ; id 20
+
+(times
+  "0000000000000000" ; 0.0 s — u = 0   (start key, structural landing → 0)
+  "3FE0000000000000" ; 0.5 s — u = 0.25 (interior)
+  "3FF0000000000000" ; 1.0 s — u = 0.5  (interior; every in-out lands 0.5)
+  "3FF8000000000000" ; 1.5 s — u = 0.75 (interior)
+  "4000000000000000" ; 2.0 s — u = 1   (end key, structural landing → 1)
+)
