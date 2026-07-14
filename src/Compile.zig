@@ -310,7 +310,7 @@ const Builder = struct {
         self.programs[0] = Easing.primitive(.{ .code = .linear }) catch unreachable;
         self.programs_len = 1;
 
-        const transport = try self.buildTransport() orelse {
+        const transport = try self.buildTransport(ta) orelse {
             table_arena.deinit();
             return null;
         };
@@ -435,7 +435,7 @@ const Builder = struct {
         return b.value;
     }
 
-    fn buildTransport(self: *Builder) Error!?TrackTable.Transport {
+    fn buildTransport(self: *Builder, ta: Allocator) Error!?TrackTable.Transport {
         const tree = self.tree;
         var found: ?NodeIndex = null;
         for (self.forest) |idx| {
@@ -484,7 +484,46 @@ const Builder = struct {
             try self.emit(.loop_requires_dur, tree.spanOf(idx), ":end loop requires :dur", .{});
         }
 
-        return .{ .map = map, .dur = dur, .end = end };
+        var emit_lanes: []const TrackTable.EmitLane = &.{};
+        if (kvNode(tree, children, "emit")) |emit_node| {
+            emit_lanes = try self.buildEmit(ta, emit_node);
+        }
+
+        return .{ .map = map, .dur = dur, .end = end, .emit = emit_lanes };
+    }
+
+    /// Resolve a `(transport :emit …)` list into clock lanes. Each entry
+    /// must name an emittable time value (`TrackTable.EmitName`), be
+    /// unique in the list, and join to a scalar host target of the same
+    /// name — every failure emits at the offending entry's span and the
+    /// lane is dropped (the table is discarded whole once any diagnostic
+    /// exists). Returns the lanes that were sound.
+    fn buildEmit(self: *Builder, ta: Allocator, emit_node: NodeIndex) Error![]const TrackTable.EmitLane {
+        const tree = self.tree;
+        const elems = tree.vectorElements(emit_node);
+        var lanes: std.ArrayList(TrackTable.EmitLane) = .empty;
+        for (elems, 0..) |elem, i| {
+            const name = tree.symbolText(elem);
+            const which = std.meta.stringToEnum(TrackTable.EmitName, name) orelse {
+                try self.emit(.transport_invalid, tree.spanOf(elem), ":emit `{s}` is not an emittable time name (beat, bar, phase, bpm, t)", .{name});
+                continue;
+            };
+            if (duplicateBefore(tree, elems[0..i], name)) {
+                try self.emit(.transport_invalid, tree.spanOf(elem), "duplicate :emit lane `{s}`", .{name});
+                continue;
+            }
+            const tg = self.resolveTarget(name) orelse {
+                try self.emit(.unknown_target, tree.spanOf(elem), "unknown target `{s}` — not in any host registry", .{name});
+                continue;
+            };
+            if (tg.ncomp != 1) {
+                try self.emit(.target_arity_mismatch, tree.spanOf(elem), "emitted lane `{s}` needs a scalar target; `{s}` has {d} component(s)", .{ name, name, tg.ncomp });
+                continue;
+            }
+            lanes.append(ta, .{ .name = which, .target_id = tg.id, .registry = tg.registry }) catch
+                return error.OutOfMemory;
+        }
+        return lanes.items;
     }
 
     fn buildTracks(
@@ -812,6 +851,15 @@ fn sortKeysWithSpans(keys: []TrackTable.Key, spans: []Ast.Span) void {
 /// not forms, so the tag guard comes first.
 fn isForm(tree: *const Ast.Tree, idx: NodeIndex, head: []const u8) bool {
     return tree.tagOf(idx) == .form and std.mem.eql(u8, tree.formHeader(idx).head, head);
+}
+
+/// True when some earlier `:emit` entry carries the same symbol text —
+/// the duplicate-lane test. All entries are schema-guaranteed symbols.
+fn duplicateBefore(tree: *const Ast.Tree, before: []const NodeIndex, name: []const u8) bool {
+    for (before) |prev| {
+        if (std.mem.eql(u8, tree.symbolText(prev), name)) return true;
+    }
+    return false;
 }
 
 /// First `(key …)` positional child of a track, or null. The manifest's
@@ -1300,6 +1348,84 @@ test "compile diagnostics: transport + easing defects fire by name" {
         \\    (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v 1)
         \\    (stage :ease linear :t 1 :v 1))))
     , .ease_stages_exceeded);
+}
+
+test "compile transport :emit resolves clock lanes to same-named targets" {
+    const targets = [_]Target{
+        .{ .name = "beat", .ncomp = 1 },
+        .{ .name = "bar", .ncomp = 1 },
+        .{ .name = "phase", .ncomp = 1, .registry = 1 },
+    };
+    var r = try compile(t.allocator, "(transport :bpm 120 :emit [beat bar phase])", &targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const emit = r.table.?.transport.emit;
+    try t.expectEqual(@as(usize, 3), emit.len);
+    // Lanes preserve document order; each joins to its same-named target.
+    try t.expectEqual(TrackTable.EmitName.beat, emit[0].name);
+    try t.expectEqual(@as(u16, 0), emit[0].target_id);
+    try t.expectEqual(@as(u8, 0), emit[0].registry);
+    try t.expectEqual(TrackTable.EmitName.bar, emit[1].name);
+    try t.expectEqual(@as(u16, 1), emit[1].target_id);
+    try t.expectEqual(TrackTable.EmitName.phase, emit[2].name);
+    try t.expectEqual(@as(u16, 2), emit[2].target_id);
+    try t.expectEqual(@as(u8, 1), emit[2].registry);
+}
+
+test "compile transport :emit defects fire by name" {
+    const scalar = [_]Target{
+        .{ .name = "beat", .ncomp = 1 },
+        .{ .name = "bar", .ncomp = 1 },
+    };
+    // Duplicate lane in the list.
+    {
+        var r = try compile(t.allocator, "(transport :bpm 120 :emit [beat beat])", &scalar);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.transport_invalid) != null);
+    }
+    // A symbol that is not an emittable time name.
+    {
+        var r = try compile(t.allocator, "(transport :bpm 120 :emit [wobble])", &scalar);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.transport_invalid) != null);
+    }
+    // A reserved time name that is NOT emittable (tick/cycle/dur) is
+    // rejected too — the emit set is a subset of the env bindings.
+    {
+        var r = try compile(t.allocator, "(transport :bpm 120 :emit [tick])", &scalar);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.transport_invalid) != null);
+    }
+    // An emittable name absent from every host registry.
+    {
+        var r = try compile(t.allocator, "(transport :bpm 120 :emit [phase])", &scalar);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.unknown_target) != null);
+    }
+    // An emittable name resolving to a non-scalar target.
+    {
+        const vec = [_]Target{.{ .name = "beat", .ncomp = 2 }};
+        var r = try compile(t.allocator, "(transport :bpm 120 :emit [beat])", &vec);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.target_arity_mismatch) != null);
+    }
+}
+
+test "compile transport :emit diagnostics carry the offending entry's span" {
+    const scalar = [_]Target{.{ .name = "beat", .ncomp = 1 }};
+    const source: [:0]const u8 = "(transport :bpm 120 :emit [beat wobble])";
+    var r = try compile(t.allocator, source, &scalar);
+    defer r.deinit();
+    const d = r.findDiag(.transport_invalid).?;
+    const start = r.validated.userOffset(d.span.start);
+    const end = r.validated.userOffset(d.span.end);
+    try t.expectEqualStrings("wobble", source[start..end]);
 }
 
 test "compile diagnostics: table + program caps fire by name" {

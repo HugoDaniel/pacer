@@ -38,11 +38,34 @@ pub const MAX_CONTROLS = 64;
 
 pub const EndBehavior = enum { loop, hold };
 
+/// A reserved time name a `(transport :emit …)` lane broadcasts. The set
+/// is a deliberate subset of `ExprTrack.reserved_names`: continuous
+/// clock values worth a write lane. `tick` (unbounded integer), `cycle`
+/// (a `bar` alias), and `dur` (a constant) are intentionally absent —
+/// naming one in `:emit` is a `transport_invalid` diagnostic.
+pub const EmitName = enum { beat, bar, phase, bpm, t };
+
+/// One built-in clock lane: a reserved time value written every frame to
+/// a host target of the same name. `name` selects the env formula
+/// (reused from `ExprTrack`'s time bindings, never re-derived here);
+/// `target_id`/`registry` are the load-time join and the target is
+/// always scalar (`ncomp == 1`, enforced at compile).
+pub const EmitLane = struct {
+    name: EmitName,
+    target_id: u16,
+    registry: u8,
+};
+
 pub const Transport = struct {
     map: TimeMap,
     /// Score length in ticks; `null` = unbounded (end-behavior ignored).
     dur: ?Tick,
     end: EndBehavior,
+    /// Built-in clock lanes (`:emit …`), in document order. Evaluated
+    /// BEFORE tracks each frame, so an explicit `(track …)` on the same
+    /// target overrides an emitted lane (controls still land last).
+    /// Empty when the score declares no `:emit`.
+    emit: []const EmitLane = &.{},
 };
 
 /// One keyframe, position already on the tick grid.

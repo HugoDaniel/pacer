@@ -47,6 +47,16 @@
       (member :name loop :description "Wrap the playhead back to 0 (requires :dur).")
       (member :name hold :description "Clamp at :dur; tracks keep emitting their final values.")))
 
+  ; The element is an unconstrained symbol (not a member-set), so an
+  ; entry outside the emittable set surfaces as a pacer `transport_invalid`
+  ; diagnostic with a span on the offending name — not a schema type
+  ; error. Membership (beat/bar/phase/bpm/t), duplicates, and target
+  ; arity are all joined at compile.
+  (value-kind :name emit-lanes
+    :description "Built-in clock lanes: a list of reserved time names, each written every frame to the host target of the same name (before track writes)."
+    :underlying vector
+    :vector (vector-shape :element symbol))
+
   ; ---- key values ----
   (value-kind :name plain-number
     :description "Unitless number."
@@ -175,7 +185,9 @@
     (key :name dur :type time-pos :optional true
       :description "Score length. Required when :end is loop.")
     (key :name end :type end-behavior :optional true
-      :description "Playhead behavior past :dur; defaults to hold."))
+      :description "Playhead behavior past :dur; defaults to hold.")
+    (key :name emit :type emit-lanes :optional true
+      :description "Reserved time names (beat, bar, phase, bpm, t) broadcast as write lanes, each resolved against the host registries by that exact name. Emitted lanes land before track writes, so an explicit (track …) on the same target overrides an emitted lane; controls still land last."))
 
   (form :name track
     :description "One animated target with exactly one value source: keyframe children interpolated with easing programs, XOR an :expr evaluated every frame. Hosts receive final values and never interpolate."
