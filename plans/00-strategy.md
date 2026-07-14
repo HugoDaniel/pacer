@@ -128,11 +128,17 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **11 easing-controls-corpus, Phase 1 + 2** (easing + controls/expr-env corpus pins —
-no design risk; deepens the determinism gate before bigger features ride on it). Open
-`plans/11-*.md`, execute its next phase RED-first, gate `zig build verify`. Then Wave 0
-continues: 03 Phase 0 (PatternQuery wasm32 spike, verdict → Decision log), then the
-studio refresh (which also lands 04's deferred `:emit [beat]` template switch).
+→ **11 hardening, Phase 2** (pin controls fully + the expr env: `xy`/`color` control
+types with `:min`/`:max` echoed through `'PACM'`, vector control set/clear over the
+wasm boundary, and an expr case binding `bpm`/`dur`/`cycle` plus the `dur`-absent
+diagnostic path). Templates: `corpus/controls-live/` + `corpus/expr-control/`. Execute
+RED-first, gate `zig build verify`. Then Wave 0 continues: 03 Phase 0 (PatternQuery
+wasm32 spike, verdict → Decision log), then the studio refresh (which also lands 04's
+deferred `:emit [beat]` template switch).
+
+11 Phase 1 is **DONE** (2026-07-14) — the `ease-primitives` golden pins all 18 named
+eases + standalone `cubic-bezier` + both `steps` jump variants across `u = 0…1`. See
+11's progress log. Board box `11 P1–P2` stays unticked until Phase 2 lands.
 
 04 transport-lanes is **DONE** (all 3 phases landed 2026-07-14) — schema/validation,
 bit-exact eval, and the `transport-emit` golden. See 04's progress log; the studio

@@ -85,3 +85,29 @@ Green: regen + review.
 Gate: `zig build verify`.
 
 ## Progress log
+
+- **Phase 1 — pin every easing primitive (done, 2026-07-14).** New golden case
+  `corpus/ease-primitives/` (modelled on `ease-composed/`): 21 tracks, one per
+  easing primitive — all 18 named eases (`linear`, `hold`, `smoothstep`, in/out/in-out
+  × quad/cubic/quart/sine/expo), a standalone `(cubic-bezier :p [0.42 0 0.58 1])`, and
+  both `(steps :n 2 :jump end|start)` variants. Every key runs `0 → 1` over one bar
+  (`0b..4b` = 2.0 s at 120 bpm), so each write value **is** `e(u)` directly and the
+  golden reads as a table of easing outputs. Five sample times pin `u = 0, 0.25, 0.5,
+  0.75, 1`: `u=0`/`u=1` are exact key ticks (structural landing → bit-exact `0` / `1`
+  for all 21, `hold` and `steps` included), `0.25/0.5/0.75` sample interiors. `steps`
+  use `:n 2` so the `0.25/0.75` interior samples fall inside a tread and separate
+  end-jump from start-jump (`u=0.25`: end `0` vs start `0.5`; `u=0.75`: end `0.5` vs
+  start `1.0`). The red was the runner failing on the missing golden (`cannot read
+  expected.sjon: FileNotFound`, 10 cases 1 failed); `-- --update` generated it.
+  **Review (hand-verified spot values):** polynomial families (linear/quad/cubic/
+  quart/smoothstep/steps) match hand math to full f32 precision — the whole `u=0.5`
+  column is an exact table (every `in-out-*` and the symmetric bezier land exactly
+  `3F000000`=0.5; `in-quad` 0.25, `out-cubic` 0.875, `out-quart` 0.9375, …). Trig/expo
+  families (`sine`, `expo`) match the pinned `sjon.trig` `sin64`/`cos64`/`pow64`
+  kernels — e.g. `in-sine(0.25)`=`3D9BE50C`≈0.07612 (π/8), `in-expo(0.25)`=`3BB504F3`
+  ≈0.0055243 (2⁻⁷·⁵); the `out-sine`/`out-expo` mid-range values sit ~1e-5 from libm,
+  which is the deterministic kernel's own output (the same kernels `ease-composed`'s
+  spring already pins) — the golden pins the kernel, not libm, by design. Regen
+  touched only this case; the 9 pre-existing goldens stayed byte-identical. Gate:
+  `zig build verify` ✓ (native corpus 10/10 + wasm parity `node --test` 40/40). No JS/TS
+  touched, so no npm lint/typecheck needed this phase.
