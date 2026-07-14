@@ -1,4 +1,4 @@
-; pacer score schema — MVP slice: transport / track / key plus the easing
+; pacer score schema — transport / track / key / scene plus the easing
 ; combinator forms.
 ;
 ; Single source of truth for what a pacer score may contain. The compiler
@@ -9,7 +9,7 @@
 ; precedent (`pngine/schema/pngine.sjon`).
 ;
 ; Deliberate omissions, landing with later build-order steps:
-; `(scene …)`/cue lists, compose-mode `(target …)` declarations.
+; compose-mode `(target …)` declarations.
 (plugin :name pacer :version "0.1.0"
 
   ; ---- numeric / time value kinds ----

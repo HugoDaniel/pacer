@@ -193,6 +193,12 @@ function renderMeta(meta) {
     out += ` :registry ${c.registry} :ncomp ${c.ncomp} :type ${c.type} :value [${laneHex(c.value)}]`;
     out += ` :min ${rail(c.min)} :max ${rail(c.max)} :value-span [${c.valueSpan.start} ${c.valueSpan.end}])`;
   }
+  // The 'SCEN' section (post-controls TLV): named windows, name sliced
+  // from source via nameSpan. The native runner walks the same section.
+  for (const s of meta.scenes) {
+    out += `\n  (mscene :name ${s.name} :at ${s.startTick} :dur ${s.durTicks}`;
+    out += ` :name-span [${s.nameSpan.start} ${s.nameSpan.end}])`;
+  }
   return `${out})\n`;
 }
 

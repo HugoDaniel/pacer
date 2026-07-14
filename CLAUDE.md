@@ -49,7 +49,7 @@ contract itself must change.
 |---|---|---|
 | `'PACT'` targets in | `Abi.encodeTargets` / `decodeTargets` | host → driver |
 | `'PACD'` diagnostics out | `Abi.encodeDiags` | driver → host |
-| `'PACM'` score metadata out | `Abi.encodeMeta` | driver → host |
+| `'PACM'` score metadata (+ TLV section stream) out | `Abi.encodeMeta` | driver → host |
 | `'PACW'` writes out (20-byte entries) | `Writes.encode` / `decode` | driver → host |
 | `Compile.Code` (u16) | `src/Compile.zig` | rides in `'PACD'` |
 | `Easing.Op` (u8) | `src/Easing.zig` | program table (future wire) |
@@ -58,6 +58,14 @@ contract itself must change.
 The npm glue (`npm/pacer/src/index.js`) mirrors every blob with one `DataView`
 pass and casts the exports to the `PacerExports` typedef (`npm/pacer/src/types.js`)
 — keep both sides in lockstep.
+
+`'PACM'` closes with an append-only TLV **section stream** — zero or more
+`[id u32][payload_len u32][payload]` frames after the last control, walked to
+end-of-buffer with unknown ids skipped by length (so an old decoder tolerates a
+new section). The first section is `'SCEN'` (scenes). Section 4-CCs are wire-stable
+too: never reuse one, never bump `META_VERSION` for a new section — a breaking
+change to a section's own layout mints a fresh id. Convention of record:
+`src/Abi.zig`'s header and `plans/01-scenes-cues.md`.
 
 ## Determinism seams
 

@@ -180,7 +180,7 @@ fn runCase(
     defer result.deinit();
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    if (!try renderCase(a, out, name, &aw.writer, &result, harness)) return .failed;
+    if (!try renderCase(a, out, name, &aw.writer, &result, harness, doc)) return .failed;
     const actual = aw.toOwnedSlice() catch return error.OutOfMemory;
 
     const expected_path = try std.fs.path.join(a, &.{ root, name, "expected.sjon" });
@@ -471,6 +471,7 @@ fn renderCase(
     w: *Io.Writer,
     result: *Compile.CompileResult,
     harness: Harness,
+    doc: []const u8,
 ) !bool {
     w.writeAll(GENERATED_HEADER) catch return error.OutOfMemory;
     w.print("(load :ok {})\n", .{result.ok()}) catch return error.OutOfMemory;
@@ -480,7 +481,7 @@ fn renderCase(
 
     // The meta block reflects the DOCUMENT — render it before any
     // set-bpm/set-control directive mutates evaluator/transport state.
-    try renderMeta(a, w, result, harness);
+    try renderMeta(a, w, result, harness, doc);
 
     var ev = try Eval.Evaluator.init(gpaOf(result), result);
     defer ev.deinit();
@@ -551,8 +552,10 @@ fn renderCase(
 /// `Abi.encodeMeta`, then decode field by field so the packed layout
 /// itself sits under the golden. Floats are hex bit patterns; ticks,
 /// spans and counts decimal. Track target names resolve through the
-/// harness flat list (the same join the wasm host uses).
-fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult, harness: Harness) !void {
+/// harness flat list (the same join the wasm host uses); scene names
+/// slice from `doc` (the `'SCEN'` records carry only a user-coord span,
+/// like tracks — the editor has the source).
+fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult, harness: Harness, doc: []const u8) !void {
     const blob = try a.alloc(u8, Abi.metaEncodedLen(result));
     _ = Abi.encodeMeta(result, blob) catch return error.OutOfMemory;
 
@@ -616,6 +619,35 @@ fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult,
             std.mem.readInt(u32, rec[56..60], .little), std.mem.readInt(u32, rec[60..64], .little),
         }) catch return error.OutOfMemory;
         coff += Abi.META_CONTROL_LEN + id_len;
+    }
+
+    // Post-controls section stream (the 'PACM' TLV convention): walk to
+    // end-of-buffer, render the 'SCEN' scenes section, skip any unknown
+    // id by its length (the tolerance guarantee). `blob.len` is exactly
+    // `metaEncodedLen`, so the walk terminates on the last frame.
+    var soff: usize = coff;
+    while (soff < blob.len) {
+        const sid = std.mem.readInt(u32, blob[soff..][0..4], .little);
+        const plen = std.mem.readInt(u32, blob[soff + 4 ..][0..4], .little);
+        const body = soff + Abi.META_SECTION_HEADER_LEN;
+        if (sid == Abi.SCENES_SECTION_ID) {
+            const scene_count = std.mem.readInt(u32, blob[body..][0..4], .little);
+            var srec: usize = body + 4;
+            for (0..scene_count) |_| {
+                const rec = blob[srec..][0..Abi.SCENE_REC_LEN];
+                const nstart = std.mem.readInt(u32, rec[16..20], .little);
+                const nend = std.mem.readInt(u32, rec[20..24], .little);
+                w.print("\n  (mscene :name {s} :at {d} :dur {d} :name-span [{d} {d}])", .{
+                    doc[nstart..nend],
+                    std.mem.readInt(i64, rec[0..8], .little),
+                    std.mem.readInt(i64, rec[8..16], .little),
+                    nstart,
+                    nend,
+                }) catch return error.OutOfMemory;
+                srec += Abi.SCENE_REC_LEN;
+            }
+        }
+        soff = body + plen;
     }
     w.writeAll(")\n") catch return error.OutOfMemory;
 }

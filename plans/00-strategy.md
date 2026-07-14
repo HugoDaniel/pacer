@@ -112,7 +112,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 0 | 03 P0 pattern spike | ☑ |
 | 0 | studio refresh + `:emit` template | ☑ |
 | 1 | 'PACM' framing decision | ☑ |
-| 1 | 01 scenes-cues | ☐ |
+| 1 | 01 scenes-cues | ☑ |
 | 1 | 02 trigger-lanes | ☐ |
 | 1 | studio refresh + benchmark #1 | ☐ |
 | 2 | 09 workflow fixes | ☐ |
@@ -128,63 +128,28 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: 01 scenes-cues — Phase 5 (corpus + docs).** Open only `plans/01-scenes-cues.md`
-and execute its Phase 5 (the LAST phase — ticking `01 scenes-cues` on the board). Use
-`corpus/keys-basic/` as the template + read `src/corpus_runner.zig`'s `//!` header. New case
-`scenes-basic`: overlapping scenes with the handoff-by-write-order guarantee, scene expr
-bindings (`scene-beat` AND the new `scene-phase` f64 division — this case is what PINS its
-exact bytes native==wasm, per Phase 3's carry-forward), and loop-wrap re-entry into a scene.
-The golden now also carries the `'SCEN'` block, so review the `(meta …)` echo diff closely.
-Run `zig build corpus -- --update`, REVIEW the diff (never hand-edit a golden), then update
-the `schema/pacer.sjon` header roadmap note and `CLAUDE.md` if the wire-surface list changes
-(`'SCEN'` is now a real section — decide whether it earns a row in CLAUDE's wire-stable
-table). Gate: `zig build verify` (native + wasm parity green).
+→ **Wave 1: 02 trigger-lanes — all phases** (scened triggers included, since 01 landed).
+Open only `plans/02-trigger-lanes.md`, read its header + design-freeze, and execute its next
+phase (start at Phase 1) under the discipline in `README.md`: RED first, one phase per context
+window, then update this board + What's next and commit. Per-phase gate: `zig build verify`
+(native + wasm parity green); `zig build audit-diagnostics` if `Compile.Code` grew; goldens
+regenerated via `-- --update` with the diff reviewed and noted in 02's progress log. After 02
+lands: **studio refresh + impulsos benchmark #1** (the tunnel section, scenes + triggers).
 
-**01 Phase 4 (ABI + npm meta) is DONE** (2026-07-14): the FIRST consumer of the frozen
-'PACM' section-framing convention. `Abi.zig` gained `MetaSceneRec` (24 B, `@sizeOf`/`@offsetOf`
-pinned) and pub consts `META_SECTION_HEADER_LEN = 8`, `SCENES_SECTION_ID = 0x4e454353`
-(`'SCEN'` LE), `SCENE_REC_LEN = 24`; `encodeMeta` appends a `'SCEN'` TLV frame
-(`[id][payload_len][count][rec×n]`) after the last control **only when `scenes.len > 0`** (a
-no-scenes blob stays byte-identical to pre-Phase-4). The convention is now transcribed into the
-`Abi.zig` `//!` header (its doc of record). `wasm_entry.zig`'s `META_CAP` bound grew a `'SCEN'`
-term. `index.js` `get meta` gained the post-controls `while (off < len)` walk (dispatch by id,
-always `off += 8 + payload_len`); `meta.scenes` = `[{name, startTick, durTicks, nameSpan}]`,
-`[]` when none; a `#docBytes` field slices scene names from the reload's UTF-8 source. Types +
-JSDoc extended. Gate green: `zig build verify` (test + corpus 13/13 byte-identical + npm 45/45
-wasm parity), `audit-diagnostics` (26/26 — no new codes), npm lint/typecheck. Board box `01
-scenes-cues` stays ☐ until Phase 5 lands the corpus.
-
-**01 Phase 3 (eval semantics) is DONE** (2026-07-14): `Eval.zig` gained a window gate — a
-`Track.scene != NO_SCENE` track writes only while the WRAPPED tick is in `[start, start+dur)`,
-else the write is OMITTED (handoff by write order; loop wrap re-enters). `ExprTrack.evalAt`
-/`bindTime` gained a `scene: ?TrackTable.Scene` param binding two child-scope names —
-`scene-beat` (beats since window start) and `scene-phase` (0..1, a new eval-time f64
-division; degenerate window → 0); both joined `reserved_names` (`MAX_BINDINGS` 8→10).
-`Compile.buildScenes` guards the window end with a checked add (overflow → `tick_overflow`),
-and a scened expr track dry-runs at its scene start (scene env at 0) so `(/ 1 beat)` isn't
-rejected for a beat-0 it never sees while a top-level `scene-beat` stays `expr_eval_failed`.
-Gate green: `zig build test`, corpus (13/13 byte-stable — no scene case yet; compile+eval
-only), `audit-diagnostics` (26/26 — no new codes), `zig build wasm`, `zig build fuzz`. No
-JS/TS touched (ABI is Phase 4). Board box `01 scenes-cues` stays ☐ until Phases 4–5 land.
-
-**01 Phase 2 (compile into the table) is DONE** (2026-07-14): `TrackTable` gained a `Scene`
-struct (`{name_span, start_tick, dur_ticks}`) + a `scenes` slice, a `Track.scene: u16`
-index, and the `NO_SCENE = maxInt(u16)` sentinel. `Compile.zig` extracted `buildTrackForm`
-(offset + scene index threaded); `buildKey` folds the scene start in via checked
-`std.math.add` (overflow → `tick_overflow`; offset 0 is a no-op so top-level ticks are
-byte-identical); `validateScenes` became `buildScenes` (records the window, walks child
-tracks scene-relative). Frozen: write order is top-level tracks then scenes in document
-order (handoff basis for Phase 3/5); `name_span` is the `:name` symbol's span; eval is NOT
-yet window-gated (Phase 3). Gate green: `zig build test`, corpus (13/13 byte-stable),
-`audit-diagnostics` (26/26), `zig build wasm` (compiles; ABI untouched). Board box `01
-scenes-cues` stays ☐ until Phases 3–5 land.
-
-**01 Phase 1 (schema + validation) is DONE** (2026-07-14): the `(scene …)` form + two
-value-kinds (`scene-name`, `track-section`) landed in `schema/pacer.sjon`; three
-append-only `Compile.Code` variants (`scene_invalid`=23, `scene_duplicate_name`=24,
-`scene_cap_exceeded`=25); `MAX_SCENES = 64`. Frozen design: `:name`/`:at`/`:dur` are
-schema-OPTIONAL so a missing one routes to the pacer `scene_invalid` code (not a SJON
-missing-key error) — see 01's progress log + the Decision log below.
+**01 scenes-cues is COMPLETE** (all 5 phases, 2026-07-14). `(scene :name X :at Nb :dur Mb
+(track …))` is a named window on the transport tick grid: scenes may overlap, child tracks
+resolve scene-relative (start folded into key ticks at compile), a scened track writes only
+inside `[start, start+dur)` (else the write is OMITTED, so a later active scene hands the target
+off by write order), and scened expr tracks bind `scene-beat`/`scene-phase` (reserved env names;
+`scene-phase` is a new eval-time f64 division). Wire: three `Compile.Code` variants
+(`scene_invalid`=23, `scene_duplicate_name`=24, `scene_cap_exceeded`=25, in `'PACD'`); `'PACM'`
+gained a post-controls `'SCEN'` TLV section — the FIRST consumer of the section-framing
+convention (`META_VERSION` unbumped; omit-when-empty keeps old blobs byte-stable). `MAX_SCENES =
+64`, `NO_SCENE = maxInt(u16)`. The `scenes-basic` corpus case pins the handoff (two `level`
+writes, drop last), the scene-phase/scene-beat bytes, the empty-buffer-when-inactive case, and
+loop-wrap re-entry (native == wasm, corpus 14/14 + npm 46/46). Per-phase detail lives in 01's
+progress log; durable cross-plan facts in the Decision log below. Board box `01 scenes-cues`
+ticked.
 
 The **'PACM' framing decision** (the design gate before 01 Phase 4) is **DONE**
 (2026-07-14): a TLV section stream after the controls array, walked to end-of-buffer,
@@ -313,6 +278,20 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   span-only meta record (no inline bytes) reuses. `'PACT'`/`'PACD'`/`'PACW'` untouched; the
   `'PACM'` addition is append-only, no `META_VERSION` bump. Corpus `scenes-basic` (Phase 5)
   is the first case to exercise the `'SCEN'` bytes end-to-end (native == wasm).
+- 2026-07-14 — 01 scenes-cues Phase 5 complete → **plan 01 DONE.** Cross-plan facts. (1) The
+  golden `(meta …)` echo now renders a `(mscene :name N :at T :dur D :name-span [S E])` line per
+  scene, produced by BOTH the native runner (`corpus_runner.zig` `renderMeta`, walking the
+  post-controls TLV stream + slicing the name from `doc`) and the JS parity renderer
+  (`corpus.test.js`, from `driver.meta.scenes`) — so the corpus now gates the `'SCEN'` bytes
+  end-to-end. **Any later plan appending a `'PACM'` section (11 Phase 3, `'EASE'`) must extend
+  BOTH `renderMeta`s** to keep the golden gating that section. The renderer walks unknown ids by
+  length, exercising the convention's tolerance. (2) `'SCEN'` did NOT earn a CLAUDE.md wire-table
+  row — it is a section inside `'PACM'`, not a fifth blob; the four-blobs framing stands, with the
+  `'PACM'` row annotated "(+ TLV section stream)" and a paragraph noting section 4-CCs are
+  wire-stable and never bump `META_VERSION`. The `schema/pacer.sjon` header now lists `scene` and
+  drops it from the omissions note (compose-mode `(target …)` remains the only listed omission).
+  No new wire surface beyond Phase 4's `'SCEN'`; goldens other than `scenes-basic` stayed
+  byte-identical (user coords are manifest-independent, so the schema-comment edit moved nothing).
 - 2026-07-14 — Wave 0 complete (studio refresh). Two cross-plan facts. (1) **The studio
   loads pacer.wasm by symlink** — `studio/public/pacer.wasm` → `editor/public/pacer.wasm`
   → `pacer/npm/pacer/pacer.wasm`; the canonical sync is `npm run build:wasm-copy` (the

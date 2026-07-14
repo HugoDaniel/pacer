@@ -1,0 +1,21 @@
+; scenes: named windows on the transport grid. Two overlapping scenes —
+; intro [0b,6b) and drop [4b,12b) — both drive `level`, so on the overlap
+; [4b,6b) both write it and the later-listed scene (drop) wins by write
+; order (the handoff, visible as two `level` writes in the golden). Each
+; scene also carries an expr track binding a scene-local name: sweep reads
+; scene-phase (0..1 across the window, an eval-time f64 division) and pulse
+; reads scene-beat (beats since the window opened). The transport loops at
+; 4bar, so a clock at/after :dur wraps positively back into a scene.
+(transport :bpm 120 :meter [4 4] :dur 4bar :end loop)
+
+(scene :name intro :at 0b :dur 6b
+  (track :target level
+    (key :at 0b :value 0.1)
+    (key :at 6b :value 0.7))
+  (track :target sweep :expr scene-phase))
+
+(scene :name drop :at 4b :dur 8b
+  (track :target level
+    (key :at 0b :value 0.9)
+    (key :at 8b :value 0.3))
+  (track :target pulse :expr scene-beat))
