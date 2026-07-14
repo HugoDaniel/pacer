@@ -65,3 +65,46 @@ test "sjon dependency wiring: tick grid + trig kernels reachable" {
     try std.testing.expectEqual(@as(i64, 0), @rem(sjon.Pattern.PPC, 16));
     try std.testing.expectEqual(@as(f64, 1.0), sjon.trig.exp64(0.0));
 }
+
+test "sjon PatternQuery reachable: a fastcat literal subdivides one cycle" {
+    // 03 Phase 0 feasibility spike — pacer will drive `:pattern` tracks by
+    // consuming SJON's deterministic pattern engine (`query(window) ->
+    // [Hap]`). Prove that surface links and runs through the path dep (built
+    // `plugin-exec = false`): parse a pattern, query one cycle, read the
+    // haps. `[bd hh sn cp]` is a fastcat — four bare-symbol `pure`s tiling
+    // one cycle left to right. One pattern cycle maps to one bar because
+    // `Pattern.PPC` IS pacer's per-bar tick count, so the four haps land on
+    // exact quarter-bar boundaries via integer tick math (no f64) — the
+    // determinism `:pattern` inherits for free.
+    const gpa = std.testing.allocator;
+    const PQ = sjon.PatternQuery;
+    const PPC = sjon.Pattern.PPC;
+
+    var tree = try sjon.parse(gpa, "[bd hh sn cp]");
+    defer tree.deinit();
+
+    // Empty schema: a pure-literal pattern has no `(pure <form>)` expression
+    // leaf, so the per-hap `Expr` dry-run never consults it.
+    var result = try PQ.queryTree(
+        gpa,
+        &tree,
+        tree.root[0],
+        sjon.Schema.Schema.init(&.{}),
+        PQ.Span.init(0, PPC),
+        0,
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.diagnostics.len);
+    try std.testing.expectEqual(@as(usize, 4), result.haps.len);
+
+    // Structural landing: hap i covers [i·PPC/4, (i+1)·PPC/4] and carries the
+    // i-th symbol — the query is a pure function of the tick grid.
+    const names = [_][]const u8{ "bd", "hh", "sn", "cp" };
+    const step = @divExact(PPC, 4);
+    for (result.haps, 0..) |h, i| {
+        try std.testing.expect(h.value.eql(.{ .symbol = names[i] }));
+        try std.testing.expectEqual(@as(i64, @intCast(i)) * step, h.timing.part.begin);
+        try std.testing.expectEqual(@as(i64, @intCast(i + 1)) * step, h.timing.part.end);
+    }
+}
