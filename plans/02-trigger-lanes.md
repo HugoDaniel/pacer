@@ -181,3 +181,58 @@ scene-window gate already brackets trigger rows (Phase 1/2 scened triggers carry
 audit-diagnostics` **27/27** (no new code — cap/overflow/unknown-target/trigger_invalid all
 reused); `zig build verify` green — native corpus **14/14 byte-identical** + wasm parity
 **46/46**; `zig build corpus` 14/14. No wire bytes moved for the existing corpus.
+
+### Phase 3 — eval (done, 2026-07-14)
+
+**RED first.** With the `.trigger => {}` no-op still in `Eval` (Phase 2 carry-forward), added
+five Phase 3 tests and ran `zig build test` → **4 failed**: every value-expecting probe got
+an omitted (len-0) write. Green after replacing the no-op with an `evalTrigger` arm. (The
+two omit-only checks and the byte-identical determinism test passed under the no-op — a
+trigger that writes nothing is still deterministic — so they guard the seam rather than
+drive it.)
+
+**The eval arm.** `evalTrigger(map, track, sched, t, cache)` samples the schedule at the
+already-wrapped, already-scene-gated tick `t` and returns `?Writes.Entry` (`null` before the
+first event → the write is OMITTED, like an expr-NaN or an out-of-window scene, so *whether*
+a trigger writes at time t is a pure function of t):
+- **periodic** — `k = @divFloor(t − offset, every)`; `k < 0` ⇒ omit; else `event = offset +
+  k·every`, and the schedule is unbounded so `span = every` (always a next event). One
+  integer floor-division, no materialized schedule.
+- **explicit `:at`** — `t < at[0]` ⇒ omit; else the last `at[k] ≤ t` via the SAME
+  near-monotonic cursor cache keyframes use (`seg_cache[i]`, restart-on-backwards-seek), then
+  `span = at[k+1] − at[k]`, or `0` for the last event.
+
+**The four lanes** (frozen order, truncated to the target's `ncomp` — lanes above `ncomp`
+stay zeroed in the entry, exactly like a key track's unused components):
+1. `phase` — `(t − event)/span` ∈ [0,1); `span == 0` (last explicit event) holds **1.0**.
+2. `count` — the 0-based event index `k` as f32.
+3. `gate` — **1.0** exactly on the event tick (`t − event == 0`), else 0.0 — structural, like
+   a key landing on its own value.
+4. `beats-since` — `(t − event)/ppb`, i.e. `map.beatOf(t − event)`.
+
+Each lane is an i64 tick delta narrowed to f32 ONLY here at emission; `phase` and
+`beats-since` are each one f64 division in the documented op order (`f64(delta) / f64(span)`
+and `beatOf`), so the golden pins byte-for-byte. **Loop wrap** needs no special handling: the
+caller wraps `t` before the switch, so `count`/`gate`/`phase` reset per local timeline for
+free (tested: 9b under a 2-bar loop reads `count 0` / `gate 1`, not the unwrapped `k=4`).
+**Scened triggers** reuse the caller's window gate + the Phase 2 absolute-tick fold, so
+`evalTrigger` is scene-agnostic (tested: a scene at 4b with `:offset 1b` first fires at 5b,
+falls silent at the 12b window end).
+
+**No wire / no diagnostics.** Eval-only: no `Compile.Code`, no `'PAC*'` byte moved, no corpus
+case yet (Phase 4). The module header gained a "Trigger tracks:" sentence beside the keyframe
+/ expr descriptions.
+
+**Gate.** `zig build test` exit 0 (5 new Phase 3 trigger tests green); `zig build verify`
+green — native corpus **14/14 byte-identical** + wasm parity **46/46**; `zig build
+audit-diagnostics` **27/27** (unchanged — Phase 3 adds no code).
+
+**Carry-forward for Phase 4 (corpus + parity + docs).** New corpus case `trigger-basic`:
+a periodic ncomp-4 target + an explicit-list ncomp-1 target, with `times.sjon` hitting a
+pre-first-event tick (omitted write), exact event ticks (gate 1), a mid-interval, a
+held-last-event, and a loop wrap. `zig build corpus -- --update` then REVIEW the diff (this
+is the first golden to carry `source == 2` / a `"trigger"` meta row and trigger writes).
+npm needs no driver code (trigger writes are ordinary `'PACW'` entries) but add one
+`npm/pacer` test asserting a trigger write flows through `toUniforms`, and decode `source ==
+2` in the meta mirror if the JS names track sources. Update `CLAUDE.md`'s surface table only
+if a row is now inaccurate.

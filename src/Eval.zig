@@ -9,7 +9,12 @@
 //! node is re-evaluated against the compile result's tree with the
 //! time env bound (`ExprTrack.evalAt`), allocating only from a fixed
 //! scratch zone (`ExprTrack.SCRATCH_BYTES`, reset per track) — the gpa
-//! is never touched on the frame path either way.
+//! is never touched on the frame path either way. Trigger tracks:
+//! `evalTrigger` finds the last event ≤ t (periodic: one integer
+//! `divFloor`; explicit: the same near-monotonic cursor cache as
+//! keyframes) and writes the (phase, count, gate, beats-since) lanes,
+//! each an i64 tick delta through one f64 division, truncated to the
+//! target's ncomp — before the first event the write is omitted.
 //!
 //! Boundary semantics (load-bearing for the corpus): before a track's
 //! first key it holds the first value; after the last, the last
@@ -292,10 +297,15 @@ pub const Evaluator = struct {
                     };
                     n += 1;
                 },
-                .trigger => {
-                    // Phase 2 builds the trigger row into the table; the
-                    // eval lanes (phase/count/gate/beats-since) land in
-                    // Phase 3. Until then a trigger contributes no write.
+                .trigger => |*sched| {
+                    // Resolve the lanes for the current event; before the
+                    // first event the write is OMITTED (like an expr-NaN /
+                    // an out-of-window scene), keeping the buffer a pure
+                    // function of time.
+                    if (evalTrigger(&table.transport.map, track, sched, t, &self.seg_cache[i])) |entry| {
+                        self.entries[n] = entry;
+                        n += 1;
+                    }
                 },
             }
         }
@@ -370,6 +380,76 @@ fn evalKeyTrack(table: *const TrackTable, track: *const TrackTable.Track, t: Tic
     return entry;
 }
 
+/// Sample a `(trigger …)` schedule at wrapped tick `t` into a write entry,
+/// or `null` before the first event (the write is omitted). The schedule's
+/// ticks are absolute (scene start already folded in), so the scene-window
+/// gate in the caller is the only scene handling needed. `cache` holds the
+/// last `:at` cursor (indexed by track position); periodic schedules divide
+/// and never touch it.
+///
+/// Lanes, in the frozen order, truncated to the target's `ncomp`:
+///   [0] phase       — `(t − event)/span` ∈ [0,1); a periodic schedule
+///       always has a next event (span = `every`), the last explicit `:at`
+///       event holds 1.0;
+///   [1] count       — 0-based event index as f32;
+///   [2] gate        — 1.0 exactly on the event tick, else 0.0 (structural);
+///   [3] beats-since — `(t − event)/ppb` (= `map.beatOf`).
+/// Each derives from an i64 tick delta through ONE f64 division (the eval
+/// seam) and is narrowed to f32 only here at emission.
+fn evalTrigger(
+    map: *const TimeMap,
+    track: *const TrackTable.Track,
+    sched: *const TrackTable.Trigger,
+    t: Tick,
+    cache: *u32,
+) ?Writes.Entry {
+    var event_tick: Tick = undefined;
+    var count: Tick = undefined;
+    // Span to the next event; 0 = no next (last `:at` event) → phase holds 1.
+    var span: Tick = 0;
+    switch (sched.*) {
+        .periodic => |p| {
+            std.debug.assert(p.every > 0);
+            const k = @divFloor(t - p.offset, p.every);
+            if (k < 0) return null; // before the first event
+            event_tick = p.offset + k * p.every;
+            count = k;
+            span = p.every; // unbounded schedule — always a next event
+        },
+        .at => |ticks| {
+            std.debug.assert(ticks.len >= 1);
+            if (t < ticks[0]) return null; // before the first event
+            // Resume from the cached cursor (playhead near-monotonic),
+            // restart on a backwards seek, advance forwards — as evalKeyTrack.
+            var i: usize = cache.*;
+            if (i >= ticks.len or ticks[i] > t) i = 0;
+            while (i + 1 < ticks.len and ticks[i + 1] <= t) : (i += 1) {}
+            cache.* = @intCast(i);
+            event_tick = ticks[i];
+            count = @intCast(i);
+            span = if (i + 1 < ticks.len) ticks[i + 1] - event_tick else 0;
+        },
+    }
+
+    const since = t - event_tick; // ticks since the event (≥ 0)
+    std.debug.assert(since >= 0);
+    const phase: f64 = if (span == 0)
+        1.0
+    else
+        @as(f64, @floatFromInt(since)) / @as(f64, @floatFromInt(span));
+    const gate: f64 = if (since == 0) 1.0 else 0.0;
+    const lanes = [4]f64{ phase, @floatFromInt(count), gate, map.beatOf(since) };
+
+    var entry: Writes.Entry = .{
+        .target_id = track.target_id,
+        .flags = track.registry,
+        .ncomp = track.ncomp,
+        .value = .{ 0, 0, 0, 0 },
+    };
+    for (0..track.ncomp) |c| entry.value[c] = @floatCast(lanes[c]);
+    return entry;
+}
+
 // ---------------------------------------------------------------------------
 // Tests (compile a real score; golden values hand-computed)
 // ---------------------------------------------------------------------------
@@ -379,6 +459,14 @@ const t_ = std.testing;
 const targets = [_]Compile.Target{
     .{ .name = "radius", .ncomp = 1 },
     .{ .name = "tint", .ncomp = 3 },
+};
+
+// Trigger lanes want a full-width and a scalar target: `pulse` (ncomp 4)
+// reads all four lanes (phase, count, gate, beats-since); `hit` (ncomp 1)
+// keeps only `phase` and proves the higher lanes are zeroed by truncation.
+const trigger_targets = [_]Compile.Target{
+    .{ .name = "pulse", .ncomp = 4 },
+    .{ .name = "hit", .ncomp = 1 },
 };
 
 fn compileScoreWith(source: [:0]const u8, tgts: []const Compile.Target) !Compile.CompileResult {
@@ -957,4 +1045,159 @@ test "scene window gate: loop wrap re-enters the scene" {
     try t_.expectEqual(@as(f32, 0.2), wrapped[0].value[0]);
     // 16 beats wraps to 0 (before the window) → nothing written.
     try t_.expectEqual(@as(usize, 0), ev.evalTicks(try map.tickFromBeats(16)).len);
+}
+
+// ---------------------------------------------------------------------------
+// (trigger …) event lanes — plan 02 Phase 3. At wrapped tick T the trigger
+// finds the last event ≤ T (none yet → write OMITTED) and writes, truncated
+// to the target's ncomp: [0] phase = (T − event)/span, [1] count = event
+// index, [2] gate = 1.0 on the exact event tick else 0.0, [3] beats-since =
+// (T − event)/ppb. Each lane is an i64 tick delta through ONE f64 division
+// (the eval seam), narrowed to f32 only at emission. A periodic schedule
+// always has a next event (span = every); the last explicit :at event holds
+// phase 1.0.
+// ---------------------------------------------------------------------------
+
+test "trigger periodic: exact tick gate=1 phase=0 count=k; mid phase=(T-event)/every, beats-since=(T-event)/ppb" {
+    var r = try compileScoreWith(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(trigger :target pulse :every 2b :offset 1b)
+    , &trigger_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // Before the first event (offset 1b): the write is omitted.
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(0).len);
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(try map.tickFromBeats(1) - 1).len);
+
+    // First event (k=0) at 1b: gate 1, phase 0, count 0, beats-since 0.
+    const e0 = ev.evalTicks(try map.tickFromBeats(1));
+    try t_.expectEqual(@as(usize, 1), e0.len);
+    try t_.expectEqual(@as(u8, 4), e0[0].ncomp);
+    try t_.expectEqual(@as(f32, 0), e0[0].value[0]); // phase
+    try t_.expectEqual(@as(f32, 0), e0[0].value[1]); // count
+    try t_.expectEqual(@as(f32, 1), e0[0].value[2]); // gate
+    try t_.expectEqual(@as(f32, 0), e0[0].value[3]); // beats-since
+
+    // Third event (k=2) at 5b (= 1b + 2·2b): count 2, gate 1.
+    const e2 = ev.evalTicks(try map.tickFromBeats(5));
+    try t_.expectEqual(@as(f32, 2), e2[0].value[1]); // count
+    try t_.expectEqual(@as(f32, 1), e2[0].value[2]); // gate
+
+    // Mid-interval at 2b (event 1b, next 3b): phase 0.5, count 0, gate 0,
+    // beats-since 1.0 (one beat elapsed).
+    const em = ev.evalTicks(try map.tickFromBeats(2));
+    try t_.expectEqual(@as(f32, 0.5), em[0].value[0]); // phase
+    try t_.expectEqual(@as(f32, 0), em[0].value[1]); // count
+    try t_.expectEqual(@as(f32, 0), em[0].value[2]); // gate
+    try t_.expectEqual(@as(f32, 1), em[0].value[3]); // beats-since
+}
+
+test "trigger :at explicit: last event holds phase 1.0; ncomp-1 keeps phase, zeroes count/gate/beats-since" {
+    var r = try compileScoreWith(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(trigger :target hit :at [2b 4b 8b])
+    , &trigger_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // Before the first hit: omitted.
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(try map.tickFromBeats(1)).len);
+
+    // First hit at 2b (k=0, next 4b): phase 0. ncomp-1 → only value[0].
+    const h0 = ev.evalTicks(try map.tickFromBeats(2));
+    try t_.expectEqual(@as(usize, 1), h0.len);
+    try t_.expectEqual(@as(u8, 1), h0[0].ncomp);
+    try t_.expectEqual(@as(f32, 0), h0[0].value[0]); // phase
+    // Truncation: the count/gate/beats-since lanes stay zeroed above ncomp.
+    try t_.expectEqual(@as(f32, 0), h0[0].value[1]);
+    try t_.expectEqual(@as(f32, 0), h0[0].value[2]);
+    try t_.expectEqual(@as(f32, 0), h0[0].value[3]);
+
+    // Mid at 3b (event 2b, span 2b): phase 0.5.
+    try t_.expectEqual(@as(f32, 0.5), ev.evalTicks(try map.tickFromBeats(3))[0].value[0]);
+
+    // Second hit exact 4b (k=1): gate would be lane 2 = 1.0, but ncomp-1
+    // truncates it away → value[2] stays 0; phase 0 in lane 0.
+    const h1 = ev.evalTicks(try map.tickFromBeats(4));
+    try t_.expectEqual(@as(f32, 0), h1[0].value[0]); // phase
+    try t_.expectEqual(@as(f32, 0), h1[0].value[2]); // gate truncated
+
+    // Last hit exact 8b (k=2, no next): phase holds 1.0.
+    try t_.expectEqual(@as(f32, 1), ev.evalTicks(try map.tickFromBeats(8))[0].value[0]);
+    // After the last hit (10b): phase still held at 1.0.
+    try t_.expectEqual(@as(f32, 1), ev.evalTicks(try map.tickFromBeats(10))[0].value[0]);
+}
+
+test "trigger periodic under loop: wrap resets count on the local timeline" {
+    var r = try compileScoreWith(
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(trigger :target pulse :every 2b :offset 1b)
+    , &trigger_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // 2-bar loop = 8 beats; events at 1b,3b,5b,7b. 9b wraps to 1b → the
+    // count resets to 0 (not the unwrapped k=4) and the exact event gates.
+    const w = ev.evalTicks(try map.tickFromBeats(9));
+    try t_.expectEqual(@as(usize, 1), w.len);
+    try t_.expectEqual(@as(f32, 0), w[0].value[1]); // count reset by wrap
+    try t_.expectEqual(@as(f32, 1), w[0].value[2]); // gate: exact event after wrap
+}
+
+test "scened trigger: events fold the scene start; the window gate brackets the write" {
+    var r = try compileScoreWith(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(scene :name drop :at 4b :dur 8b
+        \\  (trigger :target pulse :every 2b :offset 1b))
+    , &trigger_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // Window [4b, 12b). First event = scene start 4b + offset 1b = 5b.
+    // Before the window (3b): gated out.
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(try map.tickFromBeats(3)).len);
+    // Window open (4b): inside the gate, but the first event (5b) hasn't
+    // fired yet → still omitted.
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(try map.tickFromBeats(4)).len);
+    // Exact first event 5b: gate 1, count 0.
+    const e0 = ev.evalTicks(try map.tickFromBeats(5));
+    try t_.expectEqual(@as(usize, 1), e0.len);
+    try t_.expectEqual(@as(f32, 1), e0[0].value[2]); // gate
+    try t_.expectEqual(@as(f32, 0), e0[0].value[1]); // count
+    // Window end (12b, exclusive): gated out even though the periodic
+    // schedule would otherwise fire.
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(try map.tickFromBeats(12)).len);
+}
+
+test "triggers: same time twice → byte-identical encoded writes (cold cursor vs warm)" {
+    var r = try compileScoreWith(
+        \\(transport :bpm 97 :meter [7 8] :dur 4bar :end loop)
+        \\(trigger :target pulse :every 3b :offset 1b)
+        \\(trigger :target hit :at [2b 5b 11b])
+    , &trigger_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    var buf_a: [Writes.encodedLen(2)]u8 align(4) = undefined;
+    var buf_b: [Writes.encodedLen(2)]u8 align(4) = undefined;
+    const times = [_]f64{ 0.0, 0.123456789, 1.5, 7.25, -2.5, 1e-9, 30.0 };
+    for (times) |s| {
+        const a = try Writes.encode(try ev.evalSeconds(s), &buf_a);
+        // A fresh (cold-cursor) evaluator must agree byte-for-byte — the
+        // :at cursor cache is a pure optimization, never semantics.
+        var ev2 = try Evaluator.init(t_.allocator, &r);
+        defer ev2.deinit();
+        const b = try Writes.encode(try ev2.evalSeconds(s), &buf_b);
+        try t_.expectEqualSlices(u8, a, b);
+    }
 }
