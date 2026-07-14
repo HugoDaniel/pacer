@@ -1,0 +1,13 @@
+; transport-emit: built-in clock lanes (`:emit …`) under the corpus gate.
+; beat/bar/phase broadcast straight from the transport env — the same
+; numbers an `:expr` track binds, one f32 truncation at emission. An
+; explicit (track :target beat …) overrides the emitted `beat` lane:
+; emit lands FIRST, the track's write lands later and wins for in-order
+; consumers (bar and phase have no track, so their emitted lane stands).
+; :dur 1bar + :end hold pins the clamp edge — past the score length every
+; lane freezes at the last tick, exactly as a keyed track clamps.
+(transport :bpm 120 :meter [4 4] :dur 1bar :end hold :emit [beat bar phase])
+
+(track :target beat
+  (key :at 0b :value 10.0)
+  (key :at 4b :value 20.0))

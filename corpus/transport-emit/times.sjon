@@ -1,0 +1,16 @@
+; transport-emit harness. Emit resolves targets BY EXACT NAME, so the
+; join names the reserved lanes literally: beat (id 0) also carries the
+; overriding keyed track; bar (id 1) and phase (id 2) are emit-only.
+; :dur 1bar = 4 beats = 2.0 s at 120 bpm 4/4. Each eval pins that the
+; emit lanes land first (ids 0,1,2 in `:emit` order) and the track's
+; `beat` write (id 0 again) lands last and wins.
+(target beat :registry 0)   ; id 0 — emitted lane + overriding keyed track
+(target bar :registry 0)    ; id 1 — emitted lane only
+(target phase :registry 0)  ; id 2 — emitted lane only
+
+(times
+  "0000000000000000" ; 0.0 s — beat 0 / bar 0 / phase 0; track overrides beat → 10.0
+  "3FE0000000000000" ; 0.5 s — 1 beat: bar 0.25 / phase 0.25; track beat → 12.5
+  "4000000000000000" ; 2.0 s — exactly :dur (4 beats): bar 1 / phase 0; track beat → 20.0
+  "4008000000000000" ; 3.0 s — past :dur: :end hold clamps to the boundary (identical writes)
+)
