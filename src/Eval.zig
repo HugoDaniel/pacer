@@ -123,7 +123,7 @@ pub const Evaluator = struct {
         @memset(seg_cache, 0);
         const entries = try arena.allocator().alloc(
             Writes.Entry,
-            table.tracks.len + table.controls.len + MAX_DYNAMIC_CONTROLS,
+            table.transport.emit.len + table.tracks.len + table.controls.len + MAX_DYNAMIC_CONTROLS,
         );
         var has_expr = false;
         for (table.tracks) |tr| {
@@ -230,6 +230,21 @@ pub const Evaluator = struct {
             b.value = slot.live orelse ctl.value;
         }
         var n: usize = 0;
+        // Built-in clock lanes (`:emit …`) land FIRST — a track or control
+        // on the same target, written later, overrides an emitted lane for
+        // in-order consumers. Each lane is its reserved name's env value at
+        // the wrapped tick, truncated to f32 exactly as a scalar `:expr`
+        // track (`ExprTrack.coerce`), so the two are bit-identical.
+        for (table.transport.emit) |lane| {
+            const v: f32 = @floatCast(ExprTrack.emitValue(&table.transport, t, lane.name));
+            self.entries[n] = .{
+                .target_id = lane.target_id,
+                .flags = lane.registry,
+                .ncomp = 1,
+                .value = .{ v, 0, 0, 0 },
+            };
+            n += 1;
+        }
         for (table.tracks, 0..) |*track, i| {
             switch (track.source) {
                 .keys => {
@@ -345,12 +360,16 @@ const targets = [_]Compile.Target{
     .{ .name = "tint", .ncomp = 3 },
 };
 
-fn compileScore(source: [:0]const u8) !Compile.CompileResult {
-    var r = try Compile.compile(t_.allocator, source, &targets);
+fn compileScoreWith(source: [:0]const u8, tgts: []const Compile.Target) !Compile.CompileResult {
+    var r = try Compile.compile(t_.allocator, source, tgts);
     errdefer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t_.expect(r.ok());
     return r;
+}
+
+fn compileScore(source: [:0]const u8) !Compile.CompileResult {
+    return compileScoreWith(source, &targets);
 }
 
 test "keyframe interpolation: golden values at beat positions" {
@@ -727,5 +746,110 @@ test "segment cache survives scrubbing backwards" {
         defer cold.deinit();
         const expect = cold.evalTicks(try map.tickFromBeats(beats))[0].value[0];
         try t_.expectEqual(expect, warm);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// (transport :emit …) clock lanes — evaluated before tracks, bit-exact
+// with an equivalent :expr track (same ExprTrack env), wrapped like the
+// clock. Emit targets are named after the reserved time names.
+// ---------------------------------------------------------------------------
+
+// Emit targets first, then a `_ref` target per lane carrying the same
+// value via an :expr track — the two must land byte-identically.
+const emit_ref_targets = [_]Compile.Target{
+    .{ .name = "beat", .ncomp = 1 },
+    .{ .name = "bar", .ncomp = 1 },
+    .{ .name = "phase", .ncomp = 1 },
+    .{ .name = "t", .ncomp = 1 },
+    .{ .name = "beat_ref", .ncomp = 1 },
+    .{ .name = "bar_ref", .ncomp = 1 },
+    .{ .name = "phase_ref", .ncomp = 1 },
+    .{ .name = "t_ref", .ncomp = 1 },
+};
+
+test "emit lanes: bit-exact with an equivalent :expr track" {
+    var r = try compileScoreWith(
+        \\(transport :bpm 125 :meter [4 4] :emit [beat bar phase t])
+        \\(track :target beat_ref :expr beat)
+        \\(track :target bar_ref :expr bar)
+        \\(track :target phase_ref :expr phase)
+        \\(track :target t_ref :expr t)
+    , &emit_ref_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // At every probe the four emit lanes lead (document order), then the
+    // four ref tracks — each emit value equals its ref, bit-for-bit.
+    for ([_]f64{ 0, 1.5, 2.333, 7.1, -3.25 }) |beats| {
+        const w = ev.evalTicks(try map.tickFromBeats(beats));
+        try t_.expectEqual(@as(usize, 8), w.len);
+        try t_.expectEqual(w[4].value[0], w[0].value[0]); // beat  vs beat_ref
+        try t_.expectEqual(w[5].value[0], w[1].value[0]); // bar   vs bar_ref
+        try t_.expectEqual(w[6].value[0], w[2].value[0]); // phase vs phase_ref
+        try t_.expectEqual(w[7].value[0], w[3].value[0]); // t     vs t_ref
+        // Scalar lanes, higher components cleared.
+        try t_.expectEqual(@as(u8, 1), w[0].ncomp);
+        try t_.expectEqual(@as(f32, 0), w[0].value[1]);
+    }
+
+    // Emit lanes carry their resolved target ids in :emit order.
+    const w0 = ev.evalTicks(0);
+    try t_.expectEqual(@as(u16, 0), w0[0].target_id); // beat  = targets[0]
+    try t_.expectEqual(@as(u16, 1), w0[1].target_id); // bar
+    try t_.expectEqual(@as(u16, 2), w0[2].target_id); // phase
+    try t_.expectEqual(@as(u16, 3), w0[3].target_id); // t
+}
+
+test "emit lanes: write order emit → track → control on the same target" {
+    // All three write `beat`; consumers apply in order, so the emitted
+    // lane lands first and is overridden by the track, then the control.
+    var r = try compileScoreWith(
+        \\(transport :bpm 120 :emit [beat])
+        \\(control :id knob :target beat :value 7.0)
+        \\(track :target beat
+        \\  (key :at 0b :value 5.0)
+        \\  (key :at 4b :value 9.0))
+    , &emit_ref_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    const w = ev.evalTicks(0);
+    try t_.expectEqual(@as(usize, 3), w.len);
+    try t_.expectEqual(@as(u16, 0), w[0].target_id); // emit beat
+    try t_.expectEqual(@as(f32, 0), w[0].value[0]); //   = 0 at beat 0
+    try t_.expectEqual(@as(u16, 0), w[1].target_id); // track beat
+    try t_.expectEqual(@as(f32, 5), w[1].value[0]); //    holds first key
+    try t_.expectEqual(@as(u16, 0), w[2].target_id); // control beat
+    try t_.expectEqual(@as(f32, 7), w[2].value[0]); //    pin wins last
+}
+
+test "emit lanes: end-behavior clamps/wraps the clock like tracks" {
+    // hold: past :dur the beat lane freezes at the score length.
+    {
+        var r = try compileScoreWith(
+            \\(transport :bpm 120 :meter [4 4] :dur 1bar :end hold :emit [beat])
+        , &emit_ref_targets);
+        defer r.deinit();
+        var ev = try Evaluator.init(t_.allocator, &r);
+        defer ev.deinit();
+        const map = &r.table.?.transport.map;
+        // 1 bar = 4 beats; beat 6 clamps to beat 4.
+        try t_.expectEqual(@as(f32, 4), ev.evalTicks(try map.tickFromBeats(6))[0].value[0]);
+    }
+    // loop: the beat lane wraps with the playhead.
+    {
+        var r = try compileScoreWith(
+            \\(transport :bpm 120 :meter [4 4] :dur 1bar :end loop :emit [beat])
+        , &emit_ref_targets);
+        defer r.deinit();
+        var ev = try Evaluator.init(t_.allocator, &r);
+        defer ev.deinit();
+        const map = &r.table.?.transport.map;
+        // beat 5 wraps to beat 1 inside the 4-beat loop.
+        try t_.expectEqual(@as(f32, 1), ev.evalTicks(try map.tickFromBeats(5))[0].value[0]);
     }
 }

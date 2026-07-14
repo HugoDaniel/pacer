@@ -165,6 +165,22 @@ fn bindTime(transport: *const TrackTable.Transport, tick: Tick, buf: *[MAX_BINDI
     return buf[0..n];
 }
 
+/// The f64 value of one emittable clock name at `tick`, read straight
+/// out of the env `bindTime` builds — no formula is re-derived here, so a
+/// `(transport :emit …)` lane and an equivalent `:expr` track land
+/// bit-identically (`Eval` truncates this to f32 exactly as `coerce`
+/// does for a scalar expr). `EmitName` is a subset of the bindTime names
+/// (`beat`, `bar`, `phase`, `bpm`, `t` — all `.number`), so the lookup
+/// never misses and the value always projects to f64.
+pub fn emitValue(transport: *const TrackTable.Transport, tick: Tick, name: TrackTable.EmitName) f64 {
+    var buf: [MAX_BINDINGS]Expr.Env.Binding = undefined;
+    const wanted = @tagName(name);
+    for (bindTime(transport, tick, &buf)) |b| {
+        if (std.mem.eql(u8, b.name, wanted)) return b.value.toF64().?;
+    }
+    unreachable;
+}
+
 /// Apply the result contract: number / ncomp-vector, all components
 /// finite f64 before the IEEE-pinned f64→f32 truncation. Lanes ≥ ncomp
 /// are zero (the `TrackTable.Key.value` invariant, kept here too).
