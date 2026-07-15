@@ -128,13 +128,15 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 09 — Phase 2 is next: UTF-8 byte spans → editor coordinates.** Open
-`plans/09-studio-workflow-fixes.md` and execute Phase 2 under the TDD/compaction discipline.
-**09 Phase 1 (timeline honors the score's meter) is DONE** (2026-07-15, pngine `962698a`) — see
-that plan's Progress log. Phase 2's byte-index util (`lib/score/byte-index.ts`) is a dependency
-07 (timeline-editor) wants, so finishing 09 clears the way for the rest of Wave 2 (07 P1–4 →
-05 array-targets → benchmark #2). The board box for item 09 stays ☐ until all three phases land
-(Phase 3 = named checkpoints); Phases 2 and 3 are independent — compact between.
+→ **Wave 2, item 09 — Phase 3 is next: named score/document checkpoints.** Open
+`plans/09-studio-workflow-fixes.md` and execute Phase 3 under the TDD/compaction discipline.
+**09 Phases 1 & 2 are DONE** — Phase 1 (timeline honors the score's meter, pngine `962698a`) and
+Phase 2 (UTF-8 byte spans → editor char offsets, pngine `52210b5`); see that plan's Progress log.
+The Phase 2 byte-index util (`studio/editor/src/lib/score/byte-index.ts`) now exists — 07
+(timeline-editor) should reuse it, not rebuild it (Decision-log 2026-07-15). After Phase 3 lands,
+tick item 09's board box and move to the rest of Wave 2 (07 P1–4 → 05 array-targets → benchmark
+#2). Phase 3 (a `CHECKPOINT` marker in the NDJSON action log + `listCheckpoints`/restore) is
+independent of the first two — this is a clean compaction boundary.
 
 **Wave 1 is COMPLETE** — item 8 (studio refresh + benchmark #1) closed 2026-07-15; the user's
 studio A/B of the tunnel rewrite was **indistinguishable** (drop burst at beat 160 + decay,
@@ -439,3 +441,16 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   selection — unchanged), which also confirms the score `spin` write routes end-to-end through the
   studio to `motion.spin` (the one link the headless pacer.wasm validation couldn't cover). Item-8
   board box ticked → Wave 1 COMPLETE; Wave 2 (09 studio-workflow-fixes) is next.
+- 2026-07-15 — **09 Phase 2 (UTF-8 byte spans → editor coordinates) DONE — pngine `52210b5`.**
+  Cross-plan fact for **07 (timeline-editor)**: the byte→char mapper now EXISTS at
+  `pngine/studio/editor/src/lib/score/byte-index.ts` — `byteToCharIndex(text)` (dense per-byte
+  table, O(1) lookups; multi-byte offsets round down to the code-point start, out-of-range clamps
+  to `[0, length]`) + `remapScoreDiagnostics(text, diags)` (pure, returns fresh records). 07 must
+  REUSE it for any span→editor mapping, not rebuild. The seam: pacer diagnostic/meta spans are
+  UTF-8 byte offsets (per `pacer/npm/pacer/src/index.js`), CodeMirror indexes by UTF-16 code unit,
+  so a non-ASCII byte before a span shifts every later coordinate. Routed the two armed-score
+  `onScoreDiagnostics` emits in `preview.ts` through the remap, so `ScoreDiagnostic.start/end` now
+  carry EDITOR (char) coordinates, not bytes — the type's doc comment was flipped to match. No
+  pacer wire surface touched; this is a studio-internal consumer of an already-stable byte contract.
+  Meta spans (control `valueSpan`, scene `nameSpan`) have no editor coordinate-consumer yet, so
+  they were left as-is — remap them at the point 07 first uses them as positions.
