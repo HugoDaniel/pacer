@@ -72,3 +72,54 @@ uniforms message).
 Gate: editor tests + manual studio smoke.
 
 ## Progress log
+
+### Phase 0 — investigation → DONE (2026-07-15, pngine `1095d61`)
+
+**RED→GREEN.** Extracted `buildRegistries` (+ `UniformReflection`) out of
+`preview.ts`'s closure into a pure `studio/editor/src/lib/preview/registries.ts`
+so it unit-tests with `node --test` and no worker. Added `registries.test.js` (7
+tests): a fake reflection with `env: array<f32,16>` (size 256), `array<f32,4>`
+(size 64), `mat4x4f` (size 64), and an odd non-÷4 size — all asserted **DROPPED
+today** (ncomp = size/4 ∉ 1..4), with scalars + vec2/3/4 kept in reflection
+order. The array cases are explicitly commented as the baseline Phase 1 changes.
+Gate green: tsc 0, svelte-check 0 err (5 pre-existing App warnings), biome clean,
+full editor suite **1603/1603** (+7). Behavior-preserving extraction — no pngine
+worker touched.
+
+**Delivery option — (b) is viable and preferred; (a) needs a pngine change.**
+Traced the write path end-to-end:
+
+- **Reflection reply** (`worker-core.js` `handleGetUniforms` ← `gpu.js`
+  `parseUniformTable`): per field `{ type, size, bufferId, offset }` — `size` =
+  field byte size, `offset` = byte offset in the buffer, `type` = a UT_* tag.
+  **No stride field, and no `UT_ARRAY` type** — `uniformToTypedArray` handles
+  only scalar / vec2–4 / mat3x3 / mat4x4; an array field falls through to the
+  f32 `default`.
+- **The write seam** (`gpu.js` `setUniforms` → `setUniform(name, value)`):
+  `uniformMap.get(name)` is a **whole-named-field lookup only** — no `name[i]`
+  parsing. It writes `uniformToTypedArray(value, type, size)` at `info.offset`,
+  and `uniformToTypedArray` **already accepts a JS array** and truncates to
+  `size` bytes (`gpu.js:878/886`). So `setUniform('env', [...64 floats])` writes
+  the whole array field today, unchanged.
+- **Where writes are applied (the chokepoint):** `renderFrame` /
+  `prefetchRange` → `uniformsAt(t)` → `toUniforms(writes, 0)` (pacer `route.js`
+  folds entries into `{ [name]: value }`, keyed by the literal target name) →
+  `worker.postMessage({type:'draw', uniforms})` → `gpu.setUniforms`. `uniformsAt`
+  is the single funnel feeding both live frames and the thumbnail strip.
+
+**Verdict:** **Option (b), studio-side coalescing** — no pngine code changes.
+pacer emits element targets (`env[3]=0.5`, `env[7]=1.0`); `toUniforms` yields
+`{ 'env[3]':0.5, 'env[7]':1.0 }`, whose keys match no reflection field, so
+`setUniform` silently drops them today. Phase 2 will coalesce those element
+writes at `uniformsAt` into one whole `env` array value (holes holding the
+previous frame's value) and hand it to the existing `setUniform('env', […])`.
+Option (a) (`name[i]` in the worker) is a genuine pngine change: `setUniform`
+would need `[i]` parsing **and** a stride the reflection doesn't carry — deferred
+unless (b) proves insufficient.
+
+**Array stride facts (WGSL uniform address space):** array elements stride to a
+16-byte boundary. `array<f32,16>` → stride 16 B, size 256 B = 64 f32 slots,
+element `i` at float index `i·4` (3 pad floats each). `array<vec4f,N>` → stride
+16 B, packs tight (element `i` at floats `i·4 .. i·4+3`, ncomp 4). The studio
+**derives** stride from this rule (always 16 B) rather than from the reflection —
+element count = `size / 16`, and it never asks pngine to grow its schema.

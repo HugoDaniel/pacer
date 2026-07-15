@@ -117,7 +117,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P5 | ☑ |
-| 2 | 05 array targets | ☐ |
+| 2 | 05 array targets · P0 ✓ | ☐ |
 | 2 | benchmark #2 | ☐ |
 | 3 | 06 tracker import | ☐ |
 | 3 | 10 audio bus | ☐ |
@@ -128,18 +128,22 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 05 — array-targets is next.** Open `plans/05-array-targets.md` and execute
-**Phase 0 (investigation, RED = a failing characterization test)** under the TDD/compaction
-discipline. It is **host-side only, no pacer core change** (`env[3]` is just a name in `'PACT'`):
-Phase 0 feeds a fake reflection with `env: array<f32,16>` through the studio's `buildRegistries`
-(`studio/editor/src/lib/preview/preview.ts`) and pins TODAY's behavior — such fields are silently
-dropped — then records which write-delivery option is viable ((a) extend pngine's worker
-`setUniforms` to accept `name[i]` at a computed byte offset, minding WGSL array stride; or (b)
-studio-side coalesce element writes into one whole-array value per frame, touching no pngine code —
-preferred for v1). Phase 1 = registry expansion + a visible `dropped` warning; Phase 2 = write
-delivery. Then **benchmark #2** (redo the North-Star ritual using the timeline editor + array lanes;
-the dots/word steppers `floor((beat−B)/1)` → a trigger `count` lane are the noted target), closing
-Wave 2. After that: Waves 3 (06 tracker-import → 10 audio-bus → 03 pattern-tracks) and 4.
+→ **Wave 2, item 05 — array-targets, Phase 1 is next.** Open `plans/05-array-targets.md` and
+execute **Phase 1 (registry expansion + `dropped` warning, RED first)** under the TDD/compaction
+discipline. It is **host-side only, no pacer core change** (`env[3]` is just a name in `'PACT'`).
+**Phase 0 is DONE** (pngine `1095d61`): `buildRegistries` is now a pure, unit-tested module
+(`studio/editor/src/lib/preview/registries.ts`) with the array-drop baseline pinned, and the
+delivery decision is settled — **option (b), studio-side coalescing, no pngine change** (the write
+seam `gpu.js` `setUniform` already writes a whole-array JS value at the field's byte offset; pacer's
+element writes `env[3]` are coalesced at `uniformsAt` into one `env` array per frame, holes holding
+last value). Uniform-space arrays stride 16 B/element, so the studio derives layout from `size/16`
+without asking pngine for stride. See plan 05's Phase 0 log for the full trace.
+Phase 1 (in `registries.ts`): expand `array<f32,16>` → 16 targets `env[0]`..`env[15]` ncomp 1,
+`array<vec4f,4>` → 4 targets ncomp 4, matrices → excluded but returned in a `dropped` list; surface
+`dropped` through the diagnostics/status channel. Phase 2 = the coalescing write delivery at
+`uniformsAt`. Then **benchmark #2** (redo the North-Star ritual using the timeline editor + array
+lanes; the dots/word steppers `floor((beat−B)/1)` → a trigger `count` lane are the noted target),
+closing Wave 2. After that: Waves 3 (06 tracker-import → 10 audio-bus → 03 pattern-tracks) and 4.
 
 **07 timeline-editor is COMPLETE** (all 5 phases, 2026-07-15) — the visual timeline ships end-to-end.
 Phase 1 (**anchors lib, pngine `5be6884`**) → `lib/score/anchors.ts`: `scoreAnchors(meta, source)`
@@ -550,3 +554,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   `applyEdits` — the commit-to-text pattern 07's "Why" cited) is a separate, non-timeline concern
   that belongs to whatever plan first needs live controls; it must NOT be bolted onto the timeline
   strip. No pacer wire surface touched (07 is entirely studio-side).
+- 2026-07-15 — **05 array-targets Phase 0 DONE — pngine `1095d61`; the a/b delivery decision is
+  settled as (b).** Extracted `buildRegistries` into a pure `lib/preview/registries.ts` (behavior-
+  preserving) and pinned the array/matrix drop-baseline with 7 characterization tests (editor suite
+  **1603/1603**). **Decision: option (b), studio-side coalescing — no pngine worker change.** The
+  write seam (`gpu.js` `setUniform` → `writeBuffer(buffer, offset, uniformToTypedArray(value, type,
+  size))`) already accepts a **whole-array JS value** and truncates to the field's byte `size`, so
+  the studio can drive `array<f32,N>` by writing the whole field at its reflected offset. Pacer's
+  per-element writes (`env[3]=0.5`) land in `toUniforms` as name-keyed entries that match no
+  reflection field (dropped today); Phase 2 will **coalesce them at `uniformsAt`** (the single funnel
+  feeding live frames + the thumbnail strip) into one `env` array per frame with **holes holding the
+  previous value**. The reflection carries `{type, size, bufferId, offset}` but **no stride and no
+  array type** — the studio derives layout from the WGSL rule (uniform-space arrays stride **16
+  B/element**; `array<f32,16>` = 256 B = 64 f32 slots, element `i` at float `i·4`; element count =
+  `size/16`), so pngine's reflection schema is never grown. Option (a) (`name[i]` in the worker) is
+  deferred unless (b) proves insufficient. No pacer wire surface touched (05 is host-side only).
