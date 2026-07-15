@@ -224,3 +224,73 @@ nothing exercises it against real wasm + a real shader. Phase 3 extends the
 demoscene template with `env: array<f32, 8>` driven by 8 tracks, adds a
 real-wasm integration test (an element write reaches the drawn uniforms), and a
 manual studio smoke.
+
+### Phase 3 — verification → **BLOCKED** (2026-07-15); user chose PAUSE & re-plan, no code
+
+**The end-to-end verification Phase 3 mandates ("verify in the running studio")
+surfaced that the host-side premise Phases 0–2 rest on is contradicted by real
+pngine reflection. No demoscene example or integration test was written — the
+feature does not connect to reality as built.**
+
+Before authoring anything I compiled real probe shaders through pngine's actual
+pipeline (`zig build run -- compile`) and dumped the PNGB uniform table the
+studio worker truly hands `buildRegistries` (`gpu.js parseUniformTable`,
+forwarded verbatim by `worker-core.js handleGetUniforms` as
+`{ type, size, bufferId, offset }` per field). Ground truth:
+
+| Probe (uniform) | What the studio sees |
+|---|---|
+| struct member `bands: array<vec4f, 2>` | field `bands` → **`type = 255` (unknown)**, `size = 32` |
+| bare binding `env: array<vec4f, 2>` | **absent** — no field at all |
+| `env: array<f32, 8>` | **compile error** — *"array with element stride 4 (uniform requires a multiple of 16)"* |
+
+**Why.** pngine's `UniformType.fromWgslType` (`src/bytecode/uniform_table.zig`)
+has **no `array<…>` case**, and the field flattener (`Emitter.zig flattenFields`)
+recurses only into nested *structs* — so an array member is a leaf stamped
+`unknown (255)`, **discarding the element type + count** that wgslender's own
+reflection JSON does carry (`"type": "array<vec4f, 2>"`). The PNGB uniform table
+therefore conveys, for any array, only `{ type: 255, size: <total bytes> }`.
+
+**Consequence.** `buildRegistries` (Phase 1) expands arrays by consulting a real
+vec/f32 `type` tag (`LANES_BY_TYPE`), but real pngine tags *every* array `255` →
+`LANES_BY_TYPE[255]` is undefined → the field is **dropped** as "unsupported".
+Phases 0–2 are unit-green only because their fixtures fed `type: 5 (UT_VEC4F)` /
+`type: 0 (UT_F32)` for arrays — values pngine never emits. From `{255, size}`
+alone the studio cannot even recover which array it is (`array<vec4f,2>` vs
+`array<vec2f,4>` both hide behind `255`), so host-side expansion is
+under-determined. And the plan's headline `env: array<f32,16>` → 16 scalar lanes
+is not merely un-reflected — it **cannot compile** as a uniform (WGSL's 16-B
+stride rule); the only efficient uniform array is `array<vec4f, N>`, lanes in 4s.
+
+This also re-frames Phase 0's finding: **option (b) coalescing was never the
+blocker.** The blocker is upstream — the reflection carries no array info to
+expand from. Phase 2's coalescer + Phase 1's expansion are correct *given* an
+array plan; they just never receive one from real pngine.
+
+**Options for the re-plan (user picks before any more 05 code):**
+
+- **(A) Host-side vec4 convention — no pngine change.** Redefine the array rule
+  to `type === 255 (unknown) && size > 0 && size % 16 === 0 ⇒ array<vec4f,
+  size/16>`, expanding into `base[i]` targets ncomp 4. Sound because a uniform
+  struct member that reflects `unknown` is in practice an array (matrices are
+  `6`/`7`, scalars/vecs are mapped), and vec4 is the only tight uniform element.
+  Cost: **vec4-grouped lanes only** (no scalar-lane arrays — the `array<f32,16>`
+  headline is retired), and P1–P2 fixtures rewrite from `type:5` to `type:255`.
+  Authoring drives whole vec4 elements; whether a single pacer track can emit 4
+  lanes (vs. needing per-lane targets) is an open ergonomics question this option
+  must answer.
+- **(B) Extend pngine's reflector — wire change.** Teach `UniformType` /
+  `fromWgslType` to parse `array<ELEM, N>` and carry element-type + count through
+  the PNGB uniform-table field encoding (append-only). Precise expansion, any
+  element width. Cost: modifies a **wire-stable pngine surface** — contradicts
+  this plan's "Wire impact: none" — and spans pngine Zig + `gpu.js` + the studio.
+- **(C) Drop uniform arrays as the mechanism.** Reconsider whether "many
+  envelopes without WGSL churn" is best served by uniform arrays at all — e.g.
+  widen a struct with more scalar fields, or drive a `var<storage>` array (which
+  *does* allow tight `array<f32,N>`, at the cost of a different, non-`setUniform`
+  write seam).
+
+**Status:** Phases 0–2 pngine commits (`1095d61`, `ea22401`, `930d3f4`) stand;
+this pause wrote **no code** (docs only). Probe shaders lived in `/tmp` — neither
+repo tree was touched. `00-strategy.md`: board `05 · P3 BLOCKED`, benchmark #2
+blocked on it, What's next + a Decision-log entry point at the decision.

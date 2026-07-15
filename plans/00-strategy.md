@@ -117,8 +117,8 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P5 | ☑ |
-| 2 | 05 array targets · P0 ✓ P1 ✓ P2 ✓ | ☐ |
-| 2 | benchmark #2 | ☐ |
+| 2 | 05 array targets · P0 ✓ P1 ✓ P2 ✓ · **P3 BLOCKED** (reflection gap) | ☐ |
+| 2 | benchmark #2 (blocked on 05) | ☐ |
 | 3 | 06 tracker import | ☐ |
 | 3 | 10 audio bus | ☐ |
 | 3 | 03 pattern tracks P1–P4 | ☐ |
@@ -128,27 +128,31 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 05 — array-targets, Phase 3 is next.** Open `plans/05-array-targets.md` and
-execute **Phase 3 (end-to-end + example, RED first)** under the TDD/compaction discipline. It is
-**host-side only, no pacer core change** (`env[3]` is just a name in `'PACT'`). **Phases 0 + 1 + 2 are
-DONE — the full read+write path ships.** Phase 0 (pngine `1095d61`) extracted `buildRegistries` into a
-pure module and settled the delivery decision — **option (b), studio-side coalescing, no pngine
-change**. Phase 1 (pngine `ea22401`) made `buildRegistries` expand array fields into element targets
-(`array<f32,16>` → `env[0]`..`env[15]`; matrices/odd sizes → `dropped`, `console.warn`n). Phase 2
-(pngine `930d3f4`) closed the WRITE side: new pure `coalesce.ts` (`makeUniformCoalescer`) folds
-pacer's per-element writes into one whole flat-float array per base at the byte-exact
-`uniformToTypedArray` layout (element `i` lane `j` at flat `i·4+j`, `count·4` floats), plain keys
-passing through. **Holes hold last value** (stateful sample-and-hold); state scoped per call-site so
-`uniformsAt` stays pure — the live playhead owns a persistent coalescer, the thumbnail strip a
-per-batch throwaway. `buildRegistries` now also returns the `arrays` plan (`{base,count,lanes}`),
-built in the same walk as the targets. Editor suite 1614/1614.
-Phase 3: extend the demoscene template (`studio/public/shaders/demoscene.*`) with an
-`env: array<f32, 8>` buffer field driven by 8 score tracks; the durable RED is a real-wasm
-integration test alongside `score-uniforms.test.js` asserting an element write reaches the
-`toUniforms`/coalesced output AND the drawn uniforms message; gate = editor tests + a manual studio
-smoke. Then **benchmark #2** (redo the North-Star ritual using the timeline editor + array lanes; the
-dots/word steppers `floor((beat−B)/1)` → a trigger `count` lane are the noted target), closing Wave 2.
-After that: Waves 3 (06 tracker-import → 10 audio-bus → 03 pattern-tracks) and 4.
+→ **Wave 2 is STALLED on a design decision: 05 array-targets Phase 3 verification found the
+host-side premise contradicted by real pngine reflection.** No further 05 code until a direction is
+chosen (full write-up: the 2026-07-15 Decision-log entry below + `plans/05-array-targets.md` Phase 3
+log). **The finding (grounded in real probe shaders compiled through pngine, not modeled):** every
+array uniform reflects into the PNGB uniform table as `type = 255 (unknown)` with **NO element type
+and NO count** — pngine's `UniformType.fromWgslType` has no `array<…>` case, so the flattener
+discards the element type wgslender knows one layer up; a **bare** array binding reflects as
+*nothing at all*; and `array<f32,N>` in a uniform **doesn't even compile** (pngine's own validator
+enforces WGSL's 16-B uniform stride: *"element stride 4 (uniform requires a multiple of 16)"*). So
+`buildRegistries` (Phases 1–2, unit-tested against a *modeled* `type: 5` that pngine never emits for
+arrays) sends every real array field to `dropped` — the feature is internally green but never fires
+end-to-end. This is exactly what Phase 3 ("verify in the running studio") exists to catch.
+
+**Phases 0–2 stand as-is** (code + tests internally consistent; just not wired to real reflection).
+**The pending decision — three options, USER PICKS before any more 05 code:** (A) **host-side vec4
+convention** — redefine the array rule to `unknown(255) + size%16==0 ⇒ array<vec4f, size/16>` (the
+only efficient uniform array; f32 arrays are illegal, vec2/3 waste padding), expand into `base[i]`
+ncomp-4 targets; **no pngine change**, but lanes come in vec4 groups (no scalar-lane arrays) and
+P1–P2 tests get corrected from `type:5` to `type:255`. (B) **extend pngine's reflector** to carry
+array element-type + count through the PNGB uniform table (wgslender already knows them) — precise,
+any element width, but a **wire-stable pngine change** contradicting the plan's "Wire impact: none".
+(C) **reconsider the Wave-2 mechanism** — more struct fields, or a storage-buffer path, instead of
+uniform arrays. **Benchmark #2 depends on array lanes, so it is blocked too; the only actionable
+Wave-2 work is the direction decision itself.** Once chosen, resume 05 there, then benchmark #2 closes
+Wave 2; after that Waves 3 (06 → 10 → 03) and 4.
 
 **07 timeline-editor is COMPLETE** (all 5 phases, 2026-07-15) — the visual timeline ships end-to-end.
 Phase 1 (**anchors lib, pngine `5be6884`**) → `lib/score/anchors.ts`: `scoreAnchors(meta, source)`
@@ -609,3 +613,34 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   ⇒ `liveCoalescer = null` ⇒ raw passthrough (the demoscene default is untouched). Editor suite
   **1614/1614**. No pacer wire surface touched. Phase 3 is the demoscene `env: array<f32,8>` example +
   real-wasm integration test.
+- 2026-07-15 — **05 array-targets Phase 3 verification → BLOCKED; the host-side premise is
+  contradicted by real pngine reflection. User chose to PAUSE & re-plan (no code written).** Before
+  authoring the demoscene example I compiled real probe shaders through pngine's actual pipeline
+  (`zig build run -- compile`) and dumped the PNGB uniform table the studio worker truly receives
+  (`gpu.js parseUniformTable`, forwarded verbatim by `worker-core.js handleGetUniforms`). **Three
+  ground-truth facts that break Phases 1–2's model:** (1) a struct-member array (`bands:
+  array<vec4f,2>`) reflects as `{ type: 255 (unknown), size: 32 }` — pngine's
+  `UniformType.fromWgslType` (`src/bytecode/uniform_table.zig`) has **no `array<…>` case**, and the
+  flattener (`Emitter.zig flattenFields`) recurses only into nested *structs*, so an array is a leaf
+  stamped `unknown`, **discarding the element type + count** that wgslender's reflection JSON *does*
+  carry (`"type":"array<vec4f, 2>"`). (2) a **bare** array binding (`var<uniform> env:
+  array<vec4f,2>`, not inside a struct) reflects as **nothing at all** — absent from the table. (3)
+  `array<f32,N>` in a uniform **fails to compile**: pngine's validator emits *"uniform var 'env'
+  contains array with element stride 4 (uniform requires a multiple of 16)"* — so the plan's headline
+  `env: array<f32,16>` → 16 scalar lanes is physically impossible; the only efficient uniform array is
+  `array<vec4f,N>` (lanes in 4s). **Consequence:** `buildRegistries` keys array expansion off a real
+  vec/f32 `type` tag (`LANES_BY_TYPE`), but real pngine tags every array `255` → `LANES_BY_TYPE[255]`
+  undefined → **dropped**. Phases 0–2 are unit-green only because their fixtures fed `type: 5` for
+  arrays — a value pngine never produces. The feature does not connect to real reflection. **This
+  invalidates the Phase-0 delivery framing too:** option (b) coalescing was never the blocker — the
+  blocker is upstream, that the reflection carries no array info to expand from (from `{255, size}`
+  alone the studio cannot recover `array<vec4f,2>` vs `array<vec2f,4>` vs a mystery type). **Options
+  recorded for the re-plan (user to pick before resuming): (A)** host-side vec4 convention —
+  `unknown(255) + size%16==0 ⇒ array<vec4f, size/16>`, `base[i]` ncomp-4 targets, **no pngine change**,
+  but vec4-grouped lanes only + rewrite P1–P2 fixtures to `type:255`; **(B)** extend pngine's reflector
+  to carry array element-type + count through the PNGB uniform-table field encoding (a **wire-stable
+  pngine change** — contradicts "Wire impact: none"; spans pngine Zig + `gpu.js` + studio); **(C)**
+  drop uniform arrays as the mechanism — widen a struct with more scalar fields, or a storage-buffer
+  path (different write seam). **Nothing was committed as code** — Phases 0–2's pngine commits stand;
+  this is a docs-only pause. Probe shaders lived in `/tmp` only (neither repo tree touched). Board:
+  `05 · P3 BLOCKED`, benchmark #2 blocked on it, What's next points at the decision.
