@@ -114,7 +114,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | 'PACM' framing decision | ☑ |
 | 1 | 01 scenes-cues | ☑ |
 | 1 | 02 trigger-lanes | ☑ |
-| 1 | studio refresh + benchmark #1 | ☐ |
+| 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☐ |
 | 2 | 07 timeline editor P1–P4 | ☐ |
 | 2 | 05 array targets | ☐ |
@@ -128,24 +128,20 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1 item 8 is IN PROGRESS — studio refresh DONE + verified; benchmark #1 rewrite applied
-and pacer-validated, awaiting the user's A/B in the studio.** On A/B confirm: tick the board box
-and advance to **Wave 2 (09 studio-workflow-fixes → 07 timeline P1–4 → 05 array-targets →
-benchmark #2)**. Details of what's done live in the 2026-07-15 Decision-log entry below; the short
-version:
-- **Studio refresh — done.** `pacer.wasm` rebuilt clean at HEAD; the studio symlink chain
-  (`pngine/studio/public → pngine/studio/editor/public → pacer/npm/pacer/pacer.wasm`) now
-  converges on one hash; editor real-wasm suite 1526/1526 green on the fresh bytes.
-- **Triple-pin — no bump** (precedent: 0.1.0 since the package was first publishable, untouched
-  through all of Wave 0/1). Bump 0.1.0 → 0.2.0 at the NEXT `npm publish` to cover the accumulated
-  additive surface (`:emit`, `Meta.scenes`/`MetaScene`, `MetaTrack.source: 'trigger'`).
-- **Benchmark #1 — rewrite applied to `~/Dev/2026_impulse/` (non-git; dated PRE-PACERBENCH-2026-07-15
-  snapshots), pacer-validated, A/B pending.** The tunnel's drop time-envelope (landmark beat 160 +
-  exp decay) moved to ONE score expr track on the freed `motion.spin` field, and the identity
-  `beat` track became `:emit [beat]`. The rest of the tunnel (per-beat pulse shaping, backbeat
-  parity, off-beat sin, per-cell hashing) is residue that correctly stays in WGSL. The cleanest
-  FUTURE trigger wins are the dots/word steppers ("one icon/letter per beat") → a trigger `count`
-  lane; target them for benchmark #2.
+→ **Wave 2 is next: 09 studio-workflow-fixes (all three phases)** — the top unticked item. Open
+`plans/09-studio-workflow-fixes.md` and execute its next phase under the TDD/compaction discipline.
+Phase 2's byte-index util is a dependency 07 (timeline-editor) wants, so 09 clears the way for the
+rest of Wave 2 (07 P1–4 → 05 array-targets → benchmark #2). **Wave 1 is COMPLETE** — item 8
+(studio refresh + benchmark #1) closed 2026-07-15, board box ticked; the user's studio A/B of the
+tunnel rewrite was **indistinguishable** (drop burst at beat 160 + decay, beat-driven scene
+selection — all unchanged), confirming the score-driven `motion.spin` drop lane and `:emit [beat]`
+route end-to-end through the studio. Studio refresh + triple-pin + the benchmark measurement/residue
+are in the two 2026-07-15 Decision-log entries below; the cleanest future trigger wins (dots/word
+steppers → `count` lane) are the benchmark #2 target.
+
+**NOTE — compaction boundary.** Item 8 close-out is done and committed; per the one-phase-per-window
+discipline, 09 Phase 1's implementation should start from a fresh/compacted context. Plan 09 is
+opened and its Phase 1 scoped in this session's tail, but the RED-first build begins next window.
 
 **02 trigger-lanes is COMPLETE** (all 4 phases, 2026-07-14). A `(trigger …)` form emits event
 lanes off the tick grid — `periodic { every, offset }` (`:every N :offset M`) XOR an explicit
@@ -438,5 +434,8 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   rewrite needed zero buffer surgery. **Cleanest FUTURE trigger wins are elsewhere in this demo:**
   the dots/word steppers `floor((beat-B_SHAPES)/1)` / `floor((beat-B_WORD)/1)` ("one icon/letter
   per beat") map directly to a trigger `count` lane — the natural benchmark #2 target once the
-  timeline editor (07) makes authoring them cheap. A/B ("indistinguishable motion") is the user's
-  studio check; on confirm, tick the item-8 board box.
+  timeline editor (07) makes authoring them cheap. **A/B CONFIRMED 2026-07-15**: the user's studio
+  A/B of the tunnel was indistinguishable (drop burst + decay at beat 160, beat-driven scene
+  selection — unchanged), which also confirms the score `spin` write routes end-to-end through the
+  studio to `motion.spin` (the one link the headless pacer.wasm validation couldn't cover). Item-8
+  board box ticked → Wave 1 COMPLETE; Wave 2 (09 studio-workflow-fixes) is next.
