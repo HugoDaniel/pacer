@@ -117,7 +117,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P5 | ☑ |
-| 2 | 05 array targets · P0 ✓ | ☐ |
+| 2 | 05 array targets · P0 ✓ P1 ✓ | ☐ |
 | 2 | benchmark #2 | ☐ |
 | 3 | 06 tracker import | ☐ |
 | 3 | 10 audio bus | ☐ |
@@ -128,20 +128,24 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 05 — array-targets, Phase 1 is next.** Open `plans/05-array-targets.md` and
-execute **Phase 1 (registry expansion + `dropped` warning, RED first)** under the TDD/compaction
-discipline. It is **host-side only, no pacer core change** (`env[3]` is just a name in `'PACT'`).
-**Phase 0 is DONE** (pngine `1095d61`): `buildRegistries` is now a pure, unit-tested module
-(`studio/editor/src/lib/preview/registries.ts`) with the array-drop baseline pinned, and the
-delivery decision is settled — **option (b), studio-side coalescing, no pngine change** (the write
-seam `gpu.js` `setUniform` already writes a whole-array JS value at the field's byte offset; pacer's
-element writes `env[3]` are coalesced at `uniformsAt` into one `env` array per frame, holes holding
-last value). Uniform-space arrays stride 16 B/element, so the studio derives layout from `size/16`
-without asking pngine for stride. See plan 05's Phase 0 log for the full trace.
-Phase 1 (in `registries.ts`): expand `array<f32,16>` → 16 targets `env[0]`..`env[15]` ncomp 1,
-`array<vec4f,4>` → 4 targets ncomp 4, matrices → excluded but returned in a `dropped` list; surface
-`dropped` through the diagnostics/status channel. Phase 2 = the coalescing write delivery at
-`uniformsAt`. Then **benchmark #2** (redo the North-Star ritual using the timeline editor + array
+→ **Wave 2, item 05 — array-targets, Phase 2 is next.** Open `plans/05-array-targets.md` and
+execute **Phase 2 (write delivery — studio-side coalescing at `uniformsAt`, RED first)** under the
+TDD/compaction discipline. It is **host-side only, no pacer core change** (`env[3]` is just a name
+in `'PACT'`). **Phases 0 + 1 are DONE.** Phase 0 (pngine `1095d61`) extracted `buildRegistries`
+into a pure, unit-tested module and settled the delivery decision — **option (b), studio-side
+coalescing, no pngine change** (the write seam `gpu.js` `setUniform` already writes a whole-array JS
+value at the field's byte offset). Phase 1 (pngine `ea22401`) made `buildRegistries` return
+`{ targets, dropped }`: an array field now expands into element targets (`array<f32,16>` →
+`env[0]`..`env[15]` ncomp 1; `array<vec4f,4>` → 4 targets ncomp 4; element count = `size/16`, the
+16 B uniform stride), matrices/odd sizes land in `dropped` (surfaced via a `console.warn` in
+preview.ts — no score span attaches to a uniform-layout fact), and plain scalar/vec2/3/4 fields keep
+the exact size-only rule so real vectors can't regress. Editor suite 1606/1606.
+Phase 2 (in `preview.ts`/`route.js` usage): pacer emits element writes (`env[3]=0.5`, `env[7]=1.0`);
+`toUniforms` yields `{ 'env[3]':0.5, 'env[7]':1.0 }`, whose keys match no reflection field, so
+`setUniform` drops them today. Coalesce them at `uniformsAt` into one whole `env` array value —
+**holes holding the previous frame's value** (pin that semantic explicitly) — handed to the existing
+`setUniform('env', […])`. Then Phase 3 (end-to-end + `env: array<f32,8>` demoscene example + real-wasm
+integration test), then **benchmark #2** (redo the North-Star ritual using the timeline editor + array
 lanes; the dots/word steppers `floor((beat−B)/1)` → a trigger `count` lane are the noted target),
 closing Wave 2. After that: Waves 3 (06 tracker-import → 10 audio-bus → 03 pattern-tracks) and 4.
 
@@ -569,3 +573,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   B/element**; `array<f32,16>` = 256 B = 64 f32 slots, element `i` at float `i·4`; element count =
   `size/16`), so pngine's reflection schema is never grown. Option (a) (`name[i]` in the worker) is
   deferred unless (b) proves insufficient. No pacer wire surface touched (05 is host-side only).
+- 2026-07-15 — **05 array-targets Phase 1 (registry expansion + `dropped` warning) DONE — pngine
+  `ea22401`.** `buildRegistries` now returns `{ targets, dropped }`: array fields expand into element
+  targets (`array<f32,16>` → `env[0]`..`env[15]` ncomp 1; `array<vec4f,4>` → 4 targets ncomp 4;
+  `count = size/16`), matrices/odd sizes go to `dropped` (surfaced via `console.warn` in preview.ts,
+  gated non-empty — a uniform-layout fact has no score-text span so it can't ride `onScoreDiagnostics`).
+  **Two cross-plan facts.** (1) **The studio now reads pngine's wire-stable `UT_*` uniform-type enum
+  (gpu.js) from the reflection**, via a local `LANES_BY_TYPE` map — a NEW coupling to that enum (F32/I32/
+  U32→1, VEC2*→2, VEC3*→3, VEC4*→4; matrices 6/7 + unknowns → dropped). If pngine ever adds a uniform
+  type, that map must learn it (else the field drops, not crashes — safe default). (2) **The discriminator
+  is `type`, forced because `array<f32,4>` and `mat4x4f` are BOTH `size:64`** — size alone can't split
+  them. To keep real vec2/3/4 fields regression-proof, the plain-field path is the ORIGINAL size-only rule
+  (`size/4 ∈ 1..4`) with NO type dependency; `type` is consulted ONLY for wider fields. Degenerate
+  size-16 single-element arrays (`array<f32,1>` vs `vec4f`) both resolve to one 4-lane target — accepted,
+  not special-cased. Editor suite **1606/1606**. No pacer wire surface touched (05 is host-side only);
+  Phase 2 is the write-delivery coalescing at `uniformsAt`.

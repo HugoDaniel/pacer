@@ -123,3 +123,49 @@ element `i` at float index `i·4` (3 pad floats each). `array<vec4f,N>` → stri
 16 B, packs tight (element `i` at floats `i·4 .. i·4+3`, ncomp 4). The studio
 **derives** stride from this rule (always 16 B) rather than from the reflection —
 element count = `size / 16`, and it never asks pngine to grow its schema.
+
+### Phase 1 — registry expansion + `dropped` warning → DONE (2026-07-15, pngine `ea22401`)
+
+**RED→GREEN.** Rewrote `registries.test.js` (7 baseline tests → 10 spec tests)
+to assert the expanded `{ targets, dropped }` shape with **realistic `type`
+tags**, observed 10/10 fail against the size-only `buildRegistries` (returns a
+bare `Registry[]`, drops all wide fields), then greened `registries.ts`. Full
+gate: tsc 0, biome clean, svelte-check 0 err (5 pre-existing App warnings), full
+editor suite **1606/1606** (−7 old baseline tests +10 new = +3 net). No pngine
+worker/core touched.
+
+**`buildRegistries` v2 — `{ targets: Registry[], dropped: DroppedField[] }`.**
+Per reflected field:
+
+- **Plain field (`size/4 ∈ 1..4`)** → one target, `ncomp = size/4`. This is the
+  ORIGINAL size-only rule kept **verbatim, with no `type` dependency** — so real
+  scalar / vec2 / vec3 / vec4 fields can never regress even if a reflection ever
+  carried a wrong `type` tag. A plain `vec4f` (size 16) stays one target, NOT
+  expanded.
+- **Wider (`size/4 ∉ 1..4`)** → consult the WGSL `type` tag to split array from
+  matrix. `LANES_BY_TYPE` maps the wire-stable pngine `UT_*` enum (gpu.js:
+  F32/I32/U32→1, VEC2*→2, VEC3*→3, VEC4*→4; matrices UT_MAT3X3F=6 / UT_MAT4X4F=7
+  and any unknown tag are ABSENT). An array of a 1..4-lane element expands into
+  `name[0]`..`name[N-1]` with `count = size / 16` (the 16 B uniform stride);
+  a matrix / unknown type, or a size that isn't a clean 16 B multiple, lands in
+  `dropped` with an author-facing `reason`.
+
+**The discriminator that forced this:** `array<f32,4>` and `mat4x4f` are BOTH
+`size: 64` — only the `type` tag separates them (UT_F32 vs UT_MAT4X4F). The Phase
+0 fake used `type: 0` throughout (fine for the size-only baseline); the Phase 1
+test uses correct tags. `motion` (vec4f, size 16) and `array<f32,1>` (size 16)
+share the degenerate size-16 slot — the size-only rule resolves both to one
+4-lane `name` target; single-element arrays are pathological and drive
+identically, so this is accepted and commented, not special-cased.
+
+**`dropped` surfacing:** preview.ts's `'uniforms'` handler now destructures
+`{ targets, dropped }`, uses `targets` for `lastRegistries` (+ the registries
+key), and `console.warn`s `dropped` once per reflection (gated on non-empty). It
+rides the **console, not `onScoreDiagnostics`** — a dropped uniform is a
+shader-layout fact with no score-text span, so it can't carry the char offsets
+`ScoreDiagnostic` requires. Matches the existing `[pacer]`-prefixed warns.
+
+**Deferred to Phase 2:** the WRITE side. Expanded targets now EXIST in the
+registry, so a score can target `env[3]`; but `toUniforms` still emits them
+name-keyed (`{ 'env[3]': 0.5 }`) and `setUniform` drops unmatched keys. Phase 2
+coalesces at `uniformsAt` (option b) into one whole `env` array per frame.
