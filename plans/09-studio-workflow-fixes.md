@@ -81,4 +81,26 @@ than written:
 - **RED lands in** `src/lib/timeline/*.test.js`; gate = `node --test 'src/lib/**/*.test.js'`.
   Integration red: a 3/4 score renders bar ticks every 3 beats end-to-end; no score → 4;
   meter change on reload updates the ruler.
-Not started — the RED-first build begins next (compacted) window.
+
+### Phase 1 DONE (2026-07-15) — timeline honors the score's meter — pngine `962698a`
+
+RED→GREEN, exactly as the pre-flight scoped it (threading only, no constant to un-hardcode
+in the strip — it was already parameterized).
+- **RED** (`src/lib/timeline/timeline-strip.test.js`): a new `bpmRulerCadence` block —
+  4/4 → bar every 4 beats, **3/4 → bar ticks every 3 beats** (1.5s @ 120), 7/8, the 4/4
+  default, and degenerate fallbacks (meter < 1 / non-finite → 4, bpm ≤ 0 → 120). Ran red
+  (no such export), then green.
+- **GREEN pure**: `bpmRulerCadence(bpm, beatsPerBar)` in `timeline-strip.ts` returns the
+  `{tickStepSec, minorSubdivisions}` pair (a bar every `beatsPerBar` beats, one dot/beat),
+  guards mirroring `formatBeats`.
+- **GREEN thread**: `beatsPerBarOf(p)` in `preview.ts` (sibling to `transportBpmOf`) reads
+  `pacer.meta.transport.beatsPerBar`; the `onScoreArmed` payload carries `beatsPerBar` →
+  `App.svelte` `beatsPerBar` state (`?? 4` when no score) → `Timeline` prop → the cadence
+  helper + both `formatBeats` calls. `Timeline.svelte`'s hardcoded `BEATS_PER_BAR = 4`
+  constant is deleted; the 4/4 default now lives in the prop default + the two fallbacks.
+- **Gate**: editor tests **1532/1532** (+6), `tsc` + `svelte-check` **0 errors**, biome clean.
+- Behavior nuance: the old bpm-mode `tickStepSec` used `Math.max(1, bpm)` (→ a 240s tick at
+  bpm 0); `bpmRulerCadence` falls back to 120 there instead, matching `formatBeats`. No
+  regression for any real (positive) bpm; strictly saner at the degenerate edge.
+
+Phases 2 (UTF-8 byte spans) and 3 (named checkpoints) remain — independent, compact between.

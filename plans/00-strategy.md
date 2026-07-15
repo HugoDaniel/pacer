@@ -128,20 +128,20 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2 is next: 09 studio-workflow-fixes (all three phases)** — the top unticked item. Open
-`plans/09-studio-workflow-fixes.md` and execute its next phase under the TDD/compaction discipline.
-Phase 2's byte-index util is a dependency 07 (timeline-editor) wants, so 09 clears the way for the
-rest of Wave 2 (07 P1–4 → 05 array-targets → benchmark #2). **Wave 1 is COMPLETE** — item 8
-(studio refresh + benchmark #1) closed 2026-07-15, board box ticked; the user's studio A/B of the
-tunnel rewrite was **indistinguishable** (drop burst at beat 160 + decay, beat-driven scene
-selection — all unchanged), confirming the score-driven `motion.spin` drop lane and `:emit [beat]`
-route end-to-end through the studio. Studio refresh + triple-pin + the benchmark measurement/residue
-are in the two 2026-07-15 Decision-log entries below; the cleanest future trigger wins (dots/word
-steppers → `count` lane) are the benchmark #2 target.
+→ **Wave 2, item 09 — Phase 2 is next: UTF-8 byte spans → editor coordinates.** Open
+`plans/09-studio-workflow-fixes.md` and execute Phase 2 under the TDD/compaction discipline.
+**09 Phase 1 (timeline honors the score's meter) is DONE** (2026-07-15, pngine `962698a`) — see
+that plan's Progress log. Phase 2's byte-index util (`lib/score/byte-index.ts`) is a dependency
+07 (timeline-editor) wants, so finishing 09 clears the way for the rest of Wave 2 (07 P1–4 →
+05 array-targets → benchmark #2). The board box for item 09 stays ☐ until all three phases land
+(Phase 3 = named checkpoints); Phases 2 and 3 are independent — compact between.
 
-**NOTE — compaction boundary.** Item 8 close-out is done and committed; per the one-phase-per-window
-discipline, 09 Phase 1's implementation should start from a fresh/compacted context. Plan 09 is
-opened and its Phase 1 scoped in this session's tail, but the RED-first build begins next window.
+**Wave 1 is COMPLETE** — item 8 (studio refresh + benchmark #1) closed 2026-07-15; the user's
+studio A/B of the tunnel rewrite was **indistinguishable** (drop burst at beat 160 + decay,
+beat-driven scene selection — all unchanged), confirming the score-driven `motion.spin` drop lane
+and `:emit [beat]` route end-to-end. Studio refresh + triple-pin + the benchmark measurement/residue
+are in the 2026-07-15 Decision-log entries below; the cleanest future trigger wins (dots/word
+steppers → `count` lane) are the benchmark #2 target.
 
 **02 trigger-lanes is COMPLETE** (all 4 phases, 2026-07-14). A `(trigger …)` form emits event
 lanes off the tick grid — `periodic { every, offset }` (`:every N :offset M`) XOR an explicit
