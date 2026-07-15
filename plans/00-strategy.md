@@ -116,7 +116,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | 02 trigger-lanes | ☑ |
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
-| 2 | 07 timeline editor P1–P4 | ☑ |
+| 2 | 07 timeline editor P1–P5 | ☑ |
 | 2 | 05 array targets | ☐ |
 | 2 | benchmark #2 | ☐ |
 | 3 | 06 tracker import | ☐ |
@@ -128,10 +128,20 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 07 — timeline-editor, Phase 5 (polish pass) is next.** Open
-`plans/07-timeline-editor.md` and execute Phase 5 under the TDD/compaction discipline. **Phases 1–4
-are DONE — the visual timeline ships**: anchors → write-back → sampling libs, and now the
-`ScoreTimeline.svelte` strip wired behind a Motion-tab text⇄timeline toggle.
+→ **Wave 2, item 05 — array-targets is next.** Open `plans/05-array-targets.md` and execute
+**Phase 0 (investigation, RED = a failing characterization test)** under the TDD/compaction
+discipline. It is **host-side only, no pacer core change** (`env[3]` is just a name in `'PACT'`):
+Phase 0 feeds a fake reflection with `env: array<f32,16>` through the studio's `buildRegistries`
+(`studio/editor/src/lib/preview/preview.ts`) and pins TODAY's behavior — such fields are silently
+dropped — then records which write-delivery option is viable ((a) extend pngine's worker
+`setUniforms` to accept `name[i]` at a computed byte offset, minding WGSL array stride; or (b)
+studio-side coalesce element writes into one whole-array value per frame, touching no pngine code —
+preferred for v1). Phase 1 = registry expansion + a visible `dropped` warning; Phase 2 = write
+delivery. Then **benchmark #2** (redo the North-Star ritual using the timeline editor + array lanes;
+the dots/word steppers `floor((beat−B)/1)` → a trigger `count` lane are the noted target), closing
+Wave 2. After that: Waves 3 (06 tracker-import → 10 audio-bus → 03 pattern-tracks) and 4.
+
+**07 timeline-editor is COMPLETE** (all 5 phases, 2026-07-15) — the visual timeline ships end-to-end.
 Phase 1 (**anchors lib, pngine `5be6884`**) → `lib/score/anchors.ts`: `scoreAnchors(meta, source)`
 → the view model, `refineKeySpans` splitting each key's single form span into `:at`/`:value` field
 spans + lifting `:ease`; Phase 2 (**write-back lib, pngine `2dd0e63`**) → `lib/score/span-edit.ts`:
@@ -140,14 +150,14 @@ field spans, byte→char mapped ONCE at the splice (09's `byte-index.ts`), then 
 `pacer.reload`s for fresh spans; Phase 3 (**sampling lib, pngine `c766b4b`**) →
 `lib/score/curve-sample.ts`: `sampleTrackCurve` probes the loaded pacer per tick column (one shared
 pacer — eval is a pure function of time); Phase 4 (**ScoreTimeline strip, pngine `fdfcc9a`**) →
-`lib/timeline/score-timeline.ts` (pure model + drag reducer, 17 tests incl. a real-wasm drag that
-reloads a 12b key to 13b) + `components/ScoreTimeline.svelte` (dumb shell): drag a key →
-beat-snapped retime + lane-0 revalue **BATCHED into one `SET_SCORE`** (atomic undo/log), a bare click
-→ `FOCUS_SPAN` jumps to the span in ScorePane; preview exposes `scoreMeta()`/`sampleCurve()`,
-App pairs `armedMeta`+`armedScore` so a drag splices the exact text its spans index.
-**Phase 5 is polish, each item RED-first + independent:** scenes lane from the `'SCEN'` meta (01),
-control pins on the strip, vec-key lane display (`MetaTrack.source:'trigger'` from 02 also feeds here).
-After 07 Phase 5: the rest of Wave 2 (05 array-targets → benchmark #2), then Waves 3–4.
+`lib/timeline/score-timeline.ts` (pure model + drag reducer) + `components/ScoreTimeline.svelte`
+(dumb shell) behind a Motion-tab text⇄timeline toggle: drag a key → beat-snapped retime + lane-0
+revalue **BATCHED into one `SET_SCORE`** (atomic undo/log), a bare click → `FOCUS_SPAN` jumps to the
+span in ScorePane; Phase 5 (**polish, pngine `7510db8`**) → scenes lane (`timelineScenes` → named
+click-to-focus blocks), vec-key lane display (`ys[]` per component, visual only), and the pure tested
+`curveLanePath`. **Control pins were DEFERRED** — the meta's `MetaControl` is a timeless knob (no
+tick), so it has no x on a time axis; a controls panel is a separate, non-timeline concern for
+whatever plan first needs live controls (see 07's Phase 5 log + the Decision-log entry below).
 
 **09 studio-workflow-fixes is COMPLETE** (all three phases, 2026-07-15) — board box ticked.
 Phase 1 (timeline honors the score's meter, pngine `962698a`), Phase 2 (UTF-8 byte spans → editor
@@ -525,3 +535,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   reshaped segment. Gate: 14 new tests, full editor suite 1563/1563, typecheck + svelte-check 0
   errors, lint clean. Pointer → Phase 3 (curve sampling; the interleaved-eval RED decides the
   second-Pacer-instance question).
+- 2026-07-15 — **07 timeline-editor COMPLETE (Phase 5 polish) — pngine `7510db8`; plan 07 DONE.**
+  Two grounded items shipped RED-first as pure `score-timeline.ts` additions (+7 tests → editor
+  suite **1596/1596**): **scenes lane** (`timelineScenes` → `{name, x, width, nameSpan}` blocks;
+  click focuses `nameSpan` via the same FOCUS_SPAN path a key click uses) and **vec-key display**
+  (`TimelineKeyView.ys[]`, one y per component, visual only — lane 0 stays the sole drag lane, per
+  Phase 4's "show lanes, edit later"). The shell's curve path-building was lifted into the pure,
+  tested `curveLanePath(curve, lane, layout)`, leaving the `.svelte` purely render + pointer
+  routing. **Cross-plan decision: the third listed item, "control pins," is DEFERRED — controls do
+  not belong on the time strip.** `MetaControl` is a **timeless knob** (`{index, id, targetId, name,
+  registry, ncomp, type, value, min, max, valueSpan}` — no tick), so it has no x on a time axis;
+  and nothing in the studio consumes controls yet (no `(control …)` fixture, no controls UI). A
+  controls *panel* (knobs bound to expr-env `id`s, committing through `valueSpan` via Phase 2's
+  `applyEdits` — the commit-to-text pattern 07's "Why" cited) is a separate, non-timeline concern
+  that belongs to whatever plan first needs live controls; it must NOT be bolted onto the timeline
+  strip. No pacer wire surface touched (07 is entirely studio-side).

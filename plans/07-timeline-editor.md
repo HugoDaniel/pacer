@@ -249,3 +249,47 @@ text⇄timeline toggle. Gate: 17/17 green, full editor suite **1589/1589**, `tsc
   so `pacer.meta` is directly assignable to `anchors.ts`'s `AnchorMeta` — the
   preview seam needs no cast. (The structural `AnchorMeta`/`CurveSamplePacer`
   interfaces stay as the documentation of the consumed surface regardless.)
+
+### Phase 5 — polish pass → DONE (2026-07-15, pngine `7510db8`) → plan 07 COMPLETE
+
+Two of the three listed items shipped RED-first as pure-lib additions to
+`lib/timeline/score-timeline.ts` (+7 tests, 24 in the file); the third
+(**control pins**) is DEFERRED with a grounded rationale (below). Gate: 24/24 in
+the file, full editor suite **1596/1596**, `tsc` + svelte-check **0 errors** (the
+same 5 pre-existing `App.svelte` warnings), Biome clean.
+
+- **Scenes lane** — `timelineScenes(anchors, layout)` projects `anchors.scenes`
+  (`SceneAnchor` from Phase 1) into positioned `{name, x, width, nameSpan}`
+  blocks; `x = tickToX(startTick)`, `width` spans `[startTick, startTick+durTicks)`.
+  The shell renders each as an absolutely-positioned `<button>` inside the strip;
+  a click calls `onFocusSpan(scene.nameSpan)` — the SAME imperative FOCUS_SPAN
+  path a key click uses, reusing the scene's `:name` commit anchor. `loopTicks`
+  now also spans the last scene edge so an open-ended transport still sizes the
+  strip.
+- **Vec-key lane display (visual only)** — `TimelineKeyView` gained `ys: number[]`
+  (one y per component, `ys[0] === y`); `timelineRows` fills it from
+  `key.value[0..ncomp)`. The shell branches on `ncomp`: scalar tracks keep the
+  draggable handle + preview ghost; **vec tracks (`ncomp > 1`) draw one curve +
+  one non-draggable marker per lane** — Phase 4's "show lanes, edit later" scope,
+  so lane 0 stays the only drag lane and no new edit path was added.
+- **`curveLanePath(curve, lane, layout)`** — the shell's untested curve
+  path-building moved into a pure, tested lib function (M/L SVG path, breaks the
+  polyline at NaN/absent columns). The shell's new `curvePaths(name, ncomp)` just
+  samples once and calls it per lane. Net: the strip's last bit of imperative
+  geometry is now unit-tested; the `.svelte` is purely render + pointer routing.
+
+**Control pins — DEFERRED (rationale, not a gap).** The meta's `MetaControl` is a
+**timeless knob** — `{index, id, targetId, name, registry, ncomp, type, value,
+min, max, valueSpan}`, with **no tick** — so it has no x on a time axis and cannot
+be "pinned on the strip" as written. Nothing in the studio consumes controls yet
+(no fixture uses `(control …)`, no controls UI exists), so building a control
+surface here would be speculative, unconsumed UI against the "small, independent"
+directive. A controls *panel* (knobs bound to expr-env `id`s, committing through
+`valueSpan` — the exact commit-to-text pattern the plan's "Why" cites) is a
+separate, non-timeline concern; it belongs to whatever plan first needs live
+controls, reusing Phase 2's `applyEdits` against `valueSpan`. Recorded so the
+deferral is a decision, not an oversight.
+
+**Plan 07 is COMPLETE** — the visual timeline ships end-to-end: anchors →
+write-back → sampling libs, the `ScoreTimeline.svelte` strip behind the Motion-tab
+toggle, and now the scenes lane + vec-key display polish.
