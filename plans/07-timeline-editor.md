@@ -81,3 +81,46 @@ Scenes lane (if plan 01 landed: render scene windows as named blocks), control p
 the strip, vec-key lane display. Each item: red first, small, independent.
 
 ## Progress log
+
+### Phase 1 — anchors lib → DONE (2026-07-15, pngine `5be6884`)
+
+`lib/score/anchors.ts` — `scoreAnchors(meta, source)` → the timeline view model,
+plus the exported `refineKeySpans(bytes, formSpan)` refiner. RED-first: wrote
+`anchors.test.js` (7 tests, `node --test`-globbed `.test.js` — NOT the plan's
+`.test.ts`, which the runner would skip), watched it fail (`ERR_MODULE_NOT_FOUND`),
+then greened it. Gate: 7/7 green, full editor suite **1549/1549**, `tsc` +
+svelte-check **0 errors** (5 pre-existing `App.svelte` warnings), lint clean.
+
+**Carry-forward — the exact `'PACM'` shapes discovered (this is the crux):**
+
+- **A key is ONE span, and there is no ease in meta.** pacer's `MetaKey` = `{ at:
+  bigint, value: number[4], span }` where `span` covers the WHOLE `(key …)` form
+  (confirmed in `pacer/src/Abi.zig` `encodeMeta` test: the span slices `"(key :at
+  4b :value 0.8)"`), and ease is baked into the compiled table, never surfaced.
+  The timeline retimes (`:at`) and revalues (`:value`) independently and paints
+  the curve, so the anchors layer REFINES the form span into `atSpan`/`valueSpan`
+  and lifts the `:ease` symbol by tokenizing the form. This is the real work of
+  Phase 1 — not a passthrough. Phase 2's `retimeKey`/`revalueKey` splice through
+  these two field spans directly.
+- **Spans are UTF-8 BYTE offsets.** anchors EMIT byte spans (pacer's native
+  coordinate); the refiner tokenizes in byte space (ASCII delimiters never
+  collide with multibyte continuation bytes ≥ 0x80). The demoscene's comment
+  em-dashes (`—`, 3 bytes each, 6-byte drift) made this concrete — the test maps
+  byte→char via `byteToCharIndex` (09 Phase 2's util) before slicing, which is
+  exactly the Phase 2 consumption path. **Do not have anchors emit char spans**;
+  the byte→char map happens once, at the write-back splice boundary.
+- **View model shape (Phase 2/4 consume this):**
+  `{ transport{ bpm, beatsPerBar, dur:bigint|null, end:'loop'|'hold', loopBeats },
+     tracks[{ name, targetId, registry, ncomp, source:'keys'|'expr'|'trigger',
+       formSpan, keys[{ tick:bigint, value:number[], ease:string|null,
+       atSpan, valueSpan, formSpan }] }],
+     scenes[{ name, startTick, durTicks, nameSpan }] }`.
+  expr/trigger tracks carry `keys: []`. `loopBeats` reuses
+  `preview/score-duration.ts`'s `scoreLoopBeats` (no duplicate `TICKS_PER_BEAT`).
+- **The meta input is typed STRUCTURALLY, not imported from `pacer`.** The
+  studio's installed `pacer` is a pnpm file-copy whose `.d.ts` is stale (`Meta`
+  has no `scenes`; `MetaTrack.source` lacks `'trigger'`). anchors defines its own
+  `AnchorMeta` interface for the fields it reads — the running meta is assignable
+  to it whether or not the installed types have caught up, and the interface IS
+  the documentation of the consumed surface. (Refreshing that `.d.ts` is a
+  separate hygiene task, not on 07's path.)

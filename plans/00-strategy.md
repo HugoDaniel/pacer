@@ -128,11 +128,17 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 07 — timeline-editor, Phases 1–4 is next.** Open `plans/07-timeline-editor.md`
-and execute Phase 1 under the TDD/compaction discipline. **Reuse `byte-index.ts`** (09 Phase 2's
-util at `studio/editor/src/lib/score/byte-index.ts`) for any score-span→editor-position mapping —
-do not rebuild it (Decision-log 2026-07-15). The `trigger` source name + `MetaTrack.source:
-'trigger'` (02) and the `'SCEN'` scene meta (01) are what the timeline reads.
+→ **Wave 2, item 07 — timeline-editor, Phase 2 (write-back lib) is next.** Open
+`plans/07-timeline-editor.md` and execute Phase 2 under the TDD/compaction discipline. Phase 1
+(**anchors lib, DONE 2026-07-15, pngine `5be6884`**) shipped `lib/score/anchors.ts` —
+`scoreAnchors(meta, source)` → the view model, with `refineKeySpans` splitting each key's single
+`(key …)` form span into `:at`/`:value` field spans + lifting `:ease`. Phase 2 builds
+`lib/score/span-edit.ts` (`retimeKey`, `revalueKey`, `applyEdits`) splicing through those field
+spans right-to-left, then `pacer.reload` for fresh spans. **Reuse `byte-index.ts`** (09 Phase 2's
+util) at the splice boundary — anchors emit BYTE spans, so map byte→char once, there (Decision-log
+2026-07-15 + the new 07-Phase-1 entry). Key carry-forward: pacer's `MetaKey` is ONE form span with
+NO ease — the field spans come from anchors' refinement, not from meta. The `'SCEN'` scene meta (01)
++ `MetaTrack.source:'trigger'` (02) feed Phases 4–5.
 
 **09 studio-workflow-fixes is COMPLETE** (all three phases, 2026-07-15) — board box ticked.
 Phase 1 (timeline honors the score's meter, pngine `962698a`), Phase 2 (UTF-8 byte spans → editor
@@ -476,3 +482,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   **save-tags** on nodes; any later plan touching versioning/history builds on `tagNode`/`replayTo`,
   not a new marker vocabulary. No pacer or pngine code changed this step (docs only); the feature's
   tests were already green in the Phase 2 gate (1542/1542).
+- 2026-07-15 — **07 Phase 1 (anchors lib) DONE — pngine `5be6884`.** `lib/score/anchors.ts` turns
+  `pacer.meta` into the timeline view model. **Cross-plan fact discovered (governs 07 Phases 2–5):
+  a keyframe is ONE byte span with NO ease.** pacer's `MetaKey` = `{ at, value[4], span }` where
+  `span` covers the whole `(key …)` form (confirmed against `Abi.zig`'s `encodeMeta` test), and
+  ease lives only in the compiled table. So the timeline's `:at`/`:value` field spans and the
+  `:ease` symbol come from anchors REFINING the form span (`refineKeySpans`, a byte-space
+  keyword-order-free tokenizer that treats `[…]` vec values as one token), NOT from meta — Phase 2's
+  `retimeKey`/`revalueKey` splice through `atSpan`/`valueSpan`. anchors EMIT byte spans (pacer's
+  native coordinate); byte→char happens ONCE at the write-back splice via `byteToCharIndex` (09
+  Phase 2). The demoscene's comment em-dashes (6-byte drift) proved the discipline in-test. Two
+  hygiene notes for later: (a) the studio's installed `pacer` `.d.ts` is a stale pnpm file-copy
+  (`Meta` lacks `scenes`; `source` lacks `'trigger'`) — anchors type their meta input STRUCTURALLY
+  to stay robust to it; refreshing that `.d.ts` is an unrelated task. (b) the plan wrote the test as
+  `.test.ts`, but the runner globs `.test.js` only — RED files must be `.test.js`. Gate: 7 new tests
+  (incl. a real `pacer.wasm` × demoscene load), full editor suite 1549/1549, typecheck 0 errors.
