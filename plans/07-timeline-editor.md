@@ -160,3 +160,42 @@ editor suite **1563/1563**, `tsc` + svelte-check **0 errors**, lint clean.
 - **No pacer state is mutated.** span-edit is pure text; the caller owns the
   `reload`. So the lib stays unit-testable and the score text remains the sole
   document authority (the plan's Design invariant).
+
+### Phase 3 — sampling for curves → DONE (2026-07-15, pngine `c766b4b`)
+
+`lib/score/curve-sample.ts` — `sampleTrackCurve(pacer, name, ncomp, {fromTick,
+toTick, columns})` reads a track's value across N tick columns into
+`{ticks: bigint[], lanes: number[][]}` (one value row per lane), so the strip
+paints pacer's ease curve without reimplementing any easing. RED-first: wrote
+`curve-sample.test.js` (9 tests), watched `ERR_MODULE_NOT_FOUND`, greened it.
+Gate: 9/9 green, full editor suite **1572/1572**, `tsc` + svelte-check **0
+errors**, lint clean.
+
+**The instance decision (the RED the plan said would settle it): ONE shared
+pacer — no second instance.**
+
+- **pacer eval is a pure function of time.** There is no retained cursor between
+  calls — `evalTicks(t)` computes that tick's writes from scratch, and
+  `evalBytes` even `.slice()`s a fresh copy. So the ONLY shared mutable state is
+  the reused write buffer (index.js: *"the returned array and its entries are
+  reused — copy if you must keep them"*).
+- **The sampler copies each column out before the next eval.** It pulls the lane
+  scalars into `lanes[l][i]` immediately, never retaining an entry reference. So
+  a playback frame eval landing between two sampled columns cannot corrupt the
+  sample. The real-wasm RED proves it: wrapping the instance so every sampled
+  column is preceded by a playback `eval(sec(7b))` on the SAME pacer yields a
+  `deepStrictEqual`-identical curve to the un-interleaved baseline. **This closes
+  the Design note's "second Pacer instance?" question — Phase 4's drag/scrub loop
+  and the curve sampler share the one loaded instance.**
+- **Sampling is in the TICK domain, not seconds.** `evalTicks` makes the curve
+  SHAPE a pure function of tick, independent of the editor's live tempo — a
+  sampled curve survives a bpm nudge (only the strip's horizontal seconds scaling
+  changes, which the strip owns). Column `i`'s tick is `fromTick + floor(i·span /
+  (columns−1))` — exact BigInt integer math, so 33 columns over `[0, 32b]` land
+  on the whole-beat grid `0b…32b`, matching a direct `evalTicks` per column.
+- **`toTick` is INCLUSIVE and absent writes read as NaN.** Passing `loopTicks` as
+  `toTick` samples the loop boundary, whose value wraps to the start
+  (`eval(L) === eval(0)`) — the caller subtracts a tick for the pre-wrap frame.
+  A column where the track wrote nothing (no entry, or a null/expr-NaN frame)
+  holds `NaN` so a canvas polyline breaks into a gap rather than fabricating a
+  point. Phase 4 draws lane `l` as a polyline over `(ticks[i], lanes[l][i])`.
