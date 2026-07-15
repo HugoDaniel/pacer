@@ -124,3 +124,39 @@ svelte-check **0 errors** (5 pre-existing `App.svelte` warnings), lint clean.
   to it whether or not the installed types have caught up, and the interface IS
   the documentation of the consumed surface. (Refreshing that `.d.ts` is a
   separate hygiene task, not on 07's path.)
+
+### Phase 2 — write-back lib → DONE (2026-07-15, pngine `2dd0e63`)
+
+`lib/score/span-edit.ts` — `retimeKey` / `revalueKey` build a `SpanEdit`
+(`{span, text}`) from a key's `atSpan` / `valueSpan`; `applyEdits(source, edits)`
+splices a batch back into the score text. RED-first: wrote `span-edit.test.js`
+(14 tests), watched `ERR_MODULE_NOT_FOUND`, greened it. Gate: 14/14 green, full
+editor suite **1563/1563**, `tsc` + svelte-check **0 errors**, lint clean.
+
+**Carry-forward — the write-back contract Phase 3/4 build on:**
+
+- **byte→char maps ONCE, at the splice.** anchors emit pacer's byte spans;
+  `applyEdits` maps every edit's span to char offsets via `byteToCharIndex`
+  (09's `byte-index.ts`) against the ORIGINAL source, then splices. This is the
+  single seam where the timeline crosses byte space → editor char space —
+  proven by a `; é\n(key …)` test where the `é` drifts byte off char by one.
+- **A batch is applied RIGHT-TO-LEFT.** Overwriting one span shifts every later
+  byte, so `applyEdits` sorts descending by start and splices highest-first —
+  earlier (lower) offsets stay valid until spliced. Order-independent by
+  construction; **overlapping edits throw** rather than silently corrupt.
+- **v1 retime snaps to WHOLE beats.** `retimeKey` emits an integer-beat `Nb`
+  token (`formatBeats`), which converts to an exact tick (pacer floors
+  `beats·180180`), so it round-trips bit-exactly. A non-beat-aligned tick
+  **throws** (`RangeError`) rather than truncate — the UI must snap first;
+  sub-beat retiming is v2. `revalueKey` emits `String(value)` (shortest f64
+  round-trip → same f32 for an f32-exact drag value); non-finite throws.
+- **The determinism property is proven end-to-end.** The real-wasm reds retime
+  the 12b sceneMix key to 13b and revalue the 8b key to 0.5, `pacer.reload` the
+  spliced text, and assert (a) the re-derived anchor moved exactly one beat /
+  the value round-tripped, and (b) the raw `evalBytes` 'PACW' writes at
+  UNAFFECTED times are byte-identical while a time inside the reshaped segment
+  genuinely differs (positive control — the edit is no no-op). This is the
+  reload-for-fresh-spans loop Phase 4's drag handler will drive.
+- **No pacer state is mutated.** span-edit is pure text; the caller owns the
+  `reload`. So the lib stays unit-testable and the score text remains the sole
+  document authority (the plan's Design invariant).

@@ -128,17 +128,20 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 07 — timeline-editor, Phase 2 (write-back lib) is next.** Open
-`plans/07-timeline-editor.md` and execute Phase 2 under the TDD/compaction discipline. Phase 1
-(**anchors lib, DONE 2026-07-15, pngine `5be6884`**) shipped `lib/score/anchors.ts` —
-`scoreAnchors(meta, source)` → the view model, with `refineKeySpans` splitting each key's single
-`(key …)` form span into `:at`/`:value` field spans + lifting `:ease`. Phase 2 builds
-`lib/score/span-edit.ts` (`retimeKey`, `revalueKey`, `applyEdits`) splicing through those field
-spans right-to-left, then `pacer.reload` for fresh spans. **Reuse `byte-index.ts`** (09 Phase 2's
-util) at the splice boundary — anchors emit BYTE spans, so map byte→char once, there (Decision-log
-2026-07-15 + the new 07-Phase-1 entry). Key carry-forward: pacer's `MetaKey` is ONE form span with
-NO ease — the field spans come from anchors' refinement, not from meta. The `'SCEN'` scene meta (01)
-+ `MetaTrack.source:'trigger'` (02) feed Phases 4–5.
+→ **Wave 2, item 07 — timeline-editor, Phase 3 (sampling for curves) is next.** Open
+`plans/07-timeline-editor.md` and execute Phase 3 under the TDD/compaction discipline. Phases 1–2
+are DONE: Phase 1 (**anchors lib, pngine `5be6884`**) shipped `lib/score/anchors.ts` —
+`scoreAnchors(meta, source)` → the view model, `refineKeySpans` splitting each key's single form
+span into `:at`/`:value` field spans + lifting `:ease`; Phase 2 (**write-back lib, pngine
+`2dd0e63`**) shipped `lib/score/span-edit.ts` — `retimeKey`/`revalueKey`/`applyEdits` splice a
+batch back into the score right-to-left through those field spans, byte→char mapped ONCE at the
+splice (09's `byte-index.ts`), then the caller `pacer.reload`s for fresh spans. The +1b retime and
+0.5 revalue round-trips are proven end-to-end against real wasm (`evalBytes` byte-identical at
+unaffected times). Phase 3 builds `lib/score/curve-sample.ts` — N-column sampling of a track over
+the loop via the loaded pacer instance (`eval`/`evalTicks`), matching direct `eval`; the RED that
+interleaves a "playback" eval **decides the second-instance-vs-shared question** (record the answer
+in the plan). Load only `preview.ts`'s pacer-instance/thumbnail pattern. The `'SCEN'` scene meta
+(01) + `MetaTrack.source:'trigger'` (02) feed Phases 4–5.
 
 **09 studio-workflow-fixes is COMPLETE** (all three phases, 2026-07-15) — board box ticked.
 Phase 1 (timeline honors the score's meter, pngine `962698a`), Phase 2 (UTF-8 byte spans → editor
@@ -497,3 +500,22 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   to stay robust to it; refreshing that `.d.ts` is an unrelated task. (b) the plan wrote the test as
   `.test.ts`, but the runner globs `.test.js` only — RED files must be `.test.js`. Gate: 7 new tests
   (incl. a real `pacer.wasm` × demoscene load), full editor suite 1549/1549, typecheck 0 errors.
+- 2026-07-15 — **07 Phase 2 (write-back lib) DONE — pngine `2dd0e63`.** `lib/score/span-edit.ts` is
+  the timeline's text-splice layer: `retimeKey`/`revalueKey` build a `SpanEdit {span, text}` from a
+  key's `atSpan`/`valueSpan`, `applyEdits(source, edits)` splices a batch back. **Cross-plan fact:
+  this is now the canonical "edit score text through a pacer span" primitive** — any later plan that
+  writes score text (11 Phase 3 ease programs, 05 array-target authoring) should reuse `applyEdits`,
+  not reinvent splicing. Its three invariants: (1) **byte→char maps ONCE, at the splice**, via 09's
+  `byteToCharIndex` against the ORIGINAL source — the single seam from pacer byte space to editor
+  char space (proven by a `; é\n(key …)` drift test); (2) **a batch applies RIGHT-TO-LEFT** (sort
+  descending by start) so a splice never shifts a not-yet-applied lower offset — order-independent,
+  and overlaps THROW rather than corrupt; (3) **span-edit mutates no pacer state** — it is pure text,
+  the caller owns `reload`, so the score text stays the sole document authority. v1 retime snaps to
+  WHOLE beats: `retimeKey` emits `Nb` (exact tick via pacer's `floor(beats·180180)`), and a
+  non-beat-aligned tick THROWS rather than truncate (sub-beat is v2); `revalueKey` emits
+  `String(value)` (shortest f64 round-trip → same f32 for an f32-exact drag value). The determinism
+  property is proven end-to-end against real wasm: a +1b retime and a 0.5 revalue reload with
+  `evalBytes` 'PACW' writes byte-identical at unaffected times and genuinely changed inside the
+  reshaped segment. Gate: 14 new tests, full editor suite 1563/1563, typecheck + svelte-check 0
+  errors, lint clean. Pointer → Phase 3 (curve sampling; the interleaved-eval RED decides the
+  second-Pacer-instance question).
