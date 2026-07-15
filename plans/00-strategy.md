@@ -115,7 +115,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | 01 scenes-cues | ☑ |
 | 1 | 02 trigger-lanes | ☑ |
 | 1 | studio refresh + benchmark #1 | ☑ |
-| 2 | 09 workflow fixes | ☐ |
+| 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P4 | ☐ |
 | 2 | 05 array targets | ☐ |
 | 2 | benchmark #2 | ☐ |
@@ -128,15 +128,21 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 09 — Phase 3 is next: named score/document checkpoints.** Open
-`plans/09-studio-workflow-fixes.md` and execute Phase 3 under the TDD/compaction discipline.
-**09 Phases 1 & 2 are DONE** — Phase 1 (timeline honors the score's meter, pngine `962698a`) and
-Phase 2 (UTF-8 byte spans → editor char offsets, pngine `52210b5`); see that plan's Progress log.
-The Phase 2 byte-index util (`studio/editor/src/lib/score/byte-index.ts`) now exists — 07
-(timeline-editor) should reuse it, not rebuild it (Decision-log 2026-07-15). After Phase 3 lands,
-tick item 09's board box and move to the rest of Wave 2 (07 P1–4 → 05 array-targets → benchmark
-#2). Phase 3 (a `CHECKPOINT` marker in the NDJSON action log + `listCheckpoints`/restore) is
-independent of the first two — this is a clean compaction boundary.
+→ **Wave 2, item 07 — timeline-editor, Phases 1–4 is next.** Open `plans/07-timeline-editor.md`
+and execute Phase 1 under the TDD/compaction discipline. **Reuse `byte-index.ts`** (09 Phase 2's
+util at `studio/editor/src/lib/score/byte-index.ts`) for any score-span→editor-position mapping —
+do not rebuild it (Decision-log 2026-07-15). The `trigger` source name + `MetaTrack.source:
+'trigger'` (02) and the `'SCEN'` scene meta (01) are what the timeline reads.
+
+**09 studio-workflow-fixes is COMPLETE** (all three phases, 2026-07-15) — board box ticked.
+Phase 1 (timeline honors the score's meter, pngine `962698a`), Phase 2 (UTF-8 byte spans → editor
+char offsets, pngine `52210b5`), and **Phase 3 — reconciled: named checkpoints ALREADY SHIP** as
+the studio's **Versions / Checkpoint** feature (a "+ Checkpoint" name field + list + restore in
+`VersionsPanel.svelte`, backed by `SAVE_VERSION`/`tagNode`/`listSaveTags`/`replayTo`; every RED the
+plan specified is already green under `versions-view`/`save-btn`/`action-tree`/`seed-log`/`history`
+tests). Building the plan's literal `CHECKPOINT` action + `listCheckpoints` would have DUPLICATED
+and regressed it — so no code was written (see 09's Progress log for the full file:line map). This
+is the Phase-1 situation repeated: the plan (2026-07-13) predated the studio's current state.
 
 **Wave 1 is COMPLETE** — item 8 (studio refresh + benchmark #1) closed 2026-07-15; the user's
 studio A/B of the tunnel rewrite was **indistinguishable** (drop burst at beat 160 + decay,
@@ -454,3 +460,19 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   pacer wire surface touched; this is a studio-internal consumer of an already-stable byte contract.
   Meta spans (control `valueSpan`, scene `nameSpan`) have no editor coordinate-consumer yet, so
   they were left as-is — remap them at the point 07 first uses them as positions.
+- 2026-07-15 — **09 Phase 3 (named checkpoints) reconciled → NO CODE; plan 09 COMPLETE.** Like
+  Phase 1's pre-flight, the plan text (2026-07-13) predated the studio: named checkpoints already
+  ship as the **Versions / Checkpoint** feature, so building the literal `CHECKPOINT` action +
+  `listCheckpoints` would duplicate and *regress* it (forfeiting compaction-pinning, auto-checkpoint
+  recovery, branch-tip discovery, `?at=` deep-links, dashboard pills). The one-to-one map (all live +
+  gated): `CHECKPOINT {name}` → `SAVE_VERSION {label}` (`schema/studio-state.sjon:359`) tagging the
+  cursor (`App.svelte:766`); name-field + list → `VersionsPanel.svelte` (+ Checkpoint input at
+  :162, `versionsView`) mounted at `Toolbar.svelte:238`; `listCheckpoints` → `listSaveTags` /
+  `listSaveTagsFromNdjson` (`action-tree.ts:730,750`, names=`label` + positions=`nodeId`);
+  append-only restore → `replayTo(nodeId)` (`App.svelte:793`) replaying the log to the tagged node
+  (rebuilds source **and** score, cursor moves, next edit branches). Restore-reconstructs-score is
+  pinned by `src/lib/seed-log.test.js:21`. **Cross-plan bearing:** the action log is a persistent
+  **tree** (`action-tree.ts`), not the flat NDJSON the plan assumed — checkpoints are tree
+  **save-tags** on nodes; any later plan touching versioning/history builds on `tagNode`/`replayTo`,
+  not a new marker vocabulary. No pacer or pngine code changed this step (docs only); the feature's
+  tests were already green in the Phase 2 gate (1542/1542).

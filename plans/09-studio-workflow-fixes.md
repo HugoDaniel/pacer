@@ -133,3 +133,46 @@ byte before a span shifts every later coordinate.
   App.svelte warnings, untouched), biome clean.
 - The util is the dependency 07 (timeline-editor) wants — recorded in `00-strategy.md`'s Decision
   log so 07 reuses it. Phase 3 (named checkpoints) remains — independent; compact here.
+
+### Phase 3 pre-flight → DONE (2026-07-15) — already shipped as the Versions / Checkpoint feature
+
+Grounded Phase 3 against the live editor before writing a line — and, exactly like Phase 1's
+pre-flight, the plan text (written 2026-07-13) predates the studio's current state. Phase 3's whole
+deliverable — **named checkpoints** (a name field + list in the editor chrome, restore, replacing the
+`impulse.PRE-TUNNEL-2026-07-10.sjon`-style manual file-copy workflow) — is **already built, live, and
+gated** as the **Versions / Checkpoint** feature. Building the plan's literal `CHECKPOINT` action +
+`listCheckpoints` helper would DUPLICATE it and regress (it would forfeit the integrations below).
+
+The plan's design maps one-to-one onto shipping code — but the marker is a tree **save-tag**, not a
+separate marker node, which is strictly better (it pins the node against compaction and rides the
+auto-checkpoint / branch-tip / deep-link / dashboard-pill machinery):
+- **`CHECKPOINT {name}` → `SAVE_VERSION {label}`** (`schema/studio-state.sjon:359`). Dispatching it
+  appends a node and tags the cursor: `tagNode(tree, tree.cursor, { label })`
+  (`editor/src/App.svelte:766-767`). The transition only clears `dirty` — AppState *content* (source +
+  score) is unchanged, exactly the plan's "appends the marker and leaves AppState unchanged".
+- **name field + list → `VersionsPanel.svelte`.** "+ Checkpoint" reveals an inline name input
+  (`placeholder="Name (optional), ↵"`, `VersionsPanel.svelte:162-182`) that commits
+  `onCheckpoint(label)` → `makeCheckpoint` → `SAVE_VERSION`; the list (`versionsView`,
+  `editor/src/lib/ui/versions-view.ts`) renders checkpoints newest-first as `v3 · my label`, marks the
+  current one, and offers restore / rename / copy-deep-link / branch-tips. Mounted at
+  `Toolbar.svelte:238`, wired in `App.svelte` (`makeCheckpoint`/`gotoVersion`/`renameVersion`/`toggleVersions`).
+- **`listCheckpoints(log)` → `listSaveTags(tree)` / `listSaveTagsFromNdjson(serialized)`**
+  (`action-tree.ts:730,750`) returns `{nodeId, version, label, ts, kind}[]` = names (`label`) +
+  positions (`nodeId`).
+- **restore (append-only, undoable) → `replayTo(nodeId)`** (`App.svelte:793`). It replays the log to
+  the tagged node — rebuilding source AND score — then moves the cursor; the next edit branches
+  naturally (nothing lost, no history rewrite). This IS the plan's "replay the log up to a marker into
+  the current state … no history rewrite".
+
+Every RED Phase 3 lists is already GREEN under shipping tests: tag-appends-marker /
+content-unchanged (`state.test.js`, `action-tree.test.js`), `listSaveTags` names+positions
+(`action-tree.test.js`), and restore-replay reconstructs **source + score**
+(`src/lib/seed-log.test.js:21` — `buildSeedLog round-trips source + score through the action log`,
+via the same `pathTo`+`reduce` path `replayTo` uses; plus `history.test.js`). `save-btn.test.js`
+covers the `checkpointState` control (disabled when the cursor already sits on a version).
+
+Closed as **satisfied by existing work** — no code written (writing the duplicate would be a
+regression). The feature's tests were already green in the Phase 2 gate run (1542/1542); nothing new
+to gate. **09 is complete** (all three phases done); Wave 2 continues with **07 (timeline-editor)**,
+which reuses `byte-index.ts` (Phase 2's util). If the manual-versioning pain persists in practice, a
+FOLLOW-UP would be adoption/discoverability of the existing panel — not a second checkpoint system.
