@@ -128,17 +128,24 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 1: studio refresh + impulsos benchmark #1** is next (strategy Wave 1 item 8) — 02
-trigger-lanes is COMPLETE (all 4 phases, 2026-07-14, see below), board box ticked. This is a
-studio / cross-repo step, not a pacer-core phase, so there is no single plan file: work from
-Wave 1 item 8 + the "Studio refresh" standing checklist + the impulsos notes
-(`examples/impulsos_camaradas.sjon`). The refresh: rebuild `pacer.wasm`, sync the copies the
-studio/editor load, run the editor's real-wasm tests, and **bump-check the npm triple-pin —
-the npm surface grew this wave** (`MetaTrack.source` now admits `'trigger'`; a new `TRACK_SOURCES`
-mirror), so decide whether that warrants a version bump before the next publish. Then rewrite the
-impulsos tunnel section as score forms — scenes (01) + triggers (02) — lifting the per-beat pulse
-/ backbeat-gate / beats-since WGSL idioms `02` was built to replace, and measure expressiveness
-against the hand-rolled original (benchmark #1). Wave 2 (09 → 07 → 05 → benchmark #2) follows.
+→ **Wave 1 item 8 is IN PROGRESS — studio refresh DONE + verified; benchmark #1 rewrite applied
+and pacer-validated, awaiting the user's A/B in the studio.** On A/B confirm: tick the board box
+and advance to **Wave 2 (09 studio-workflow-fixes → 07 timeline P1–4 → 05 array-targets →
+benchmark #2)**. Details of what's done live in the 2026-07-15 Decision-log entry below; the short
+version:
+- **Studio refresh — done.** `pacer.wasm` rebuilt clean at HEAD; the studio symlink chain
+  (`pngine/studio/public → pngine/studio/editor/public → pacer/npm/pacer/pacer.wasm`) now
+  converges on one hash; editor real-wasm suite 1526/1526 green on the fresh bytes.
+- **Triple-pin — no bump** (precedent: 0.1.0 since the package was first publishable, untouched
+  through all of Wave 0/1). Bump 0.1.0 → 0.2.0 at the NEXT `npm publish` to cover the accumulated
+  additive surface (`:emit`, `Meta.scenes`/`MetaScene`, `MetaTrack.source: 'trigger'`).
+- **Benchmark #1 — rewrite applied to `~/Dev/2026_impulse/` (non-git; dated PRE-PACERBENCH-2026-07-15
+  snapshots), pacer-validated, A/B pending.** The tunnel's drop time-envelope (landmark beat 160 +
+  exp decay) moved to ONE score expr track on the freed `motion.spin` field, and the identity
+  `beat` track became `:emit [beat]`. The rest of the tunnel (per-beat pulse shaping, backbeat
+  parity, off-beat sin, per-cell hashing) is residue that correctly stays in WGSL. The cleanest
+  FUTURE trigger wins are the dots/word steppers ("one icon/letter per beat") → a trigger `count`
+  lane; target them for benchmark #2.
 
 **02 trigger-lanes is COMPLETE** (all 4 phases, 2026-07-14). A `(trigger …)` form emits event
 lanes off the tick grid — `periodic { every, offset }` (`:every N :offset M`) XOR an explicit
@@ -393,3 +400,43 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   trigger write flowing through). The npm surface grew (a new source name), so the triple-pin
   version bump is a studio-refresh decision, deferred to Wave 1 item 8. `CLAUDE.md`'s wire-surface
   table was already accurate (no row moved).
+- 2026-07-15 — **Wave 1 item 8, part 1/2 (studio refresh) DONE + triple-pin decided.** Rebuilt
+  `pacer.wasm` clean at HEAD and synced via `npm run build:wasm-copy`; the studio chain
+  (`pngine/studio/public/pacer.wasm` → `pngine/studio/editor/public/pacer.wasm` →
+  `pacer/npm/pacer/pacer.wasm`, all symlinks) now converges on one hash. **Non-obvious gotcha
+  worth pinning: the prior studio copy was STALE** — the npm `pretest` hook rebuilds `zig-out/`
+  only, and the npm tests load `zig-out/bin/pacer.wasm` DIRECTLY (`corpus.test.js`/`driver.test.js`
+  line ~15/25), so the green npm gate never touches the studio's copy. The copy step
+  (`build:wasm-copy`, run explicitly) is the ONLY thing that refreshes the studio. Editor
+  real-wasm suite 1526/1526 green on the fresh bytes. **Triple-pin: no bump** — 0.1.0 has stood
+  since `85582e3` (first publishable package) through all of Wave 0/1 including scenes (which also
+  grew the surface); the convention is accumulate-then-bump-at-publish. The next `npm publish`
+  should go 0.1.0 → 0.2.0, covering `:emit`, `Meta.scenes`/`MetaScene`, and `MetaTrack.source:
+  'trigger'`. No pacer code changed (wasm is gitignored; no version bump).
+- 2026-07-15 — **Benchmark #1 (impulsos tunnel) — rewrite applied + pacer-validated; A/B pending.**
+  The North-Star ritual on the tunnel section (fs3, beats 148–200) of `~/Dev/2026_impulse/`
+  (`impulse.sjon` is the live doc; `project.sjon` predates the tunnel; the repo is NOT git —
+  snapshotted by hand as `*.PRE-PACERBENCH-2026-07-15.sjon`). **Measurement (the steering signal):
+  the score owns timeline landmarks + envelopes cleanly; the tunnel's per-beat/per-cell texture is
+  residue that correctly stays in WGSL.** Two clean migrations applied: (1) the identity
+  `(track :target beat :expr beat)` → `:emit [beat]` on transport (same value, one fewer track;
+  `motion.beat` already exists so it resolves — unlike the Wave-0 demoscene which first needed the
+  field); (2) the drop's WHOLE time-envelope — `dt = beat-160; dropBurst = step(0,dt)*exp(-2*dt)`
+  — moved to ONE expr track on the otherwise-unused, already-routed `motion.spin` field (fs3 now
+  reads `let dropBurst = motion.spin;`). **Durable cross-plan facts:** (a) SJON's Expr DOES expose
+  `pow`/`step`/`min`/`max`/`clamp`/`fract`/`if` (the demo's "the score expr can't fract/pow"
+  comment was simply wrong — empirically probed against `pacer.wasm`); only `exp` is absent, spell
+  it `(pow 2.718281828459045 x)`; `step(edge,x)` matches WGSL arg order. (b) The expr reproduces
+  the WGSL envelope to f32 precision (Δ ≤ 4e-6, exactly 1.0 at beat 160, exactly 0 before) —
+  validated by loading the actual edited file through `pacer.wasm`, `ok:true`, 0 exprFailures.
+  **Residue (stays WGSL, by nature not gap):** `pow(1-fract(beat),k)` pulse shaping (k=4/3/2),
+  `floor(beat)&1` backbeat PARITY (a sustained half-beat mask — the trigger event model of
+  onsets+held-lanes cannot express it), `offbeat=abs(sin(π·beat+…))` continuous oscillator, and
+  `hash21(tCell)` per-cell dot selection. **Buffer-plumbing cost surfaced:** migrating MORE lanes
+  (buildRamp/calm envelopes) needs widening `motion` (its `struct Motion` is copied in 6 modules)
+  or a second buffer — deferred; the single free `spin` field held exactly one lane, so this
+  rewrite needed zero buffer surgery. **Cleanest FUTURE trigger wins are elsewhere in this demo:**
+  the dots/word steppers `floor((beat-B_SHAPES)/1)` / `floor((beat-B_WORD)/1)` ("one icon/letter
+  per beat") map directly to a trigger `count` lane — the natural benchmark #2 target once the
+  timeline editor (07) makes authoring them cheap. A/B ("indistinguishable motion") is the user's
+  studio check; on confirm, tick the item-8 board box.
