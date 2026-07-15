@@ -169,3 +169,58 @@ shader-layout fact with no score-text span, so it can't carry the char offsets
 registry, so a score can target `env[3]`; but `toUniforms` still emits them
 name-keyed (`{ 'env[3]': 0.5 }`) and `setUniform` drops unmatched keys. Phase 2
 coalesces at `uniformsAt` (option b) into one whole `env` array per frame.
+
+### Phase 2 — write delivery (studio-side coalescing) → DONE (2026-07-15, pngine `930d3f4`)
+
+**RED→GREEN.** New pure module `studio/editor/src/lib/preview/coalesce.ts`
+(`makeUniformCoalescer`) + `coalesce.test.js` (6 tests). RED first: the tests
+import a non-existent module (whole file errors) and assert the sample-and-hold
+semantics; extended `registries.test.js` (+2) asserts a new `arrays` plan that
+`buildRegistries` didn't yet return. Greened both. Editor gate: tsc 0, biome
+clean, svelte-check 0 err (5 pre-existing App warnings), full suite
+**1614/1614** (Phase 1 1606 + 8 new). No pngine worker/core touched — delivery
+**option (b)** confirmed sufficient, exactly as Phase 0 predicted.
+
+**`makeUniformCoalescer(arrays)` — the fold.** pacer emits per-element writes
+(`toUniforms` → `{ 'env[3]':0.5, 'env[7]':1.0 }`); `setUniform` resolves only
+WHOLE named fields, so element keys were dropped. The coalescer folds them into
+one whole flat-float array per base at the **byte-exact layout
+`uniformToTypedArray` writes**: every WGSL uniform-address-space array element
+strides to 16 B = 4 floats, so element `i` lane `j` lands at flat index
+`i·4 + j` and the whole value is `count·4` floats (`array<f32,16>` → 64 floats,
+3 pad each; `array<vec4f,4>` → 16 floats, tight). Verified against gpu.js
+`uniformToTypedArray` (`new Float32Array(arr)` truncated to the field's byte
+size). Plain scalar/vector keys pass through untouched.
+
+**Holes hold last value — the pinned semantic, made concrete.** An array
+element with no write this frame keeps its previous value (accumulator init 0);
+a base is emitted only on frames that write ≥1 of its elements, so an untouched
+array is omitted and the GPU buffer retains it — the exact analog of how an
+un-rewritten plain uniform is simply absent from the draw and keeps its buffer
+content. This makes the coalescer **stateful**, which collides with the
+`uniformsAt` purity invariant (a thumbnail must render the same motion the
+playhead shows). Resolved by **scoping the state per call-site, not inside
+`uniformsAt`**: `uniformsAt` stays pure (raw element-keyed writes); the **live
+playhead** owns a persistent coalescer (true sample-and-hold, mirrors the GPU
+buffer during playback), while the **thumbnail strip** builds a throwaway
+coalescer per prefetch batch over ascending indices — a self-consistent,
+reproducible sequence that can't contaminate the playhead's held holes. For a
+fully-keyframed array (every element written every frame — the Phase 3 case)
+there are no holes, so both paths are identical and the purity concern is moot;
+the divergence only exists for sparse/trigger lanes, where live sample-and-hold
+is the desired synth-like behavior (scrubbing backward does not replay history
+— an accepted preview limitation).
+
+**Consistency by construction.** `buildRegistries` now returns
+`{ targets, dropped, arrays }`, the `arrays` plan (`{ base, count, lanes }`,
+`count = size/16`) built in the SAME walk as the `base[i]` targets — so the
+coalescing plan can never disagree with the expanded target set (a target with
+no plan entry would silently re-drop). Zero-overhead default: no reflected array
+⇒ `liveCoalescer = null` ⇒ renderFrame passes raw straight through (the common
+demoscene case is untouched).
+
+**Deferred to Phase 3:** the end-to-end proof. The write path now delivers, but
+nothing exercises it against real wasm + a real shader. Phase 3 extends the
+demoscene template with `env: array<f32, 8>` driven by 8 tracks, adds a
+real-wasm integration test (an element write reaches the drawn uniforms), and a
+manual studio smoke.

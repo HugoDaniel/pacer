@@ -117,7 +117,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P5 | ☑ |
-| 2 | 05 array targets · P0 ✓ P1 ✓ | ☐ |
+| 2 | 05 array targets · P0 ✓ P1 ✓ P2 ✓ | ☐ |
 | 2 | benchmark #2 | ☐ |
 | 3 | 06 tracker import | ☐ |
 | 3 | 10 audio bus | ☐ |
@@ -128,26 +128,27 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 05 — array-targets, Phase 2 is next.** Open `plans/05-array-targets.md` and
-execute **Phase 2 (write delivery — studio-side coalescing at `uniformsAt`, RED first)** under the
-TDD/compaction discipline. It is **host-side only, no pacer core change** (`env[3]` is just a name
-in `'PACT'`). **Phases 0 + 1 are DONE.** Phase 0 (pngine `1095d61`) extracted `buildRegistries`
-into a pure, unit-tested module and settled the delivery decision — **option (b), studio-side
-coalescing, no pngine change** (the write seam `gpu.js` `setUniform` already writes a whole-array JS
-value at the field's byte offset). Phase 1 (pngine `ea22401`) made `buildRegistries` return
-`{ targets, dropped }`: an array field now expands into element targets (`array<f32,16>` →
-`env[0]`..`env[15]` ncomp 1; `array<vec4f,4>` → 4 targets ncomp 4; element count = `size/16`, the
-16 B uniform stride), matrices/odd sizes land in `dropped` (surfaced via a `console.warn` in
-preview.ts — no score span attaches to a uniform-layout fact), and plain scalar/vec2/3/4 fields keep
-the exact size-only rule so real vectors can't regress. Editor suite 1606/1606.
-Phase 2 (in `preview.ts`/`route.js` usage): pacer emits element writes (`env[3]=0.5`, `env[7]=1.0`);
-`toUniforms` yields `{ 'env[3]':0.5, 'env[7]':1.0 }`, whose keys match no reflection field, so
-`setUniform` drops them today. Coalesce them at `uniformsAt` into one whole `env` array value —
-**holes holding the previous frame's value** (pin that semantic explicitly) — handed to the existing
-`setUniform('env', […])`. Then Phase 3 (end-to-end + `env: array<f32,8>` demoscene example + real-wasm
-integration test), then **benchmark #2** (redo the North-Star ritual using the timeline editor + array
-lanes; the dots/word steppers `floor((beat−B)/1)` → a trigger `count` lane are the noted target),
-closing Wave 2. After that: Waves 3 (06 tracker-import → 10 audio-bus → 03 pattern-tracks) and 4.
+→ **Wave 2, item 05 — array-targets, Phase 3 is next.** Open `plans/05-array-targets.md` and
+execute **Phase 3 (end-to-end + example, RED first)** under the TDD/compaction discipline. It is
+**host-side only, no pacer core change** (`env[3]` is just a name in `'PACT'`). **Phases 0 + 1 + 2 are
+DONE — the full read+write path ships.** Phase 0 (pngine `1095d61`) extracted `buildRegistries` into a
+pure module and settled the delivery decision — **option (b), studio-side coalescing, no pngine
+change**. Phase 1 (pngine `ea22401`) made `buildRegistries` expand array fields into element targets
+(`array<f32,16>` → `env[0]`..`env[15]`; matrices/odd sizes → `dropped`, `console.warn`n). Phase 2
+(pngine `930d3f4`) closed the WRITE side: new pure `coalesce.ts` (`makeUniformCoalescer`) folds
+pacer's per-element writes into one whole flat-float array per base at the byte-exact
+`uniformToTypedArray` layout (element `i` lane `j` at flat `i·4+j`, `count·4` floats), plain keys
+passing through. **Holes hold last value** (stateful sample-and-hold); state scoped per call-site so
+`uniformsAt` stays pure — the live playhead owns a persistent coalescer, the thumbnail strip a
+per-batch throwaway. `buildRegistries` now also returns the `arrays` plan (`{base,count,lanes}`),
+built in the same walk as the targets. Editor suite 1614/1614.
+Phase 3: extend the demoscene template (`studio/public/shaders/demoscene.*`) with an
+`env: array<f32, 8>` buffer field driven by 8 score tracks; the durable RED is a real-wasm
+integration test alongside `score-uniforms.test.js` asserting an element write reaches the
+`toUniforms`/coalesced output AND the drawn uniforms message; gate = editor tests + a manual studio
+smoke. Then **benchmark #2** (redo the North-Star ritual using the timeline editor + array lanes; the
+dots/word steppers `floor((beat−B)/1)` → a trigger `count` lane are the noted target), closing Wave 2.
+After that: Waves 3 (06 tracker-import → 10 audio-bus → 03 pattern-tracks) and 4.
 
 **07 timeline-editor is COMPLETE** (all 5 phases, 2026-07-15) — the visual timeline ships end-to-end.
 Phase 1 (**anchors lib, pngine `5be6884`**) → `lib/score/anchors.ts`: `scoreAnchors(meta, source)`
@@ -588,3 +589,23 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   size-16 single-element arrays (`array<f32,1>` vs `vec4f`) both resolve to one 4-lane target — accepted,
   not special-cased. Editor suite **1606/1606**. No pacer wire surface touched (05 is host-side only);
   Phase 2 is the write-delivery coalescing at `uniformsAt`.
+- 2026-07-15 — **05 array-targets Phase 2 (write delivery — studio-side coalescing) DONE — pngine
+  `930d3f4`.** New pure `coalesce.ts` (`makeUniformCoalescer`) folds pacer's per-element array writes
+  into one whole flat-float array per base, confirming **delivery option (b) is sufficient — no pngine
+  worker/core change** (Phase 0's prediction holds). **Three cross-plan facts.** (1) **The coalesced
+  value's layout is byte-locked to pngine's `uniformToTypedArray` (gpu.js):** every WGSL
+  uniform-address-space array element strides to **16 B = 4 floats**, so element `i` lane `j` lands at
+  flat index `i·4+j` and the whole value is `count·4` floats (`array<f32,16>` → 64 floats w/ 3 pad each;
+  `array<vec4f,4>` → 16 tight). Any future change to how pngine packs uniform-array bytes must move this
+  fold in lockstep. (2) **"Holes hold last value" is stateful sample-and-hold, and that collides with
+  `uniformsAt` purity** (thumbnail must equal playhead at a given time). Resolved by scoping coalescer
+  state PER CALL-SITE, not inside `uniformsAt`: the live playhead keeps a persistent coalescer (mirrors
+  the GPU buffer across frames), the thumbnail strip a per-batch throwaway (ascending, self-consistent,
+  can't contaminate the playhead). For a fully-keyframed array (no holes — the Phase 3 case) both paths
+  are identical; the divergence exists only for sparse/trigger lanes, where scrubbing backward does NOT
+  replay history (accepted preview limitation). (3) **`buildRegistries` now also returns the `arrays`
+  plan (`{base,count,lanes}`), built in the SAME walk as the targets** — consistency by construction, so
+  the coalescing plan can never disagree with the expanded target set. Zero-overhead default: no array
+  ⇒ `liveCoalescer = null` ⇒ raw passthrough (the demoscene default is untouched). Editor suite
+  **1614/1614**. No pacer wire surface touched. Phase 3 is the demoscene `env: array<f32,8>` example +
+  real-wasm integration test.
