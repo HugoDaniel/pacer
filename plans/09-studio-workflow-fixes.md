@@ -61,3 +61,24 @@ match existing panel conventions).
 Gate: editor tests + manual smoke (checkpoint → edit → restore).
 
 ## Progress log
+
+### Phase 1 pre-flight (2026-07-15) — plan reconciled with the refactored studio
+
+Grounded Phase 1 against the live editor before implementing; the plan text (written
+2026-07-13) is stale on file paths — the timeline moved from `Timeline.svelte` to `.ts`
+modules under `pngine/studio/editor/src/lib/timeline/`. Findings that make Phase 1 narrower
+than written:
+- **The strip is already parameterized.** `timeline-strip.ts:378` takes `beatsPerBar = 4` as
+  a DEFAULT param (not a hardcoded constant), and `timeline-strip.test.js:390` already tests
+  `respects custom beatsPerBar`. So there is no constant to delete — the bar math already
+  honors a passed-in meter.
+- **The real work is threading.** `preview.ts` `onScoreArmed?.({ loopBeats, bpm })`
+  (lines ~188/203) is the armed-score callback; the driver exposes the meter as
+  `pacer.meta.transport.beatsPerBar` (npm `types.js:77`). Phase 1 = add `beatsPerBar` to that
+  callback payload and route it into the strip caller, so the score's `(transport :meter …)`
+  overrides the default 4. `transportBpmOf`/`loopBeatsOf` at `preview.ts:156`+ are the sibling
+  helpers to copy for a `beatsPerBarOf`.
+- **RED lands in** `src/lib/timeline/*.test.js`; gate = `node --test 'src/lib/**/*.test.js'`.
+  Integration red: a 3/4 score renders bar ticks every 3 beats end-to-end; no score → 4;
+  meter change on reload updates the ruler.
+Not started — the RED-first build begins next (compacted) window.
