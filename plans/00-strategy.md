@@ -116,7 +116,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | 02 trigger-lanes | ☑ |
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
-| 2 | 07 timeline editor P1–P4 | ☐ |
+| 2 | 07 timeline editor P1–P4 | ☑ |
 | 2 | 05 array targets | ☐ |
 | 2 | benchmark #2 | ☐ |
 | 3 | 06 tracker import | ☐ |
@@ -128,27 +128,26 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2, item 07 — timeline-editor, Phase 4 (ScoreTimeline.svelte component) is next.** Open
-`plans/07-timeline-editor.md` and execute Phase 4 under the TDD/compaction discipline. Phases 1–3
-are DONE — all three lib layers ship, each RED-first and unit-tested against real wasm:
+→ **Wave 2, item 07 — timeline-editor, Phase 5 (polish pass) is next.** Open
+`plans/07-timeline-editor.md` and execute Phase 5 under the TDD/compaction discipline. **Phases 1–4
+are DONE — the visual timeline ships**: anchors → write-back → sampling libs, and now the
+`ScoreTimeline.svelte` strip wired behind a Motion-tab text⇄timeline toggle.
 Phase 1 (**anchors lib, pngine `5be6884`**) → `lib/score/anchors.ts`: `scoreAnchors(meta, source)`
 → the view model, `refineKeySpans` splitting each key's single form span into `:at`/`:value` field
 spans + lifting `:ease`; Phase 2 (**write-back lib, pngine `2dd0e63`**) → `lib/score/span-edit.ts`:
 `retimeKey`/`revalueKey`/`applyEdits` splice a batch back into the score right-to-left through those
 field spans, byte→char mapped ONCE at the splice (09's `byte-index.ts`), then the caller
 `pacer.reload`s for fresh spans; Phase 3 (**sampling lib, pngine `c766b4b`**) →
-`lib/score/curve-sample.ts`: `sampleTrackCurve(pacer, name, ncomp, {fromTick,toTick,columns})`
-probes the loaded pacer per tick column (`evalTicks`, bpm-invariant curve shape) into
-`{ticks, lanes}`, copying each column's lanes out before the next eval. **The second-instance
-question is DECIDED: one shared pacer.** pacer eval is a pure function of time (no retained cursor;
-`evalBytes` slices a copy), so the reused write buffer is the only shared state — the RED interleaves
-a playback `eval` between every sampled column on the SAME instance and gets a byte-identical curve.
-No second Pacer. Phase 4 builds `ScoreTimeline.svelte` behind a Motion-tab text⇄timeline toggle:
-rows/keys from anchors (Phase 1), curve fills from sampling (Phase 3), drag → batched edit dispatched
-as the existing **score-set** action (so undo/log hold) built from Phase 2's `retimeKey`/`revalueKey`
-(snap to the meter's beat grid before retime — v1 is whole-beat). Load: `Timeline.svelte` (playhead /
-BPM-ruler strip conventions), `ScorePane.svelte` (mount + diagnostics + the score-set action seam).
-The `'SCEN'` scene meta (01) + `MetaTrack.source:'trigger'` (02) feed Phases 4–5.
+`lib/score/curve-sample.ts`: `sampleTrackCurve` probes the loaded pacer per tick column (one shared
+pacer — eval is a pure function of time); Phase 4 (**ScoreTimeline strip, pngine `fdfcc9a`**) →
+`lib/timeline/score-timeline.ts` (pure model + drag reducer, 17 tests incl. a real-wasm drag that
+reloads a 12b key to 13b) + `components/ScoreTimeline.svelte` (dumb shell): drag a key →
+beat-snapped retime + lane-0 revalue **BATCHED into one `SET_SCORE`** (atomic undo/log), a bare click
+→ `FOCUS_SPAN` jumps to the span in ScorePane; preview exposes `scoreMeta()`/`sampleCurve()`,
+App pairs `armedMeta`+`armedScore` so a drag splices the exact text its spans index.
+**Phase 5 is polish, each item RED-first + independent:** scenes lane from the `'SCEN'` meta (01),
+control pins on the strip, vec-key lane display (`MetaTrack.source:'trigger'` from 02 also feeds here).
+After 07 Phase 5: the rest of Wave 2 (05 array-targets → benchmark #2), then Waves 3–4.
 
 **09 studio-workflow-fixes is COMPLETE** (all three phases, 2026-07-15) — board box ticked.
 Phase 1 (timeline honors the score's meter, pngine `962698a`), Phase 2 (UTF-8 byte spans → editor

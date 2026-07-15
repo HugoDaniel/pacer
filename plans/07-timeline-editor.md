@@ -199,3 +199,53 @@ pacer — no second instance.**
   A column where the track wrote nothing (no entry, or a null/expr-NaN frame)
   holds `NaN` so a canvas polyline breaks into a gap rather than fabricating a
   point. Phase 4 draws lane `l` as a polyline over `(ticks[i], lanes[l][i])`.
+
+### Phase 4 — ScoreTimeline component → DONE (2026-07-15, pngine `fdfcc9a`)
+
+The strip ships. Two pieces, RED-first: `lib/timeline/score-timeline.ts` (pure
+model + drag reducer, 17 tests incl. 2 real-wasm proofs) and
+`components/ScoreTimeline.svelte` (the dumb shell) behind a Motion-stance
+text⇄timeline toggle. Gate: 17/17 green, full editor suite **1589/1589**, `tsc`
++ svelte-check **0 errors** (5 pre-existing `App.svelte` warnings), Biome clean.
+
+**Carry-forward — the decisions that shaped the wiring:**
+
+- **The component's logic lives in a PURE lib, not the `.svelte`.** The editor
+  has NO DOM test harness (glob is `src/lib/**/*.test.js`, no jsdom/vitest), so —
+  exactly as `Timeline.svelte`'s scrub logic lives in `timeline-gesture.ts` — all
+  of ScoreTimeline's real work is in `score-timeline.ts`: `timelineRows(anchors,
+  layout)` (→ positioned rows), `tickToX`/`valueToY`, `snapTickToBeat`, and the
+  `keyPointerDown/Move/Up` reducer. The `.svelte` is a thin shell (SVG render +
+  pointer routing), covered by manual smoke only. This is the pattern for every
+  future editor-component phase — put the logic in `lib/`, keep the shell dumb.
+- **A drag is a text edit, via the existing `SET_SCORE` action.** The reducer
+  builds the edit from Phase 2's `retimeKey`/`revalueKey` and `applyEdits`, then
+  emits `{type:'DISPATCH', action:{type:'SET_SCORE', score}}` — the SAME action
+  typing in ScorePane dispatches, so undo/log/replay semantics hold for free. A
+  retime + a revalue on one key **batch into a single `SET_SCORE`** (both field
+  splices atomic) — retime snaps to a whole beat (v1) so `retimeKey` never throws.
+  A no-op drag (snapped back to origin) emits nothing.
+- **Two effect kinds, mirroring `timeline-gesture`'s DISPATCH/SEEK split.**
+  `DISPATCH SET_SCORE` is the committed/logged edit; **`FOCUS_SPAN` is
+  imperative** — a bare click (no move past threshold) focuses the key's form
+  span back in ScorePane, wired like `selectBpm` (App sets `motionView='text'`
+  then rAF-defers `scorePane.focusSpan(span)`, which byte→char-maps the span for
+  CodeMirror). Caret placement is UI, not a document mutation, so it is NOT an
+  action.
+- **The armed (meta, text) pair must travel together.** The timeline derives
+  `scoreAnchors(armedMeta, armedScore)` from a pair captured together in
+  `onScoreArmed` — NOT from live `appState.score`, which races ahead of the async
+  re-arm after a drag. The drag also splices against `armedScore` (the text the
+  spans index), so a stale span never refines against edited text. After a drag →
+  `SET_SCORE` → reload, both refresh in the same `onScoreArmed`, closing the
+  reload-for-fresh-spans loop Phase 2 proved deterministic.
+- **The shared pacer is reused for sampling, not re-instantiated.** `preview.ts`
+  exposes `scoreMeta()` and `sampleCurve()` on its handle; the component takes an
+  injected `sampleCurve` callback (DI, like `Timeline`'s thumbnails) rather than
+  reaching across the pacer-instance boundary. This is the Phase 3 decision cashed
+  in: one instance, safe to sample while playback evals interleave.
+- **The installed `pacer` `.d.ts` is now CURRENT.** The Phase 1 note flagged it
+  stale (no `scenes`, no `'trigger'`); the pnpm copy was refreshed (2026-07-15),
+  so `pacer.meta` is directly assignable to `anchors.ts`'s `AnchorMeta` — the
+  preview seam needs no cast. (The structural `AnchorMeta`/`CurveSamplePacer`
+  interfaces stay as the documentation of the consumed surface regardless.)
