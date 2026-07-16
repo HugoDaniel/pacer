@@ -118,7 +118,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P5 | ☑ |
 | 2 | 05 array targets · ALL phases ✓ (dotted lanes in the demoscene, smoke green 2026-07-16) | ☑ |
-| 2 | benchmark #2 (after 05) | ☐ |
+| 2 | benchmark #2 · A/B CONFIRMED 2026-07-16 | ☑ |
 | 3 | 06 tracker import | ☐ |
 | 3 | 10 audio bus | ☐ |
 | 3 | 03 pattern tracks P1–P4 | ☐ |
@@ -128,13 +128,17 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Benchmark #2 (the impulsos dots choreography) is APPLIED + parity-validated — the user's
-studio A/B eyeball is all that's left to close Wave 2** (measurement, residue, and the pngine
-`(group, binding)` dedup gotcha are in the 2026-07-16 benchmark #2 Decision-log entry; the demo
-files are snapshotted as `*.PRE-PACERBENCH2-2026-07-16.sjon`). A/B checklist for beats 148–204:
-icon-per-beat strobe from 162, refresh wipe 184, contract 186→188, one letter per beat from 190
-with the tally pile, full-flash 199, fist 200 + the red dot — and the Motion timeline should show
-the `dots-choreo` scene block, both trigger rows, and the two vec4 key lanes.
+→ **Wave 2 is COMPLETE — Wave 3 opens with 06 tracker-import** (emit real `(trigger …)` forms
+from the .it patterns now that 02 is in the studio's wasm), then 10 audio-bus, then 03 pattern
+tracks P1–P4.
+
+**Benchmark #2 is CLOSED — A/B CONFIRMED 2026-07-16.** The user eyeballed beats 148–204 in the
+studio against the pre-rewrite build: the dots choreography is identical (icon strobe from 162,
+wipe 184, contract 186→188, letters + tally from 190, full-flash 199, fist 200 + red dot), with
+the `dots-choreo` scene block, both trigger rows, and the two vec4 key lanes on the Motion
+timeline. Measurement, residue, and the (since-fixed) pngine `(group, binding)` dedup gotcha are
+in the 2026-07-16 benchmark #2 Decision-log entry; the demo files are snapshotted as
+`*.PRE-PACERBENCH2-2026-07-16.sjon`.
 
 **05 array-targets is COMPLETE.** The manual studio smoke
 went GREEN 2026-07-16 (pngine journal §255; 05's Progress log has the detail): a fresh
@@ -147,7 +151,7 @@ grade animate in the preview and filmstrip, and the Motion timeline shows both `
 (`env.0` vec4 key curves, `env.1` trigger row). All Phase 3 code was already in
 (pngine `72d49f8`): the demoscene template drives a **bare `env: array<vec4f, 2>` post binding**
 through the DOTTED element targets, real-wasm test pinning the bit-exact vec4 landing and the
-coalesced write. Next: **benchmark #2** closes Wave 2; after that Waves 3 (06 → 10 → 03) and 4.
+coalesced write. Benchmark #2 closed Wave 2 (2026-07-16); Waves 3 (06 → 10 → 03) and 4 remain.
 
 **07 timeline-editor is COMPLETE** (all 5 phases, 2026-07-15) — the visual timeline ships end-to-end.
 Phase 1 (**anchors lib, pngine `5be6884`**) → `lib/score/anchors.ts`: `scoreAnchors(meta, source)`
@@ -746,4 +750,5 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   — but its CLOCK moved to a shared lane: *the score owns the clock, WGSL keeps per-instance
   shape*; (d) the disabled `B_DOTS`/`B_BG` knobs and the grow-out `B_SPLIT`/`B_VERT`/`B_HORZ`
   (per-dot staggered) were deliberately left. No pacer or pngine code changed — demo-side only.
-  Board box stays UNCHECKED until the user's studio A/B confirms indistinguishable motion.
+  **A/B CONFIRMED 2026-07-16** — the user eyeballed beats 148–204 in the studio: the choreography
+  is identical. Board box ticked; **Wave 2 COMPLETE** (09 → 07 → 05 → benchmark #2).
