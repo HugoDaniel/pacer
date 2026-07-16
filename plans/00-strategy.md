@@ -724,12 +724,14 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   real `pacer.wasm` `evalTicks` → `toUniforms` → real coalescer, 1401 tick samples over beats
   140–210 vs the ORIGINAL WGSL formulas — **steppers exact, everything else worst Δ 1.06e-6**
   (f32 truncation), event gates structural, pre-event holes omitted. **Cross-plan facts:** (1)
-  ⭐ **pngine's `populateUniformTable` dedups by `(group, binding)` across ALL modules** and joins
+  ⭐ **pngine's `populateUniformTable` deduped by `(group, binding)` across ALL modules** and joined
   buffers through one global map — in a multi-pipeline doc with per-pipeline `(layout auto)`, a
-  score-driven binding MUST claim a doc-globally-unique slot or it SILENTLY vanishes from the
+  score-driven binding had to claim a doc-globally-unique slot or it SILENTLY vanished from the
   reflection (no diagnostic; `denv` at `(0,2)` disappeared behind cs1's `pngineU`/fs3's `gA` and
-  landed at `(0,4)`). A pngine fix (per-pipeline tables or at least a collision warning) is a
-  candidate 08-adjacent task. (2) **Lane rest-value ambiguity**: a key lane that rests at 0
+  landed at `(0,4)`). **FIXED upstream 2026-07-16** (pngine `e2dc4bd` per-pipeline join +
+  `b2319a4` collision/drop warnings); re-verified from this side — the binding-4 workaround was
+  reverted (`denv` back at its natural `(0,2)`, table attributes every field to the right buffer,
+  parity gate ALL GREEN, worst Δ unchanged at 1.06e-6). (2) **Lane rest-value ambiguity**: a key lane that rests at 0
   half-lights any consumer whose window straddles 0 (the tally's char-0 pop read `smoothstep(-0.15,
   0.15, wordProg)` = 0.5 at rest) — the idiom is REST OUTSIDE THE WINDOW with a slope-matched
   anchor key (`-1` rest, `189.85b → -0.15` anchor, then slope 1/beat); triggers dodge this by
