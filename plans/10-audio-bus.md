@@ -190,3 +190,62 @@ mutes via `setVolume(0)` until GO) can be overridden by a score-driven
 re-apply is the bus's contract. If the Phase 3 template keyframes
 `audio.volume`, either start it at 1 (warm-up mute holds unless a re-render
 fires) or prefer `audio.tempo`/`audio.pitch` for the musical use.
+
+### Phase 3 — template + docs + audible smoke (done, 2026-07-16) — PLAN CLOSED
+
+**Template + docs landed** (pngine `3d83e82`, reds first): the demoscene
+score ships an `audio.pitch` ride — flat (0.94) under the noise intro,
+bending to true pitch as the cube lands (the chroma window's timing; not
+`audio.volume`, honoring the Phase 2 warm-up watch-out). It ships COMMENTED
+with a distinctive `;;` marker: the studio boots the template trackless,
+where a live `audio.*` target fails the WHOLE load (`unknown_target`) —
+dead visuals at first paint. Rot protection pins in
+`score-uniforms.test.js`: one asserts the `;;` block exists and the shipped
+score loads against the visual registry alone; the other programmatically
+strips the marker, loads `[visual, paramRegistry(chiptuneHost)]` on the
+real wasm, and drives the ride through `applyParams` (flat f32-exact at
+beat 0, mid-bend in (0.94, 1) at beat 12, exactly 1 from beat 16, registry
+0 untouched). `agent-bridge.md` documents registry 1 as live, including the
+agent trap: patching an `audio.*` track into a trackless project kills the
+whole score — ship such tracks commented, the template block is the model.
+
+**The audible smoke FAILED — and caught a real crash** (fixed in pngine
+`b31a896`, reds first). Silence despite every unit pin green. Node probes
+against the shipped libopenmpt build: the ctl works standalone, but driving
+the REAL worklet class dies after ~1.1k messages with the user's exact
+console (`getWasmTableEntry` TypeError → OOB cascade → "invalid pitch
+factor" from garbage parses). Root cause UPSTREAM (chiptune3@0.8.7, still
+latest): the `setPitch`/`setTempo` cases call `asciiToStack` twice per
+message with no stackSave/stackRestore — ~56 B of emscripten stack leaked
+per ctl, exhausting the 64 KB stack in ~19 s of per-frame drive, after
+which the wasm instance is permanently corrupt (playback keeps running —
+the failure is silent). Fix, two parts, each pinned:
+
+- **`public/chiptune` is now a VENDORED dir** (revising the Phase 0 "never
+  fork the worklet" stance — a crash is the documented reason):
+  `chiptune3.worklet.js` carries one marked `PNGINE PATCH` (stack
+  save/restore around the two ctl cases); `libopenmpt.worklet.js` stays a
+  symlink into node_modules (the 2 MB blob remains upstream-owned).
+  `chiptune-worklet-leak.test.js` spams 3000 ramping ctl messages through
+  the SERVED worklet's real handler (a `buildIt` module from the plan 06
+  fixture): upstream dies ~1.1k, the patch survives — and the same test
+  decides whether a future chiptune3 upgrade may restore the symlink.
+  `chiptune-worklet.bundle.js` rebuilt from the patched source (demo.zip
+  carries the fix).
+- **The driver dedupes `setTempo`/`setPitch`**: a held value posts once; a
+  play START clears the cache (the worklet's `play` recreates the module,
+  resetting both factors engine-side) while an unpause keeps deduping.
+
+**Smoke re-run: CONFIRMED AUDIBLE** (2026-07-16, user's ears, `.it` module
+through the title-menu loader — note the loader lives in the TITLE menu,
+"Load audio track…", not an audio panel). Gates: editor 1687/1687 (+5 over
+Phase 2), tsc clean, biome clean.
+
+**Follow-ups filed:**
+- **Sointu host** (pngine-side, future): a `sointuHost` sibling of
+  `chiptuneHost` when the studio grows a Sointu engine — the
+  `AudioTargetHost` contract + `refreshAudioRegistry` flow is
+  engine-agnostic; only the param table and driver slice change.
+- **Upstream report** to DrSnuggles/chiptune3 (the ctl stack leak +
+  suggested patch) — pending.
+- `audio.ch<N>.*` stays deferred (Phase 0 log: ext-interactive unreachable).

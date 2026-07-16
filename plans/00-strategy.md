@@ -120,7 +120,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 2 | 05 array targets · ALL phases ✓ (dotted lanes in the demoscene, smoke green 2026-07-16) | ☑ |
 | 2 | benchmark #2 · A/B CONFIRMED 2026-07-16 | ☑ |
 | 3 | 06 tracker import · ALL phases ✓ (.it → dialog on the Motion tab, smoke green 2026-07-16) | ☑ |
-| 3 | 10 audio bus | ☐ |
+| 3 | 10 audio bus · ALL phases ✓ (pitch ride audible, smoke green 2026-07-16) | ☑ |
 | 3 | 03 pattern tracks P1–P4 | ☐ |
 | 4 | 08 knob lift | ☐ |
 | 4 | 11 P3–P5 | ☐ |
@@ -128,19 +128,18 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 10 audio-bus — Phases 0–2 DONE (2026-07-16, pngine `7b54680` +
-`0f3c2a6` + `712ab92`); next: Phase 3 (template + docs + audible smoke).** Phase 2
-armed both buses: `armPacer` samples `paramRegistry(audioHost)` at arm time and
-loads `[visualRegistry, audioRegistry]`; `renderFrame` splits ONE eval — registry 0
-→ `draw.uniforms`, registry 1 → `applyParams` into the module player, LIVE frames
-only (thumbnail prefetch stays visual-only). `refreshAudioRegistry` re-arms on
-track load/unload (registry fingerprint = visual key + audio params; gen token
-supersedes in-flight arms), wired at all five flip sites in App.svelte. Editor
-tests 1682, tsc + biome clean. Phase 3: template score with a musical use, studio
-docs, Sointu-host follow-up filed, audible manual smoke — mind the demo-player
-warm-up mute vs. a score-driven `audio.volume` (plan 10 Phase 2 log). `audio.ch<N>.*`
-stays DEFERRED (ext-interactive unreachable from JS — Phase 0 log). After 10: 03
-pattern tracks P1–P4 close Wave 3.
+→ **Wave 3 · 03 pattern-tracks — P1 next** (P0 spike ☑: SJON PatternQuery works on
+wasm32-freestanding with `plugin-exec=false`). Open `plans/03-pattern-tracks.md`,
+run P1 under the README discipline; P1–P4 close Wave 3. Context from plan 10
+(CLOSED 2026-07-16, all phases, smoke audible — pngine `7b54680` `0f3c2a6`
+`712ab92` `3d83e82` `b31a896`): registry 1 is live end to end; the demoscene ships
+a commented `;;` `audio.pitch` ride (a live `audio.*` target fails the whole load
+on a trackless boot — the `;;` block + rot pins are the model for audio in
+templates); the served chiptune worklet is now a VENDORED patched copy
+(upstream ctl stack leak crashed the engine in ~19 s of per-frame drive —
+`chiptune-worklet-leak.test.js` gates any un-vendoring); the driver dedupes
+factor messages (play-start clears the cache). `audio.ch<N>.*` stays DEFERRED;
+Sointu host filed as a pngine-side follow-up; upstream chiptune3 report pending.
 
 **Benchmark #2 is CLOSED — A/B CONFIRMED 2026-07-16.** The user eyeballed beats 148–204 in the
 studio against the pre-rewrite build: the dots choreography is identical (icon strobe from 162,
@@ -846,3 +845,20 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   (`setVolume(0)` until GO) loses to a score-driven `audio.volume` on any paused
   re-render — template should start volume at 1 or ride tempo/pitch instead. Editor
   tests 1682 (+7), tsc + biome clean.
+- 2026-07-16 — **10 audio-bus Phase 3 + PLAN CLOSED** (pngine `3d83e82` + `b31a896`):
+  the demoscene template ships an `audio.pitch` ride, COMMENTED with a `;;` marker
+  (a live `audio.*` target fails the whole load on the trackless boot); rot pins
+  programmatically uncomment it against the real wasm + chiptuneHost. The audible
+  smoke then CAUGHT A REAL CRASH no unit pin could see: upstream chiptune3@0.8.7
+  leaks ~56 B of emscripten stack per setPitch/setTempo ctl message (asciiToStack
+  with no stackRestore) — pacer's per-frame re-apply exhausts the 64 KB stack in
+  ~19 s, permanently corrupting the wasm instance while playback keeps running.
+  Fixed by VENDORING the worklet (`public/chiptune` is a real dir now; one marked
+  PNGINE PATCH; the 2 MB libopenmpt blob stays a node_modules symlink; a 3000-msg
+  leak test gates un-vendoring) + driver-side factor dedupe (play-START clears the
+  cache — the worklet's play recreates the module, resetting ctls; unpause keeps
+  deduping). Smoke re-run: pitch ride audible, user-confirmed. **Cross-plan
+  facts:** (a) the Phase 0 "never fork the worklet" stance is revised — vendored
+  with a documented crash reason; (b) for 08 knob-lift and any future audio lane:
+  the ctl path is now safe for continuous per-frame drive, and held values cost
+  one message. Editor tests 1687, tsc + biome clean. Wave 3 continues with 03.
