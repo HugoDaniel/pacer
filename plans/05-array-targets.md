@@ -344,3 +344,65 @@ deliberate append-only pngine wire change (pad byte → `elem_count`; element
 type in the `type` byte), decided and shipped by the user. Phase 3 resumes
 from here: demoscene `array<vec4f, N>` example + real-wasm integration test +
 manual studio smoke.
+
+### Phase 3 — studio re-base DONE (2026-07-16, pngine `419226b`); element targets renamed DOTTED
+
+**Both spec corrections above are implemented, and the resumed verification
+immediately surfaced a second unauthorability gap the 2026-07-16 validation
+could not see: the `[i]` target spelling doesn't lex in a score.** The
+validation fed registry names straight into `buildRegistries`, but never
+*authored* one — probing the real pacer wasm shows `(track :target bands[1] …)`
+is impossible: `:target` is `target-name :underlying symbol`, and `[` opens a
+vector in SJON, so `bands[1]` lexes as symbol `bands` + vector `[1]` (schema
+error: "positional argument expects key-section, got vector"); the string form
+`"bands[1]"` is rejected by the value kind. Phases 1–2's `base[i]` naming made
+every expanded target unreachable from a score — the same class of gap as the
+reflection block, one seam later.
+
+**Fix — dotted element names, zero pacer changes.** Element targets are now
+`bands.1` (studio-side rename in `registries.ts`/`coalesce.ts`): `.` is in
+SJON's symbol-body charset (verified in the lexer + live against the real
+wasm: `(track :target bands.1 …)` loads, resolves, and `toUniforms` yields
+`{"bands.1": …}`), and it is exactly how pngine's own flattener names nested
+struct leaves (`params.glow`) — so the spelling is native to the reflection.
+Unambiguous by construction: a WGSL identifier is never all-digits, so a
+trailing `.N` can only be an element index (coalescer key regex
+`^(.+)\.(\d+)$`, greedy head keeps a nested base intact: `fx.bands.1` →
+base `fx.bands`). `target-name` stays an unconstrained symbol — the plan's
+"pacer core is untouched" principle holds.
+
+**`buildRegistries` v3 — `elemCount` is the discriminator, stride is real:**
+
+- `elemCount > 0` ⇒ array: count = `elemCount` (authoritative, replacing
+  `size/16`), `type` = the ELEMENT's tag → lanes, and **stride is DERIVED
+  per-field** (`size/elemCount`, carried in the `arrays` plan as
+  `strideFloats`). Phase 2's "always 16 B = 4 floats" byte-lock is superseded:
+  a tight STORAGE `array<f32,8>` (stride 4 B) reflects through the same table
+  and now expands into 8 scalar targets — **the retired `array<f32,N>`
+  headline returns via `var<storage>`, through the unchanged
+  `setUniform` seam** (`uniformToTypedArray` truncates a flat array to the
+  field's byte size regardless of address space). `array<vec3f,N>` (16 B
+  stride, 3 lanes) holds its pad float at 0.
+- Arrays of matrices/structs (element tag 6/7/255) drop with an
+  element-facing reason; a size that doesn't divide by `elemCount` refuses
+  (mis-address guard); a **pre-§253 reflection (no `elemCount`) degrades wide
+  fields to `dropped`** — visible warn, never a crash. A 1-element array now
+  expands (`solo.0`) instead of collapsing into a plain target.
+- Fixtures rewritten byte-for-byte to the real `getUniforms` shape (mirroring
+  pngine's own `tests/npm/uniform-reflection.test.js` pins) — the fake-tag era
+  is closed.
+
+**The durable red landed too** (`array-targets.test.js`): REAL pacer.wasm + an
+authored score (keyframed `bands.1` vec4 element, expr-driven `lanes.3`
+scalar) chained through `buildRegistries → Pacer.load → eval → toUniforms →
+makeUniformCoalescer` into the exact whole-field write shape `setUniform`
+accepts (`bands` → `[0,0,0,0, 1,2,3,4]`), holes sample-held across frames.
+Everything but the worker/GPU hop is the production path — this is the test
+that would have caught both the reflection block and the naming block.
+
+Gates: tsc 0, biome clean, svelte-check 0 err (5 pre-existing App warnings),
+editor suite **1626/1626** (+12). pngine journal §254.
+
+**Remaining to close Phase 3 / plan 05:** the demoscene `array<vec4f, N>`
+template example (score + WGSL, an authoring decision) + manual studio smoke
+against the running editor. All docs/examples must use the DOTTED spelling.

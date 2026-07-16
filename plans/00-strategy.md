@@ -117,7 +117,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P5 | ☑ |
-| 2 | 05 array targets · P0–P2 ✓ · **P3 READY** (gap closed via pngine Option B) | ☐ |
+| 2 | 05 array targets · P0–P2 ✓ · P3 studio re-base ✓ (elemCount + DOTTED targets) · **example+smoke left** | ☐ |
 | 2 | benchmark #2 (after 05) | ☐ |
 | 3 | 06 tracker import | ☐ |
 | 3 | 10 audio bus | ☐ |
@@ -128,16 +128,17 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Resume 05 array-targets Phase 3 (end-to-end + example) — the reflection gap is CLOSED.** The
-user picked Option (B) by implementing it in pngine (`2b659bf` → `21215a2` → `9c5456f` → `9519e03`,
-journal §253): array uniform fields now reflect with the ELEMENT's UT_* tag in the `type` byte and
-the element count in the record's former pad byte (`elemCount`, append-only), and bare array
-bindings reflect as named leaves. **Validated end-to-end 2026-07-16** (Decision-log entry below):
-real probes → `parseUniformTable` → the REAL `buildRegistries` expand correctly with **zero studio
-changes** (P1–P2 code stands as-is); all pngine + editor gates green. Phase 3 resumes with two spec
-corrections recorded in 05's log: the example uses `array<vec4f, N>` (an `array<f32,8>` uniform
-cannot compile — WGSL 16-B stride, revalidated), and P3 should teach the studio to consume the new
-authoritative `elemCount` (today it derives `size/16`, equal for every legal uniform array). Then
+→ **Close 05 array-targets Phase 3: author the demoscene `array<vec4f, N>` example + manual studio
+smoke — everything upstream of authoring is DONE and verified.** pngine Option (B) landed (§253:
+element-typed `type` byte + `elemCount` in the former pad byte, bare bindings reflect) and the
+studio re-based on it 2026-07-16 (pngine `419226b`, journal §254, Decision-log entry below):
+`buildRegistries` consumes `elemCount` as authoritative with per-field derived stride (tight
+STORAGE `array<f32,N>` now expands — scalar lanes returned via storage), fixtures mirror the real
+wire, and ⭐ element targets are **DOTTED (`bands.1`)** — the `[i]` spelling turned out to be
+unauthorable as a score `:target` (SJON symbol lexing; probed on the real wasm), so any 05 example
+or doc MUST use `base.N`. A real-wasm integration test (`array-targets.test.js`) already chains an
+authored score → `toUniforms` → coalesced `setUniform`-shaped writes. What's left is the authoring
+call: the demoscene template's score-driven array + a smoke in the running studio. Then
 benchmark #2 closes Wave 2; after that Waves 3 (06 → 10 → 03) and 4.
 
 **07 timeline-editor is COMPLETE** (all 5 phases, 2026-07-15) — the visual timeline ships end-to-end.
@@ -655,3 +656,25 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   but P3 should consume `elemCount` as authoritative (also future-proofs >16-B elements, which
   currently drop via `LANES_BY_TYPE`). (3) P3's example must be `array<vec4f, N>` — lanes in 4s.
   Board: `05 · P3 READY`; benchmark #2 unblocked behind it; What's next → resume P3.
+- 2026-07-16 — **05 Phase 3 studio re-base DONE (pngine `419226b`, journal §254); element targets
+  renamed `base.N` (DOTTED) — the `[i]` spelling was unauthorable.** Resuming P3 surfaced a second
+  reachability gap, one seam past the reflection block: a score literally cannot name `bands[1]` —
+  `:target` is `target-name :underlying symbol` and `[` opens a vector in SJON, so `bands[1]` lexes
+  as symbol + vector (schema error) and the string form is rejected (probed live on the real pacer
+  wasm; the 2026-07-16 validation missed it because it fed registry names into `buildRegistries`
+  without ever authoring a track). **Cross-plan facts:** (1) ⭐ **The score-facing element-target
+  naming contract is `base.N`** (`bands.1`, nested `fx.bands.1`) — `.` is in SJON's symbol-body
+  charset and is pngine's own nested-struct separator; a WGSL identifier is never all-digits, so a
+  trailing `.N` is unambiguous. All 05 docs/examples/templates must use it; no pacer surface changed
+  (`target-name` stays an unconstrained symbol). (2) **The Phase-2 "always 16 B = 4 floats"
+  byte-lock is superseded: stride is now per-field** (`size/elemCount`, carried as `strideFloats`
+  in the `arrays` plan; `elemCount` consumed as the authoritative count and the array
+  DISCRIMINATOR, replacing the size/type heuristic). Consequence: tight STORAGE arrays reflect and
+  expand — `var<storage> lanes: array<f32,8>` → 8 scalar targets through the SAME
+  reflection + `setUniform` seam (`uniformToTypedArray` truncates flat floats to the field's byte
+  size regardless of address space), so the retired `array<f32,N>` scalar-lane headline returns via
+  storage. (3) A pre-§253 reflection (no `elemCount`) degrades wide fields to `dropped`
+  (console-visible), never crashes — the studio tolerates a stale pngine runtime. Real-wasm
+  integration test `array-targets.test.js` chains authored score → `eval` → `toUniforms` →
+  coalescer → whole-field writes (holes sample-held). Editor **1626/1626** (+12), tsc 0, biome
+  clean, svelte-check 0 err. Board: 05 → example+smoke left; benchmark #2 next behind it.
