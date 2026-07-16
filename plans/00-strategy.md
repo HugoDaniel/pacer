@@ -128,7 +128,15 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **05 array-targets is COMPLETE — run benchmark #2 to close Wave 2.** The manual studio smoke
+→ **Benchmark #2 (the impulsos dots choreography) is APPLIED + parity-validated — the user's
+studio A/B eyeball is all that's left to close Wave 2** (measurement, residue, and the pngine
+`(group, binding)` dedup gotcha are in the 2026-07-16 benchmark #2 Decision-log entry; the demo
+files are snapshotted as `*.PRE-PACERBENCH2-2026-07-16.sjon`). A/B checklist for beats 148–204:
+icon-per-beat strobe from 162, refresh wipe 184, contract 186→188, one letter per beat from 190
+with the tally pile, full-flash 199, fist 200 + the red dot — and the Motion timeline should show
+the `dots-choreo` scene block, both trigger rows, and the two vec4 key lanes.
+
+**05 array-targets is COMPLETE.** The manual studio smoke
 went GREEN 2026-07-16 (pngine journal §255; 05's Progress log has the detail): a fresh
 Demoscene-seeded draft on `:4321` against the rebuilt §253 compiler wasm, verified at the worker
 `draw` seam (Worker.postMessage patch) — `env` ships as ONE coalesced 8-float write, the cool
@@ -699,3 +707,41 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   `dropped: []`). Editor **1627/1627**, tsc 0, biome clean (touched scope; whole-tree biome
   already red at HEAD, pre-existing), svelte-check 0 err. Board: 05 → manual smoke left → tick →
   benchmark #2.
+- 2026-07-16 — **Benchmark #2 (impulsos dots choreography) — rewrite applied + parity-validated;
+  A/B pending.** The North-Star ritual, round 2, on the dots-grid choreography (beats 149–204,
+  the `dots` module of `~/Dev/2026_impulse/impulse.sjon`; snapshots
+  `*.PRE-PACERBENCH2-2026-07-16.sjon`). **Measurement: TEN beat knobs left WGSL for the score**
+  (`B_SHAPES`/`SHAPE_BEATS`/`B_REFRESH`/`REFRESH_LEN`/`B_CONTRACT`/`CONTRACT_LEN`/`B_WORD`/
+  `WORD_BEATS`/`B_FULL`/`B_FIST`) through ONE `array<vec4f,4>` binding driven as dotted lanes —
+  exactly the 05×02 composition the wave was built for: `denv.0`/`denv.1` are per-beat
+  `(trigger …)`s whose **count lane IS the old `floor((beat-B)/1)` stepper** (`:offset` is a true
+  start delay — event k = offset + k·every, write omitted before the first event, so the buffer's
+  initial zeros cover pre-history); `denv.2` keys the four crossfade mixes — **`:ease smoothstep`
+  is the WGSL builtin's exact curve**, so the migrated smoothsteps are shape-identical, not
+  approximated; `denv.3` keys the global ramps (birth, wipe front with its 1.25 clamp, contraction,
+  word progress). Parity gate (scratchpad `bench2_parity.mjs`, the corpus-style red→green for a
+  non-git demo repo): pngine CLI compile → real `parseUniformTable` → real `buildRegistries` →
+  real `pacer.wasm` `evalTicks` → `toUniforms` → real coalescer, 1401 tick samples over beats
+  140–210 vs the ORIGINAL WGSL formulas — **steppers exact, everything else worst Δ 1.06e-6**
+  (f32 truncation), event gates structural, pre-event holes omitted. **Cross-plan facts:** (1)
+  ⭐ **pngine's `populateUniformTable` dedups by `(group, binding)` across ALL modules** and joins
+  buffers through one global map — in a multi-pipeline doc with per-pipeline `(layout auto)`, a
+  score-driven binding MUST claim a doc-globally-unique slot or it SILENTLY vanishes from the
+  reflection (no diagnostic; `denv` at `(0,2)` disappeared behind cs1's `pngineU`/fs3's `gA` and
+  landed at `(0,4)`). A pngine fix (per-pipeline tables or at least a collision warning) is a
+  candidate 08-adjacent task. (2) **Lane rest-value ambiguity**: a key lane that rests at 0
+  half-lights any consumer whose window straddles 0 (the tally's char-0 pop read `smoothstep(-0.15,
+  0.15, wordProg)` = 0.5 at rest) — the idiom is REST OUTSIDE THE WINDOW with a slope-matched
+  anchor key (`-1` rest, `189.85b → -0.15` anchor, then slope 1/beat); triggers dodge this by
+  design via the pre-first-event omit. (3) **A childless `(scene …)` is legal** and lands in
+  `'SCEN'`/the timeline — a pure named-section annotation (`dots-choreo` @ 148b/72b). **Residue
+  (stays WGSL, steering signal):** (a) a periodic trigger has no event-count cap, so "hold the
+  last icon/letter" keeps a shader `clamp(count, 0, N-1)` — a `:count N` limiter on `(trigger …)`
+  would let the score own the hold (N stays a data fact); (b) vec4 element key tracks COUPLE the
+  four lanes (every key names all lanes) — fine for non-overlapping crossfades, awkward for
+  independent envelopes; per-lane element targets (`denv.2.x`) don't exist; (c) per-dot stagger
+  (the grow-out snaps, tally column offsets, hash dance) is inherently per-instance and stays WGSL
+  — but its CLOCK moved to a shared lane: *the score owns the clock, WGSL keeps per-instance
+  shape*; (d) the disabled `B_DOTS`/`B_BG` knobs and the grow-out `B_SPLIT`/`B_VERT`/`B_HORZ`
+  (per-dot staggered) were deliberately left. No pacer or pngine code changed — demo-side only.
+  Board box stays UNCHECKED until the user's studio A/B confirms indistinguishable motion.
