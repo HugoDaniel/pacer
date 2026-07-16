@@ -17,9 +17,13 @@
 //! (`:expr`, exclusive with `(key …)` children) keep their node index
 //! and are dry-run here at t = 0 via `ExprTrack.evalAt` — the same code
 //! path the frame uses — so unknown bindings, type errors, and result-
-//! shape defects fail at load with spans. Time-dependent failures
-//! (e.g. a division that only zeroes at beat 2) are by nature beyond
-//! the dry-run; the frame path omits that track's write for the frame.
+//! shape defects fail at load with spans. Pattern tracks (`:pattern`)
+//! follow the same discipline through `PatternTrack.queryCycle`: the
+//! dry-run queries their first cycle and every hap must satisfy the
+//! result contract. Time-dependent failures (e.g. a division that only
+//! zeroes at beat 2, a symbol payload in a later slowcat cycle) are by
+//! nature beyond the dry-run; the frame path omits that track's write
+//! for the frame.
 //!
 //! `(control …)` pins build BEFORE tracks: their ids must already be
 //! bound (with document `:value`s) when the dry-run evaluates each
@@ -39,6 +43,7 @@ const TimeMap = @import("TimeMap.zig");
 const Easing = @import("Easing.zig");
 const TrackTable = @import("TrackTable.zig");
 const ExprTrack = @import("ExprTrack.zig");
+const PatternTrack = @import("PatternTrack.zig");
 
 const Ast = sjon.Ast;
 const NodeIndex = Ast.NodeIndex;
@@ -633,16 +638,16 @@ const Builder = struct {
                 try self.emit(.track_source_conflict, tree.spanOf(node), "track `{s}` has both (key …) children and :pattern — exactly one value source", .{target_name});
                 return true;
             }
-            // Plan 03 Phase 2 adds the compile-time dry-run (a query at
-            // tick 0 through the shared pattern module) here.
-            tracks.append(ta, .{
-                .target_id = target.id,
-                .registry = target.registry,
-                .ncomp = target.ncomp,
-                .source = .{ .pattern = node },
-                .scene = scene_index,
-            }) catch return error.OutOfMemory;
-            track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
+            if (try self.dryRunPattern(node, target.ncomp, scene_win)) {
+                tracks.append(ta, .{
+                    .target_id = target.id,
+                    .registry = target.registry,
+                    .ncomp = target.ncomp,
+                    .source = .{ .pattern = node },
+                    .scene = scene_index,
+                }) catch return error.OutOfMemory;
+                track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
+            }
             return true;
         }
 
@@ -941,6 +946,61 @@ const Builder = struct {
                 return false;
             },
         };
+        return true;
+    }
+
+    /// Dry-run a pattern track through the SAME query the frame will use
+    /// (`PatternTrack.queryCycle`), so load-time acceptance and frame
+    /// semantics cannot drift. A top-level track dry-runs cycle 0; a
+    /// scened track the cycle containing its scene start (the first
+    /// window the frame path will ever query for it — a `(slowcat …)`
+    /// arm the scene never opens on is not spuriously rejected). The
+    /// sweep is stricter than the expr dry-run's single point: EVERY hap
+    /// in the queried cycle must satisfy the result contract, so a
+    /// symbol payload half a bar in fails at load, not silently at eval.
+    /// Content of LATER cycles is by nature beyond the dry-run (the
+    /// expr-at-t=0 limitation); the frame path omits those writes.
+    /// True = the track is sound; false = a diagnostic was emitted.
+    fn dryRunPattern(self: *Builder, pattern_node: NodeIndex, ncomp: u8, scene: ?TrackTable.Scene) Error!bool {
+        // `PatValue` has no vector variant: a pattern can only ever
+        // drive a scalar target this slice — reject the statically
+        // impossible pairing regardless of the pattern's content.
+        if (ncomp != 1) {
+            try self.emit(.pattern_result_invalid, self.tree.spanOf(pattern_node), "pattern values are scalar; target expects {d} components", .{ncomp});
+            return false;
+        }
+        const dry_tick: TrackTable.Tick = if (scene) |s| s.start_tick else 0;
+        var result = PatternTrack.queryCycle(self.gpa, self.tree, self.schema, pattern_node, dry_tick) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // The engine's deterministic ceilings (depth / hap / byte
+            // budgets, tick overflow) — same outcome on every host.
+            else => {
+                try self.emit(.pattern_eval_failed, self.tree.spanOf(pattern_node), "pattern failed to evaluate: {s}", .{@errorName(err)});
+                return false;
+            },
+        };
+        defer result.deinit();
+        if (result.diagnostics.len > 0) {
+            // Forward the engine's own diagnostics (malformed
+            // combinators, broken expr leaves) — their spans index the
+            // same combined tree, so they land on the offending head.
+            for (result.diagnostics) |d| {
+                try self.emit(.pattern_eval_failed, d.span, "pattern: {s}", .{d.message});
+            }
+            return false;
+        }
+        if (result.dropped > 0) {
+            // Belt-and-braces: a hap whose expr leaf failed at query
+            // time after passing the engine's static check.
+            try self.emit(.pattern_eval_failed, self.tree.spanOf(pattern_node), "pattern expression failed to evaluate in the dry-run cycle ({d} hap(s) dropped)", .{result.dropped});
+            return false;
+        }
+        for (result.haps) |hap| {
+            if (PatternTrack.coerce(hap.value) == null) {
+                try self.emit(.pattern_result_invalid, self.tree.spanOf(pattern_node), "pattern values must be finite numbers — symbols, strings, keywords, booleans, and nil cannot drive a target", .{});
+                return false;
+            }
+        }
         return true;
     }
 
@@ -1471,13 +1531,14 @@ test "compile diagnostics: keys XOR expr — both is a conflict" {
 }
 
 test "compile accepts pattern tracks: node recorded, walk-opaque interior" {
-    // The pattern interior (`euclid`, `pure`, …) is SJON Pattern
+    // The pattern interior (`fast`, `pure`, …) is SJON Pattern
     // vocabulary, not pacer schema — `:walk-opaque` keeps the validator
-    // out, exactly like `:expr`. Recording the node is Phase 1; the
-    // dry-run (Phase 2) and eval (Phase 3) land later in plan 03.
+    // out, exactly like `:expr`. The fixture exercises a combinator, a
+    // fastcat vector, literal numbers, AND an expr leaf — everything the
+    // Phase 2 dry-run must accept for a sound pattern.
     var r = try compile(t.allocator,
         \\(transport :bpm 120 :meter [4 4])
-        \\(track :target circle-radius :pattern (euclid 5 8 (pure 0.7)))
+        \\(track :target circle-radius :pattern (fast 2 [0.2 (pure (+ 0.1 0.2))]))
     , &test_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
@@ -1492,7 +1553,7 @@ test "compile diagnostics: pattern XOR keys XOR expr — any pairing is a confli
     var with_keys = try compile(t.allocator,
         \\(transport :bpm 120)
         \\(track :target circle-radius
-        \\  :pattern (euclid 3 8 (pure 1))
+        \\  :pattern [0 1]
         \\  (key :at 0b :value 0.2))
     , &test_targets);
     defer with_keys.deinit();
@@ -1503,17 +1564,85 @@ test "compile diagnostics: pattern XOR keys XOR expr — any pairing is a confli
         \\(transport :bpm 120)
         \\(track :target circle-radius
         \\  :expr (+ beat 0)
-        \\  :pattern (euclid 3 8 (pure 1)))
+        \\  :pattern [0 1])
     , &test_targets);
     defer with_expr.deinit();
     try t.expect(!with_expr.ok());
     try t.expect(with_expr.findDiag(.track_source_conflict) != null);
 }
 
+test "compile diagnostics: pattern dry-run — a malformed combinator fails at load with spans" {
+    // `(fast 2)` is missing its pattern argument. The engine collects an
+    // arity diagnostic (degrading the node to silence) and the dry-run
+    // forwards it as `pattern_eval_failed` — same combined tree, so the
+    // span lands on the offending head in user coordinates.
+    const source: [:0]const u8 =
+        \\(transport :bpm 120)
+        \\(track :target circle-radius :pattern (fast 2))
+    ;
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    const diag = r.findDiag(.pattern_eval_failed).?;
+    const start = r.validated.userOffset(diag.span.start);
+    try t.expectEqualStrings("fast", source[start..r.validated.userOffset(diag.span.end)]);
+}
+
+test "compile diagnostics: pattern payloads must be finite numbers — pattern_result_invalid" {
+    // Symbol atoms (`bd`) are legal pattern vocabulary but violate the
+    // write contract (a track's value is a finite number). The dry-run
+    // checks EVERY hap in the dry-run cycle, so the defect fails at
+    // load even though tick 0's hap (0.5) is fine.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius :pattern [0.5 bd])
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.pattern_result_invalid) != null);
+}
+
+test "compile diagnostics: a pattern on a multi-component target is pattern_result_invalid" {
+    // `PatValue` has no vector variant — a pattern can only ever drive a
+    // scalar target this slice, so the impossible pairing is rejected at
+    // load regardless of the pattern's content.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target tint :pattern [0.2 0.7])
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.pattern_result_invalid) != null);
+}
+
+test "compile patterns: a scened pattern dry-runs at its scene start" {
+    // `(slowcat 0.5 bd)` plays child i at cycle i: cycle 0 is the sound
+    // number 0.5, cycle 1 the invalid symbol `bd`. Top-level the dry-run
+    // queries cycle 0 and accepts (the bd at cycle 1 is a frame-path
+    // omission, the expr-at-t=0 limitation); a scene opening at bar 1
+    // dry-runs the cycle containing its start — and catches bd at load.
+    var top = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius :pattern (slowcat 0.5 bd))
+    , &test_targets);
+    defer top.deinit();
+    for (top.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(top.ok());
+
+    var scened = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(scene :name drop :at 1bar :dur 1bar
+        \\  (track :target circle-radius :pattern (slowcat 0.5 bd)))
+    , &test_targets);
+    defer scened.deinit();
+    try t.expect(!scened.ok());
+    try t.expect(scened.findDiag(.pattern_result_invalid) != null);
+}
+
 test "pattern diagnostic codes are wire-stable appendices" {
-    // The codes land ahead of their emission paths (plan 03: dry-run in
-    // Phase 2, eval in Phase 3) so the wire values are pinned from the
-    // first commit — Code is append-only and crosses in 'PACD'.
+    // Pinned wire values — Code is append-only and crosses in 'PACD'.
+    // Emission: both codes ride the Phase 2 dry-run (tests above);
+    // Phase 3 adds the frame path.
     try t.expectEqual(@as(u16, 27), @intFromEnum(Code.pattern_eval_failed));
     try t.expectEqual(@as(u16, 28), @intFromEnum(Code.pattern_result_invalid));
 }

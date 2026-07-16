@@ -123,9 +123,9 @@ pub const Source = union(enum) {
     trigger: Trigger,
     /// The `:pattern` value node — SJON Pattern vocabulary queried on
     /// the shared tick grid, 1 cycle = 1 bar (identity: `Pattern.PPC`
-    /// IS the per-bar tick count). Plan 03: the dry-run lands in Phase
-    /// 2, the eval-time point-sample in Phase 3 — until then a pattern
-    /// track emits no writes.
+    /// IS the per-bar tick count). Dry-run at load via `PatternTrack`
+    /// (plan 03 Phase 2); the eval-time point-sample lands in Phase 3 —
+    /// until then a pattern track emits no writes.
     pattern: sjon.Ast.NodeIndex,
 };
 

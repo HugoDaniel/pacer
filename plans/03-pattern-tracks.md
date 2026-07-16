@@ -181,3 +181,63 @@ Gate: `zig build verify` + npm gate.
   typecheck ✓. Next: **Phase 2 — compile dry-run** (`PatternTrack.zig`
   sibling to ExprTrack; malformed pattern → `pattern_eval_failed`, bad t=0
   value → `pattern_result_invalid`).
+
+- **Phase 2 — compile dry-run (done, 2026-07-16).** TDD reds first (four
+  new Compile tests, all failing on the missing dry-run), then green via
+  the shared module + one Builder method. Landed:
+  - **`src/PatternTrack.zig`** — the ExprTrack discipline: one definition
+    of "query a `:pattern` node on the tick grid" shared by `Compile`
+    (dry-run) and `Eval` (Phase 3 frame path). `SEED = 0` pinned (a future
+    `:seed` threads through here); `cycleWindowOf(tick)` — the frozen
+    identity as exact integer math, transport-independent because
+    `TimeMap` pins one bar = `PPC` ticks for EVERY meter (the meter
+    divides beats within the bar); `queryCycle` (window + `queryTree`);
+    `coerce(PatValue) → ?[4]f32` — finite number into lane 0, lanes 1–3
+    zero, everything else null.
+  - **`Compile.dryRunPattern`** (mirrors `dryRunExpr`): a top-level track
+    dry-runs cycle 0, a scened track the cycle containing its scene start
+    — locked by a test where `(slowcat 0.5 bd)` passes top-level (cycle 0
+    = 0.5) but fails inside a scene at bar 1 (cycle 1 = symbol `bd`).
+    Engine errors (deterministic depth/hap/byte ceilings, tick overflow)
+    → `pattern_eval_failed` at the pattern node; engine DIAGNOSTICS
+    (malformed combinators, broken expr leaves — collection over abort,
+    the node degrades to silence) are forwarded each with their OWN span
+    (same combined tree — a `(fast 2)` arity defect lands on `fast` in
+    user coordinates, asserted by test); `dropped > 0` → belt-and-braces
+    `pattern_eval_failed`. **Strictness decision:** the sweep checks EVERY
+    hap in the dry-run cycle against the result contract (stricter than
+    expr's single point; zero drift risk — any accepted hap coerces
+    identically at frame time), so `[0.5 bd]` fails at load even though
+    tick 0's hap is sound. Later-cycle content stays beyond the dry-run
+    (the expr-at-t=0 limitation).
+  - **ncomp ≠ 1 statically rejected** (`pattern_result_invalid`):
+    `PatValue` has no vector variant, so a pattern can never drive a
+    multi-component target this slice — the impossible pairing fails at
+    load regardless of pattern content.
+  - **DISCOVERY — `euclid` is not in the engine vocabulary.** SJON's
+    combinator set this slice is `silence` / `pure` / `fast` / `slow` /
+    `stack` / `slowcat` / `cat` + vectors (fastcat) + bare atoms (pure).
+    Phase 1's `(euclid …)` fixtures only compiled because nothing dry-ran
+    them; they moved to real vocabulary. The plan's headline example
+    depends on euclid ⇒ **SJON-side follow-up** (its own conformance
+    fixtures live there; pacer inherits it for free once it lands).
+  - **DISCOVERY — env threading needs a small SJON addition (Phase 3
+    pre-req).** `queryTree` takes no outer env: hap value exprs bind ONLY
+    the pattern-locals `cycle`/`tick`/`seed` (exactly the frozen shadow
+    set), so `(pure (* beat 2))` fails the engine's own static leaf check
+    (UnknownBinding → diagnostic → `pattern_eval_failed` at load — honest,
+    not silent). Frozen design #2 (pacer's env under the shadows) needs a
+    `queryTree` variant accepting an outer `Expr.Env` for both the static
+    check and the runtime leaf eval.
+  - **Code size, the real number:** `pacer.wasm` 471235 → 489776 B
+    (**+18.5 KiB, +3.9%**) — the dry-run CALLS the engine, superseding
+    the P0 probe's +2 B (a reference isn't a call; ReleaseSmall kept the
+    uncalled closure out).
+  Gate: `zig build test` ✓ (133) · `zig build audit-diagnostics` ✓ 29/29
+  (both pattern codes now covered by real emission tests) · `zig build
+  verify` ✓ (no golden changed — no corpus case uses `:pattern` until
+  Phase 4). No JS/TS touched. Next: **Phase 3 — frame eval** (point-sample
+  in `Eval`'s `.pattern` arm via the shared module; pre-reqs: the SJON
+  outer-env addition above; extend `Eval`'s `has_expr` scratch-allocation
+  check to pattern tracks; freeze the hap-selection tie-break — latest
+  onset is frozen, equal-onset ties need a pinned order).

@@ -41,6 +41,9 @@ pub const Eval = @import("Eval.zig");
 /// Expr-track evaluation shared by `Compile` (t=0 dry-run) and `Eval`
 /// (frame path): the time env contract + result coercion.
 pub const ExprTrack = @import("ExprTrack.zig");
+/// Pattern-track evaluation shared by `Compile` (cycle dry-run) and
+/// `Eval` (frame path): the cycle↔bar window + payload coercion.
+pub const PatternTrack = @import("PatternTrack.zig");
 /// Packed write-buffer wire format (`'PACW'` header + 20-byte entries).
 pub const Writes = @import("Writes.zig");
 /// WASM boundary blobs: `'PACT'` target-registry list in, `'PACD'`
@@ -54,6 +57,7 @@ test {
     _ = TrackTable;
     _ = Eval;
     _ = ExprTrack;
+    _ = PatternTrack;
     _ = Writes;
     _ = Abi;
 }

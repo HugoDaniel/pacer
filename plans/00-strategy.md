@@ -128,12 +128,16 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 03 pattern-tracks — P2 next** (P1 done 2026-07-16: `:pattern` schema
-key + three-way `track_source_conflict` + appended codes 27/28 + `Source.pattern`
-with meta source byte 3; the three design questions are FROZEN in the plan's P1
-log — cycle↔bar identity, pattern-local env shadows, latest-onset hap selection).
-Open `plans/03-pattern-tracks.md`, run P2 (compile dry-run: `PatternTrack.zig`
-sibling to ExprTrack; `pattern_eval_failed` / `pattern_result_invalid` emission)
+→ **Wave 3 · 03 pattern-tracks — P3 next** (P1 done 2026-07-16 — design FROZEN:
+cycle↔bar identity, pattern-local env shadows, latest-onset hap selection. P2 done
+2026-07-16: `PatternTrack.zig` shared module + `dryRunPattern` — every-hap sweep of
+the first cycle, scened tracks dry-run at scene start, engine diagnostics forwarded
+with their own spans, ncomp≠1 statically rejected; wasm +18.5 KiB real. TWO
+DISCOVERIES in the P2 log: `euclid` is NOT in SJON's vocabulary yet — SJON-side
+follow-up — and Phase 3 has an SJON PRE-REQ: `queryTree` needs an outer-`Expr.Env`
+variant so pacer's time env reaches hap exprs under the frozen shadows).
+Open `plans/03-pattern-tracks.md`, run P3 (frame eval: point-sample in `Eval`'s
+`.pattern` arm; extend the `has_expr` scratch check; pin the equal-onset tie-break)
 under the README discipline; P1–P4 close Wave 3. Context from plan 10 (CLOSED
 2026-07-16, all phases, smoke audible — pngine `7b54680` `0f3c2a6` `712ab92`
 `3d83e82` `b31a896`): registry 1 is live end to end; the demoscene ships a
@@ -881,3 +885,20 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   `'pattern'` rows once P3 makes them drive; until then they compile clean and
   emit nothing. No golden changed (the new byte only appears for pattern tracks).
   Gates: zig test 126, audit 29/29, verify green, npm lint + typecheck clean.
+- 2026-07-16 — **03 pattern-tracks Phase 2 (compile dry-run).** `src/PatternTrack.zig`
+  is the ExprTrack-discipline shared module (`SEED=0` pinned, `cycleWindowOf` exact
+  integer identity math — transport-independent, one bar = `PPC` for every meter —
+  `queryCycle`, scalar-finite `coerce`); `Compile.dryRunPattern` sweeps EVERY hap of
+  the first cycle (top-level: cycle 0; scened: the cycle containing scene start —
+  locked by a `(slowcat 0.5 bd)` pair test), forwards the engine's own diagnostics
+  span-intact, and statically rejects ncomp≠1 (`PatValue` has no vector variant —
+  patterns drive scalar targets this slice). Both wire codes now have real emission
+  paths. **Cross-plan facts:** (a) `euclid` does NOT exist in SJON's engine yet
+  (vocabulary: silence/pure/fast/slow/stack/slowcat/cat + vectors + atoms) — the
+  plan's headline example needs an SJON-side addition; (b) **P3 pre-req is an SJON
+  change**: `queryTree` takes no outer env, so pacer's time env can't reach hap
+  exprs until a variant accepts an outer `Expr.Env` (static check + runtime leaf
+  eval) — until then `(pure (* beat 2))` fails honestly at load; (c) real wasm
+  delta for linking the engine: +18.5 KiB (supersedes P0's +2 B probe — a
+  reference isn't a call). No golden changed. Gates: zig test 133, audit 29/29,
+  verify green. No JS/TS touched.
