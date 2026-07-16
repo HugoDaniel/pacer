@@ -119,7 +119,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 2 | 07 timeline editor P1–P5 | ☑ |
 | 2 | 05 array targets · ALL phases ✓ (dotted lanes in the demoscene, smoke green 2026-07-16) | ☑ |
 | 2 | benchmark #2 · A/B CONFIRMED 2026-07-16 | ☑ |
-| 3 | 06 tracker import · P0–P1 ✓ (.it reader + timing model, 2026-07-16) | ☐ |
+| 3 | 06 tracker import · P0–P2 ✓ (.it reader + timing model + score emission, 2026-07-16) | ☐ |
 | 3 | 10 audio bus | ☐ |
 | 3 | 03 pattern tracks P1–P4 | ☐ |
 | 4 | 08 knob lift | ☐ |
@@ -128,13 +128,14 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 06 tracker-import in flight — Phases 0–1 done (`.it` reader pngine `4f5e061`,
-timing model pngine `ea81031`, 2026-07-16); Phase 2 (score emission: golden SJON text +
-reload through the real pacer.wasm) is next**, then P3 studio UI. The timing realism check
-reproduced the hand-computed WGSL anchors from the module — `beatOf(10, 0)` = 160 (the drop,
-bar 41.1), `beatOf(13, 48)` = 220 (the breakdown) — so the importer provably replaces the
-transcription step. Phase 2 carry-forward (quantize onsets to the even-row grid; interfaces
-to load) is in 06's Progress log. After 06: 10 audio-bus, then 03 pattern tracks P1–P4.
+→ **Wave 3 · 06 tracker-import in flight — Phases 0–2 done (`.it` reader pngine `4f5e061`,
+timing model pngine `ea81031`, score emission pngine `50a9fe0`, 2026-07-16); Phase 3 (studio
+UI: import dialog on the Motion tab — file input → parse → channel checklist → insert
+skeleton, warnings displayed) is next and closes the plan.** The emission realism check
+round-tripped the ENTIRE real module through the real pacer.wasm — `:dur 400b`, the drop's
+`; bar 41` boundary as a generated comment, 1000+ onset triggers, clean load. Phase 3
+carry-forward (pure-text-out contract, 0-based channel keys, onset census for the
+checklist) is in 06's Progress log. After 06: 10 audio-bus, then 03 pattern tracks P1–P4.
 
 **Benchmark #2 is CLOSED — A/B CONFIRMED 2026-07-16.** The user eyeballed beats 148–204 in the
 studio against the pre-rewrite build: the dots choreography is identical (icon strobe from 162,
@@ -777,3 +778,15 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   (breakdown, bar 56.1), `songBeats()` = 400 = the live score's `:dur 400b` — so
   emitted `(transport …)` + order-boundary comments can be trusted as the score's
   ground truth, and the transcription step is provably redundant.
+- 2026-07-16 — 06 Phase 2 complete (pngine `50a9fe0`): score emission
+  (`studio/editor/src/lib/score/score-emit.ts`, `emitScore(mod, channels): string`) —
+  exact-text golden + an integration red loading the emitted text through the real
+  pacer.wasm (trigger lanes `[0, 0, 1, 0]` on the first onset). **Deliberate deviation
+  from the Phase-1 carry-forward:** onsets are emitted at their exact nominal beats,
+  NOT quantized to the even-row grid — at A8/A4 an odd row sounds beat/12 late, so
+  nominal is twice as close to the truth as an even-row snap (beat/4 ± beat/12), and
+  quantizing would silently move musical content; the caveat rides in the text as
+  `; warning:` lines instead. **Cross-plan fact for 06 Phase 3 / 07 write-back:** the
+  emitted skeleton for the FULL `impulse-04.it` (25 orders, 1000+ onsets over two
+  ncomp-4 triggers) reloads clean through the shipped wasm and names the drop's
+  `; bar 41` boundary — the import path is end-to-end real; only UI remains.

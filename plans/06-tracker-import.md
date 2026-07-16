@@ -136,3 +136,42 @@ beat/24 at A8/A4); order-boundary beats come straight from `beatOf(orderPos, 0)`
 for the `; bar N — pattern P` comment lines. Interfaces to load:
 `parseIt(bytes): ItModule` (it-reader.ts) + `timingOf(mod): ItTiming`
 (it-timing.ts).
+
+### Phase 2 — score emission (done, 2026-07-16)
+
+**RED first.** `score-emit.test.js` — six reds (same `.test.js` glob rule):
+one exact-text golden (fixture module + `{4: 'kick'}` → header comment,
+transport, `; bar N — pattern P` per played order with `+++` emitting no
+line, one `(trigger :target kick :at […])` — note cut 254 / off 255 are not
+onsets), warnings-above-transport, "untitled" fallback for a nameless module,
+no-notes channel → comment instead of an empty trigger, ascending-channel
+trigger order, and ONE integration red loading the emitted text through the
+REAL symlinked pacer.wasm (`Pacer.load` ok, `scoreLoopBeats` = 12, trigger
+lanes `[0, 0, 1, 0]` exactly on the first onset, gate down mid-gap — the
+`score-uniforms.test.js` harness idiom). GREEN: `score-emit.ts` —
+`emitScore(mod, channels): string`. pngine commit `50a9fe0`. Gate: 1650/1650,
+`tsc` clean, biome clean.
+
+**Deviation from the Phase 1 carry-forward, deliberate:** onsets keep their
+EXACT nominal beat (`row / rowsPerBeat`) — never snapped to the even-row
+grid. At A8/A4 an odd row sounds beat/12 late, so the nominal position is
+twice as close to the truth as an even-row quantize (beat/4 ± beat/12) would
+be; quantizing would also silently move musical content. The grid caveat
+rides into the emitted text instead, as `; warning:` comment lines above the
+transport (straight from `timingOf(mod).warnings`).
+
+**Realism check** (scratch, not committed): `impulse-04.it` (nameless — hence
+the "untitled" fallback test) emits 33 lines / ~12.7 kB with its two busiest
+channels (ch 1: 852 pattern-local note-ons, ch 2: 226) as ncomp-4 triggers;
+`:dur 400b`, the 1024× Axx warning in-text, **`; bar 41 — pattern …` present**
+(the drop's order-10 boundary — the WGSL anchor is now a generated comment),
+one bar line per played order, and the whole text reloads clean through the
+real pacer.wasm. REALISM OK.
+
+**Carry-forward for Phase 3:** `emitScore(mod, channels)` is pure text out —
+the UI owns placement (append vs replace in the Motion tab's score);
+structured warnings for display come from `timingOf(mod).warnings` (the same
+strings the text embeds). Channel numbers in the selection are the reader's
+0-based channels; the checklist should show 1-based tracker-style numbers
+with the onset census (count note-ons per channel the way the realism script
+does) so the user picks busy lanes.
