@@ -117,7 +117,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P5 | ☑ |
-| 2 | 05 array targets · P0–P2 ✓ · P3 studio re-base ✓ (elemCount + DOTTED targets) · **example+smoke left** | ☐ |
+| 2 | 05 array targets · P0–P3 code ✓ (dotted lanes in the demoscene) · **manual smoke left** | ☐ |
 | 2 | benchmark #2 (after 05) | ☐ |
 | 3 | 06 tracker import | ☐ |
 | 3 | 10 audio bus | ☐ |
@@ -128,18 +128,18 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Close 05 array-targets Phase 3: author the demoscene `array<vec4f, N>` example + manual studio
-smoke — everything upstream of authoring is DONE and verified.** pngine Option (B) landed (§253:
-element-typed `type` byte + `elemCount` in the former pad byte, bare bindings reflect) and the
-studio re-based on it 2026-07-16 (pngine `419226b`, journal §254, Decision-log entry below):
-`buildRegistries` consumes `elemCount` as authoritative with per-field derived stride (tight
-STORAGE `array<f32,N>` now expands — scalar lanes returned via storage), fixtures mirror the real
-wire, and ⭐ element targets are **DOTTED (`bands.1`)** — the `[i]` spelling turned out to be
-unauthorable as a score `:target` (SJON symbol lexing; probed on the real wasm), so any 05 example
-or doc MUST use `base.N`. A real-wasm integration test (`array-targets.test.js`) already chains an
-authored score → `toUniforms` → coalesced `setUniform`-shaped writes. What's left is the authoring
-call: the demoscene template's score-driven array + a smoke in the running studio. Then
-benchmark #2 closes Wave 2; after that Waves 3 (06 → 10 → 03) and 4.
+→ **05 array-targets: ONE item left — the manual studio smoke; then tick 05 and run benchmark #2.**
+All Phase 3 code is DONE (2026-07-16, pngine `72d49f8`, 05's Progress log): the demoscene template
+now drives a **bare `env: array<vec4f, 2>` post binding** through the DOTTED element targets —
+`env.0` a keyframed color grade (cool→warm across the cube reveal), `env.1` a `(trigger :every 1b)`
+whose phase lane pulses a per-beat flash (triggers × array lanes in the flagship template, zero
+`Motion`-struct churn). The real-wasm template test derives its registries through the REAL
+`buildRegistries` and pins the bit-exact vec4 landing, the trigger lanes, and the coalesced 8-float
+`env` write; the compiled doc's actual reflection was verified to match the model byte-for-byte.
+Editor gate **1627/1627**, tsc 0, biome clean (touched scope), svelte-check 0 err. **The smoke
+(user, in the running studio):** load Demoscene → expect the per-beat flash once the cube reveals,
+the palette warming across the reveal, and the two `env.*` lanes on the Motion timeline. Green
+smoke ⇒ tick 05 → **benchmark #2** closes Wave 2; after that Waves 3 (06 → 10 → 03) and 4.
 
 **07 timeline-editor is COMPLETE** (all 5 phases, 2026-07-15) — the visual timeline ships end-to-end.
 Phase 1 (**anchors lib, pngine `5be6884`**) → `lib/score/anchors.ts`: `scoreAnchors(meta, source)`
@@ -678,3 +678,24 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   integration test `array-targets.test.js` chains authored score → `eval` → `toUniforms` →
   coalescer → whole-field writes (holes sample-held). Editor **1626/1626** (+12), tsc 0, biome
   clean, svelte-check 0 err. Board: 05 → example+smoke left; benchmark #2 next behind it.
+- 2026-07-16 — **05 Phase 3 example DONE (pngine `72d49f8`): the demoscene template drives a bare
+  `env: array<vec4f, 2>` post binding via dotted lanes; only the manual smoke remains.** `env.0` =
+  keyframed vec4 color grade (cool→warm on the chroma window), `env.1` = `(trigger :every 1b)` —
+  its phase lane shapes a quartic per-beat flash, so the flagship template now composes **02
+  triggers × 05 array lanes**; the binding lives in stage 4 only (the four `Motion` struct
+  declarations untouched — the zero-churn pitch, and the shipped exerciser of the §253
+  bare-binding reflection path). Scoreless-template invariant kept: all-zero `env` renders the
+  static noise scene (grade amount 0; flash a constant imperceptible lift). **Cross-plan facts:**
+  (1) **the demoscene score is load-bearing fixture for FIVE editor suites** (`score-uniforms`,
+  `anchors`, `span-edit`, `curve-sample`, `score-timeline`) — any future template edit that adds a
+  score target must extend those suites' modeled registries or every load fails `unknown_target`
+  (this ripple was 11 red tests until caught); `score-uniforms` now derives its registries through
+  the REAL `buildRegistries` so it can't drift again, and anchors' track list pins 5 rows incl. a
+  `'trigger'` source row (first template exercise of 02's meta source in the timeline path). (2)
+  Template vec4 keyframes land BIT-EXACTLY on `Math.fround` of the authored literals (structural
+  landing holds through the whole studio chain) — pinned in the new template test alongside the
+  dyadic-exact trigger lanes and the coalesced 8-float `env` write. Compiled-doc reflection
+  verified to match the modeled wire byte-for-byte (`env {type:5, size:32, elemCount:2}`,
+  `dropped: []`). Editor **1627/1627**, tsc 0, biome clean (touched scope; whole-tree biome
+  already red at HEAD, pre-existing), svelte-check 0 err. Board: 05 → manual smoke left → tick →
+  benchmark #2.

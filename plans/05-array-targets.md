@@ -406,3 +406,60 @@ editor suite **1626/1626** (+12). pngine journal §254.
 **Remaining to close Phase 3 / plan 05:** the demoscene `array<vec4f, N>`
 template example (score + WGSL, an authoring decision) + manual studio smoke
 against the running editor. All docs/examples must use the DOTTED spelling.
+
+### Phase 3 — demoscene example + template test → DONE (2026-07-16, pngine `72d49f8`); manual smoke is the last gate item
+
+**RED→GREEN.** The durable red rode the real-wasm template suite
+(`score-uniforms.test.js`): its hand-listed registries were replaced with a
+derivation through the REAL `buildRegistries` from a §253-shaped reflection of
+the extended doc ("model the wire, not the wish"), plus a new test asserting
+`env.0` grade keys, `env.1` trigger lanes, and the coalesced whole-field write
+— observed failing against the unextended score (5 pass / 1 fail), then
+greened by authoring the score, then the doc.
+
+**The example (flagship template, minimal-churn by design):** a **bare**
+`var<uniform> env: array<vec4f, 2>` binding added to the POST stage only —
+the `Motion` struct declared in all four modules is untouched, which is the
+plan's "new lanes with zero WGSL struct churn" pitch made visible, and it
+exercises the §253 bare-binding reflection path in the shipped template.
+Score side (all DOTTED targets):
+
+- `env.0` — keyframed vec4 color grade `[r g b amt]`: cool `[0.85 0.95 1.25
+  0.4]` over the noise, easing to warm `[1.2 1.0 0.75 0.55]` across beats
+  10→14 (the chroma window). WGSL: `col = mix(col, col * env[0].rgb,
+  clamp(env[0].w, 0, 1))`.
+- `env.1` — `(trigger :target env.1 :every 1b)`: the four trigger lanes land
+  in one vec4 element, and the shader shapes a per-beat pulse from the phase
+  lane (`pow(max(1 - env[1].x, 0), 4)`), brightening with the cube reveal —
+  **triggers (02) driving array lanes (05) in the default template.**
+  Scoreless, everything is 0: grade amount 0 (pass-through) and a constant
+  imperceptible +4% lift — the bare template still renders the noise scene.
+
+**Pins in the new test:** structural landing makes the vec4 keyframe land
+BIT-EXACTLY (`deepEqual` vs `[1.2, 1.0, 0.75, 0.55].map(Math.fround)` at the
+beat-14 tick); trigger lanes `[0, 14, 1, 0]` on the beat and `[0.5, 14, 0,
+0.5]` mid-beat (dyadic-exact); the coalescer folds both elements into the one
+8-float `env` write `setUniform` accepts. Verified against the REAL compiled
+doc: `pngine compile` → `parseUniformTable` → `env {type: 5, size: 32,
+elemCount: 2}` → `buildRegistries` → `env.0/4 env.1/4`, plan `{count: 2,
+lanes: 4, strideFloats: 4}`, `dropped: []` — the test's modeled reflection
+matches the wire byte-for-byte on every consumed field.
+
+**Ripple (legitimate fixture reality change):** the four suites that load the
+real demoscene score (`anchors`, `span-edit`, `curve-sample`,
+`score-timeline`) learned the two element targets in their registry models,
+and anchors' track-list pin grew 3 → 5 rows (`env.0` keys ncomp 4; `env.1`
+source `'trigger'`, `(trigger …)` formSpan) — first template exercise of the
+02 `'trigger'` meta source in the timeline path.
+
+Gates: editor **1627/1627** (+13 net: +1 template test, +12 from the suite
+churn), tsc 0, biome clean on the touched scope (whole-`src/lib` biome was
+already failing at HEAD — pre-existing, untouched), svelte-check 0 err (5
+pre-existing App warnings).
+
+**Remaining — the single last gate item: the manual studio smoke.** Load the
+Demoscene template in the running studio and eyeball: per-beat flash pulses
+once the cube reveals (trigger cadence), the palette warms across the reveal
+(grade crossfade), and the Motion tab timeline shows the two new lanes
+(`env.0` keys, `env.1` trigger row). On a green smoke: tick 05 on the board
+→ benchmark #2 closes Wave 2.
