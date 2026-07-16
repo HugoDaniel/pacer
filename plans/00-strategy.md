@@ -117,8 +117,8 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P5 | ☑ |
-| 2 | 05 array targets · P0 ✓ P1 ✓ P2 ✓ · **P3 BLOCKED** (reflection gap) | ☐ |
-| 2 | benchmark #2 (blocked on 05) | ☐ |
+| 2 | 05 array targets · P0–P2 ✓ · **P3 READY** (gap closed via pngine Option B) | ☐ |
+| 2 | benchmark #2 (after 05) | ☐ |
 | 3 | 06 tracker import | ☐ |
 | 3 | 10 audio bus | ☐ |
 | 3 | 03 pattern tracks P1–P4 | ☐ |
@@ -128,31 +128,17 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2 is STALLED on a design decision: 05 array-targets Phase 3 verification found the
-host-side premise contradicted by real pngine reflection.** No further 05 code until a direction is
-chosen (full write-up: the 2026-07-15 Decision-log entry below + `plans/05-array-targets.md` Phase 3
-log). **The finding (grounded in real probe shaders compiled through pngine, not modeled):** every
-array uniform reflects into the PNGB uniform table as `type = 255 (unknown)` with **NO element type
-and NO count** — pngine's `UniformType.fromWgslType` has no `array<…>` case, so the flattener
-discards the element type wgslender knows one layer up; a **bare** array binding reflects as
-*nothing at all*; and `array<f32,N>` in a uniform **doesn't even compile** (pngine's own validator
-enforces WGSL's 16-B uniform stride: *"element stride 4 (uniform requires a multiple of 16)"*). So
-`buildRegistries` (Phases 1–2, unit-tested against a *modeled* `type: 5` that pngine never emits for
-arrays) sends every real array field to `dropped` — the feature is internally green but never fires
-end-to-end. This is exactly what Phase 3 ("verify in the running studio") exists to catch.
-
-**Phases 0–2 stand as-is** (code + tests internally consistent; just not wired to real reflection).
-**The pending decision — three options, USER PICKS before any more 05 code:** (A) **host-side vec4
-convention** — redefine the array rule to `unknown(255) + size%16==0 ⇒ array<vec4f, size/16>` (the
-only efficient uniform array; f32 arrays are illegal, vec2/3 waste padding), expand into `base[i]`
-ncomp-4 targets; **no pngine change**, but lanes come in vec4 groups (no scalar-lane arrays) and
-P1–P2 tests get corrected from `type:5` to `type:255`. (B) **extend pngine's reflector** to carry
-array element-type + count through the PNGB uniform table (wgslender already knows them) — precise,
-any element width, but a **wire-stable pngine change** contradicting the plan's "Wire impact: none".
-(C) **reconsider the Wave-2 mechanism** — more struct fields, or a storage-buffer path, instead of
-uniform arrays. **Benchmark #2 depends on array lanes, so it is blocked too; the only actionable
-Wave-2 work is the direction decision itself.** Once chosen, resume 05 there, then benchmark #2 closes
-Wave 2; after that Waves 3 (06 → 10 → 03) and 4.
+→ **Resume 05 array-targets Phase 3 (end-to-end + example) — the reflection gap is CLOSED.** The
+user picked Option (B) by implementing it in pngine (`2b659bf` → `21215a2` → `9c5456f` → `9519e03`,
+journal §253): array uniform fields now reflect with the ELEMENT's UT_* tag in the `type` byte and
+the element count in the record's former pad byte (`elemCount`, append-only), and bare array
+bindings reflect as named leaves. **Validated end-to-end 2026-07-16** (Decision-log entry below):
+real probes → `parseUniformTable` → the REAL `buildRegistries` expand correctly with **zero studio
+changes** (P1–P2 code stands as-is); all pngine + editor gates green. Phase 3 resumes with two spec
+corrections recorded in 05's log: the example uses `array<vec4f, N>` (an `array<f32,8>` uniform
+cannot compile — WGSL 16-B stride, revalidated), and P3 should teach the studio to consume the new
+authoritative `elemCount` (today it derives `size/16`, equal for every legal uniform array). Then
+benchmark #2 closes Wave 2; after that Waves 3 (06 → 10 → 03) and 4.
 
 **07 timeline-editor is COMPLETE** (all 5 phases, 2026-07-15) — the visual timeline ships end-to-end.
 Phase 1 (**anchors lib, pngine `5be6884`**) → `lib/score/anchors.ts`: `scoreAnchors(meta, source)`
@@ -644,3 +630,28 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   path (different write seam). **Nothing was committed as code** — Phases 0–2's pngine commits stand;
   this is a docs-only pause. Probe shaders lived in `/tmp` only (neither repo tree touched). Board:
   `05 · P3 BLOCKED`, benchmark #2 blocked on it, What's next points at the decision.
+- 2026-07-16 — **05 UNBLOCKED: the user implemented Option (B) in pngine; validated end-to-end,
+  P3 ready to resume.** pngine `2b659bf`/`21215a2`/`9c5456f`/`9519e03` + journal §253: the PNGB
+  uniform-table field record's always-zero pad byte 9 now carries `elem_count` (u8, **append-only**
+  — old payloads carry 0 there, old readers skip the byte, `elemCount 0` = not-an-array, so both
+  directions stay compatible with no new enum values and no record growth); an array leaf's `type`
+  byte holds the **ELEMENT's** UT_* tag; element type + count come from wgslender's structured
+  TypeInfo (aliases and const-expression counts resolve); **bare** uniform bindings (`var<uniform>
+  env: array<vec4f,2>`, previously absent — also bare vec4f/f32) reflect as one leaf named after
+  the var (runtime-sized storage arrays stay unreflected); `parseUniformTable` returns `elemCount`
+  and `handleGetUniforms` forwards it. **Validation (2026-07-16, real bytes, same probe method that
+  found the block):** `bands: array<vec4f,2>` (struct member) → `{type: 5 (VEC4F), size: 32,
+  elemCount: 2}` (was `{255, 32}`); bare `env: array<vec4f,2>` → same shape, named (was ABSENT);
+  `array<f32,8>` uniform → still correctly rejected (WGSL stride rule — a language limit, §253
+  records scalar-lane arrays as storage-only). Real `parseUniformTable` output fed through the REAL
+  `buildRegistries`: both probes expand into `[i]` ncomp-4 targets + a matching `arrays` plan,
+  `dropped: []` — **the P1–P2 studio code works against real reflection with ZERO changes** (its
+  `type: 5` fixtures turned out to model exactly what Option (B) now emits). Gates: pngine
+  `test-reflect`/`test-bytecode`/`test-sjon`/`test-descriptor-encoder` green; editor **1614/1614**,
+  tsc 0, biome clean, svelte-check 0 err. **Cross-plan facts:** (1) 05's "Wire impact: none" header
+  is superseded — Option (B) was a deliberate append-only pngine wire change, the user's call. (2)
+  The studio still derives `count = size/16` and its `UniformReflection` type omits `elemCount` —
+  correct today (every legal uniform array element strides to 16 B, so `size/16 === elemCount`),
+  but P3 should consume `elemCount` as authoritative (also future-proofs >16-B elements, which
+  currently drop via `LANES_BY_TYPE`). (3) P3's example must be `array<vec4f, N>` — lanes in 4s.
+  Board: `05 · P3 READY`; benchmark #2 unblocked behind it; What's next → resume P3.

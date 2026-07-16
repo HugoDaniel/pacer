@@ -294,3 +294,53 @@ array plan; they just never receive one from real pngine.
 this pause wrote **no code** (docs only). Probe shaders lived in `/tmp` — neither
 repo tree was touched. `00-strategy.md`: board `05 · P3 BLOCKED`, benchmark #2
 blocked on it, What's next + a Decision-log entry point at the decision.
+
+### Phase 3 — UNBLOCKED (2026-07-16): the user implemented Option (B) in pngine; validated end-to-end
+
+**The user picked Option (B) by shipping it** — pngine commits `2b659bf`
+(reflect: element type + count from wgslender's structured TypeInfo, so aliases
+and const-expression counts arrive resolved) → `21215a2` (bytecode: the field
+record's always-zero pad byte 9 now carries `elem_count`; for an array leaf the
+`type` byte holds the ELEMENT's UT_* tag — append-only, old payloads carry 0
+there, `elemCount 0` = not-an-array) → `9c5456f` (bare uniform bindings —
+`var<uniform> env: array<vec4f,2>`, previously reflected as NOTHING — now become
+one leaf named after the var; runtime-sized storage arrays stay unreflected) →
+`9519e03` (npm: `parseUniformTable` returns `elemCount`, `handleGetUniforms`
+forwards it) + journal §253.
+
+**Validation (grounded in real bytes — same probe method that found the block):**
+
+| Probe (uniform) | Was (2026-07-15) | Now (2026-07-16) |
+|---|---|---|
+| struct member `bands: array<vec4f,2>` | `{type: 255, size: 32}` | **`{type: 5 (VEC4F), size: 32, elemCount: 2}`** |
+| bare binding `env: array<vec4f,2>` | **absent** | **`{type: 5, size: 32, elemCount: 2}`**, named `env` |
+| `env: array<f32,8>` | compile error (stride 4) | **still rejected** — correct; a WGSL limit, not a pngine gap |
+
+Then fed the REAL `parseUniformTable` output through the REAL `buildRegistries`
+(node strips the `.ts` natively): both probes expand into `bands[0]`/`bands[1]`
+resp. `env[0]`/`env[1]` (ncomp 4) + a matching `arrays` plan
+(`{base, count: 2, lanes: 4}`), `dropped: []`. **The Phase 1–2 studio code
+works against real reflection with ZERO changes** — its fixtures fed
+`type: 5` for arrays, which is exactly what Option (B) now emits. Gates:
+pngine `test-reflect` / `test-bytecode` / `test-sjon` /
+`test-descriptor-encoder` green; editor suite **1614/1614**, tsc 0, biome
+clean, svelte-check 0 err (5 pre-existing App warnings).
+
+**Two spec corrections for the resumed Phase 3 (supersede the plan text above):**
+
+1. **The example is `array<vec4f, N>`, not `array<f32, 8>`** — scalar-lane
+   arrays are illegal in the uniform address space (revalidated); §253 records
+   them as storage-only. Lanes come in 4s: `env: array<vec4f, 2>` = 2 targets
+   × 4 lanes = 8 scalar values.
+2. **Consume `elemCount`.** The studio currently ignores it (`buildRegistries`
+   derives `count = size/16` — equal to `elemCount` for every legal uniform
+   array element, since vec2/3/4 all stride to 16 B, so this is correct today,
+   not a bug). Phase 3 should add `elemCount` to `UniformReflection` and prefer
+   it as the authoritative count — it also future-proofs >16-B elements, which
+   today drop via `LANES_BY_TYPE`.
+
+**"Wire impact: none" in this plan's header is superseded:** Option (B) was a
+deliberate append-only pngine wire change (pad byte → `elem_count`; element
+type in the `type` byte), decided and shipped by the user. Phase 3 resumes
+from here: demoscene `array<vec4f, N>` example + real-wasm integration test +
+manual studio smoke.
