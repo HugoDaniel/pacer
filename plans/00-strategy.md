@@ -119,7 +119,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 2 | 07 timeline editor P1–P5 | ☑ |
 | 2 | 05 array targets · ALL phases ✓ (dotted lanes in the demoscene, smoke green 2026-07-16) | ☑ |
 | 2 | benchmark #2 · A/B CONFIRMED 2026-07-16 | ☑ |
-| 3 | 06 tracker import · P0–P2 ✓ (.it reader + timing model + score emission, 2026-07-16) | ☐ |
+| 3 | 06 tracker import · ALL phases ✓ (.it → dialog on the Motion tab, smoke green 2026-07-16) | ☑ |
 | 3 | 10 audio bus | ☐ |
 | 3 | 03 pattern tracks P1–P4 | ☐ |
 | 4 | 08 knob lift | ☐ |
@@ -128,14 +128,14 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 06 tracker-import in flight — Phases 0–2 done (`.it` reader pngine `4f5e061`,
-timing model pngine `ea81031`, score emission pngine `50a9fe0`, 2026-07-16); Phase 3 (studio
-UI: import dialog on the Motion tab — file input → parse → channel checklist → insert
-skeleton, warnings displayed) is next and closes the plan.** The emission realism check
-round-tripped the ENTIRE real module through the real pacer.wasm — `:dur 400b`, the drop's
-`; bar 41` boundary as a generated comment, 1000+ onset triggers, clean load. Phase 3
-carry-forward (pure-text-out contract, 0-based channel keys, onset census for the
-checklist) is in 06's Progress log. After 06: 10 audio-bus, then 03 pattern tracks P1–P4.
+→ **Wave 3 · 06 tracker-import is COMPLETE (2026-07-16: reader `4f5e061`, timing `ea81031`,
+emission `50a9fe0`, studio UI `4388ce5` — all pngine). Next: 10 audio-bus.** The import
+dialog lives on the Motion tab (view-toggle row): it seeds from the loaded audio track,
+shows the timing warnings + a channel checklist (1-based labels, played-onset census,
+editable trigger names), and insert dispatches one SET_SCORE with the skeleton appended
+(or replacing a blank score). Manual smoke with the real `impulse-04.it` landed the full
+400-beat skeleton — the drop's `; bar 41` anchor generated, diagnostics channel live.
+After 10: 03 pattern tracks P1–P4 close Wave 3.
 
 **Benchmark #2 is CLOSED — A/B CONFIRMED 2026-07-16.** The user eyeballed beats 148–204 in the
 studio against the pre-rewrite build: the dots choreography is identical (icon strobe from 162,
@@ -790,3 +790,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   emitted skeleton for the FULL `impulse-04.it` (25 orders, 1000+ onsets over two
   ncomp-4 triggers) reloads clean through the shipped wasm and names the drop's
   `; bar 41` boundary — the import path is end-to-end real; only UI remains.
+- 2026-07-16 — **06 tracker-import COMPLETE** (Phase 3, pngine `4388ce5`): import
+  dialog on the Motion tab. The testable half is a pure lib model
+  (`studio/editor/src/lib/score/it-import.ts` — `analyzeIt(bytes)` checklist rows +
+  `importAction(analysis, current)` → the one SET_SCORE), because the editor test
+  verb only globs `src/lib/**` — the Svelte dialog stays dumb, the house pattern.
+  Dialog open/close is App-local view state (like `motionView`): no new schema
+  action rode with the feature. The dialog seeds from the loaded audio track on
+  open (the module usually IS the music playing). `buildIt` moved to shared
+  `it-fixture.js` (importing one test file from another re-registers its suites).
+  Manual browser smoke with the real module: checklist census ch 2 = 1392 played
+  note-ons, insert landed the 400-beat skeleton, and the pane's diagnostics
+  correctly flagged `unknown target ch2` against the starter cube's registry —
+  the emitted-text → pacer-load → diagnostics loop is live in the UI.
+  **Cross-plan fact for 10 audio-bus / 03 pattern-tracks:** the Motion tab now has
+  a working modal-dialog idiom + census pattern to reuse for bus/track pickers.

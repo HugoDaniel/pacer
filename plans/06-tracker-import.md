@@ -175,3 +175,38 @@ strings the text embeds). Channel numbers in the selection are the reader's
 0-based channels; the checklist should show 1-based tracker-style numbers
 with the onset census (count note-ons per channel the way the realism script
 does) so the user picks busy lanes.
+
+### Phase 3 — studio UI (done, 2026-07-16) — PLAN COMPLETE
+
+**RED first.** Six reds in `it-import.test.js` over a new pure model
+(`lib/score/it-import.ts`) — the editor test verb only globs `src/lib/**`,
+so everything decidable lives in the lib and the Svelte dialog stays dumb
+(the house pattern). `analyzeIt(bytes)`: checklist rows with 1-based
+tracker-style labels over the reader's 0-based channels, an onset census
+across the PLAYED order list (the exact count the trigger gets — a repeated
+pattern counts each play), default names `ch<1-based>`, timing warnings,
+a summary line; bad bytes → a reported error, never a throw.
+`importAction(analysis, current)`: the SET_SCORE action with the skeleton
+appended blank-line-separated (or standing alone when the score is blank);
+a blanked name falls back to its default. `buildIt` moved out of
+it-reader.test.js into shared `it-fixture.js` (importing one test file from
+another would re-register its suites). GREEN: `ItImportDialog.svelte`
+(RepoDialog idiom) + an "import .it" button in the Motion tab's view-toggle
+row; open/close is App-local view state like `motionView` — no new schema
+action; the only logged effect is the SET_SCORE. The dialog seeds itself
+from the loaded audio track on open (the module usually IS the music
+playing), with a file input to pick another; pending score edits are flushed
+on open so the append lands after what the user sees. pngine `4388ce5`.
+Gate: editor tests 1656/1656, `tsc` + `svelte-check` clean, biome clean.
+
+**Manual smoke with `impulse-04.it` (vite dev + browser): OK.** The dialog
+analyzed the real module — `"untitled" — 25 orders, 400 beats, 4 rows/beat`,
+the 1024× Axx warning displayed, 11 checklist rows (ch 2–12, played census:
+ch 2 = 1392) — and insert landed the full skeleton in the score pane:
+transport `:dur 400b`, all 25 bar anchors (`; bar 41 — pattern 7`, the
+drop), two triggers. The pane's pacer diagnostics immediately reported
+`unknown target ch2 — not in any host registry`, which is correct (the
+starter cube has no such uniforms) and proves the emitted text round-trips
+through the live pacer load + diagnostics channel. One automation artifact:
+the devtools MCP set the file input without firing `change` (dispatched
+manually — same handler a native pick invokes).
