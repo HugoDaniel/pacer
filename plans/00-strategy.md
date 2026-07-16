@@ -119,7 +119,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 2 | 07 timeline editor P1–P5 | ☑ |
 | 2 | 05 array targets · ALL phases ✓ (dotted lanes in the demoscene, smoke green 2026-07-16) | ☑ |
 | 2 | benchmark #2 · A/B CONFIRMED 2026-07-16 | ☑ |
-| 3 | 06 tracker import | ☐ |
+| 3 | 06 tracker import · P0 ✓ (.it reader, 2026-07-16) | ☐ |
 | 3 | 10 audio bus | ☐ |
 | 3 | 03 pattern tracks P1–P4 | ☐ |
 | 4 | 08 knob lift | ☐ |
@@ -128,9 +128,12 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 2 is COMPLETE — Wave 3 opens with 06 tracker-import** (emit real `(trigger …)` forms
-from the .it patterns now that 02 is in the studio's wasm), then 10 audio-bus, then 03 pattern
-tracks P1–P4.
+→ **Wave 3 · 06 tracker-import in flight — Phase 0 done (pure-TS `.it` reader, pngine
+`4f5e061`, 2026-07-16); Phase 1 (timing model: rows→beats, order-pos→beat, Txx/Axx warnings)
+is next**, then P2 score emission and P3 studio UI. Byte-layout notes + the realism findings
+live in 06's Progress log — the demo module swings its groove with 1024 alternating A8/A4
+set-speed rows (beat pairs stay on-grid, odd rows drift), so Phase 1's Axx warning is a real
+case, not hypothetical. After 06: 10 audio-bus, then 03 pattern tracks P1–P4.
 
 **Benchmark #2 is CLOSED — A/B CONFIRMED 2026-07-16.** The user eyeballed beats 148–204 in the
 studio against the pre-rewrite build: the dots choreography is identical (icon strobe from 162,
@@ -752,3 +755,12 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   (per-dot staggered) were deliberately left. No pacer or pngine code changed — demo-side only.
   **A/B CONFIRMED 2026-07-16** — the user eyeballed beats 148–204 in the studio: the choreography
   is identical. Board box ticked; **Wave 2 COMPLETE** (09 → 07 → 05 → benchmark #2).
+- 2026-07-16 — 06 Phase 0 complete (pngine `4f5e061`): pure-TS `.it` reader
+  (`studio/editor/src/lib/score/it-reader.ts`), fixture-pinned reds + realism check
+  against the real module. **Cross-plan fact for 06 Phase 1 / any trigger emission:**
+  `impulse-04.it` sets speed per-row (1024 Axx commands, alternating A8/A4 swing) —
+  a naive rows→beats at the initial speed 6 is only PAIRWISE correct: even rows (the
+  beat quarters) land on-grid, odd rows land late by the swing. Onset beats emitted
+  for triggers should either quantize to the even-row grid or model the per-row
+  speed ledger; the Phase-1 warning must fire here (Txx is absent — the BPM itself
+  never moves, so `(transport :bpm 125)` stays honest).
