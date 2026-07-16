@@ -107,9 +107,10 @@ pub const Trigger = union(enum) {
     at: []const Tick,
 };
 
-/// A track's value source — `(key …)` children XOR `:expr` (enforced at
-/// compile with `track_source_conflict`), or a `(trigger …)` schedule (a
-/// third row kind reusing this struct; its lanes are computed at eval).
+/// A track's value source — `(key …)` children XOR `:expr` XOR
+/// `:pattern` (enforced at compile with `track_source_conflict`), or a
+/// `(trigger …)` schedule (a fourth row kind reusing this struct; its
+/// lanes are computed at eval).
 pub const Source = union(enum) {
     /// Contiguous run in `keys`: `keys[start..][0..len]`, len ≥ 1,
     /// sorted by `at`, strictly increasing.
@@ -120,6 +121,12 @@ pub const Source = union(enum) {
     /// A `(trigger …)` event schedule (see `Trigger`); the frame path
     /// derives its lanes from the schedule, never from `keys`/the AST.
     trigger: Trigger,
+    /// The `:pattern` value node — SJON Pattern vocabulary queried on
+    /// the shared tick grid, 1 cycle = 1 bar (identity: `Pattern.PPC`
+    /// IS the per-bar tick count). Plan 03: the dry-run lands in Phase
+    /// 2, the eval-time point-sample in Phase 3 — until then a pattern
+    /// track emits no writes.
+    pattern: sjon.Ast.NodeIndex,
 };
 
 /// One animated target. `target_id`/`registry`/`ncomp` come from the

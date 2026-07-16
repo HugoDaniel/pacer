@@ -40,8 +40,8 @@ const NO_SLOT = 0xffffffff;
 /** Mirror of `Abi.MAX_TARGETS` — the flat registry join's ceiling. */
 const MAX_TARGETS = 1024;
 const CONTROL_TYPES = /** @type {const} */ (['slider', 'xy', 'color']);
-/** Mirror of `MetaTrackRec.source`: keyframes, an expression, or a trigger. */
-const TRACK_SOURCES = /** @type {const} */ (['keys', 'expr', 'trigger']);
+/** Mirror of `MetaTrackRec.source`: keyframes, an expression, a trigger, or a pattern. */
+const TRACK_SOURCES = /** @type {const} */ (['keys', 'expr', 'trigger', 'pattern']);
 
 const LOAD_OK = 0;
 const LOAD_DIAGNOSTICS = 1;
@@ -223,7 +223,7 @@ export class Pacer {
     let off = PACM_HEADER_LEN;
     /**
      * @type {Array<{ targetId: number, registry: number, ncomp: number,
-     *   source: 'keys' | 'expr' | 'trigger', keyStart: number, keyLen: number, span: Span }>}
+     *   source: 'keys' | 'expr' | 'trigger' | 'pattern', keyStart: number, keyLen: number, span: Span }>}
      */
     const rawTracks = [];
     for (let i = 0; i < trackCount; i++, off += PACM_TRACK_LEN) {

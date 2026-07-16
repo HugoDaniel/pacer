@@ -307,6 +307,11 @@ pub const Evaluator = struct {
                         n += 1;
                     }
                 },
+                .pattern => {
+                    // Plan 03 Phase 3 wires the point-sample query; until
+                    // then a pattern track omits every write — the same
+                    // shape its no-active-hap contract will use.
+                },
             }
         }
         // Control writes land AFTER track writes — consumers apply

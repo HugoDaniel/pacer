@@ -128,12 +128,16 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 03 pattern-tracks — P1 next** (P0 spike ☑: SJON PatternQuery works on
-wasm32-freestanding with `plugin-exec=false`). Open `plans/03-pattern-tracks.md`,
-run P1 under the README discipline; P1–P4 close Wave 3. Context from plan 10
-(CLOSED 2026-07-16, all phases, smoke audible — pngine `7b54680` `0f3c2a6`
-`712ab92` `3d83e82` `b31a896`): registry 1 is live end to end; the demoscene ships
-a commented `;;` `audio.pitch` ride (a live `audio.*` target fails the whole load
+→ **Wave 3 · 03 pattern-tracks — P2 next** (P1 done 2026-07-16: `:pattern` schema
+key + three-way `track_source_conflict` + appended codes 27/28 + `Source.pattern`
+with meta source byte 3; the three design questions are FROZEN in the plan's P1
+log — cycle↔bar identity, pattern-local env shadows, latest-onset hap selection).
+Open `plans/03-pattern-tracks.md`, run P2 (compile dry-run: `PatternTrack.zig`
+sibling to ExprTrack; `pattern_eval_failed` / `pattern_result_invalid` emission)
+under the README discipline; P1–P4 close Wave 3. Context from plan 10 (CLOSED
+2026-07-16, all phases, smoke audible — pngine `7b54680` `0f3c2a6` `712ab92`
+`3d83e82` `b31a896`): registry 1 is live end to end; the demoscene ships a
+commented `;;` `audio.pitch` ride (a live `audio.*` target fails the whole load
 on a trackless boot — the `;;` block + rot pins are the model for audio in
 templates); the served chiptune worklet is now a VENDORED patched copy
 (upstream ctl stack leak crashed the engine in ~19 s of per-frame drive —
@@ -862,3 +866,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   with a documented crash reason; (b) for 08 knob-lift and any future audio lane:
   the ctl path is now safe for continuous per-frame drive, and held values cost
   one message. Editor tests 1687, tsc + biome clean. Wave 3 continues with 03.
+- 2026-07-16 — **03 pattern-tracks Phase 1 (schema + validation) + DESIGN FROZEN.**
+  `:pattern` is the track's third value source: schema key (walk-opaque, the `:expr`
+  discipline), three-way `track_source_conflict`, appended wire codes
+  `pattern_eval_failed`=27 / `pattern_result_invalid`=28 (values pinned by test),
+  `TrackTable.Source.pattern` + append-only meta source byte 3 (npm glue in
+  lockstep), Eval placeholder omit arm. The plan's three open questions are FROZEN
+  in its P1 log: (1) cycle↔bar = identity (`Pattern.PPC` IS the per-bar tick
+  count); (2) env merge = pattern-local `cycle`/`tick`/`seed` SHADOW pacer's time
+  env inside a hap value expr — the seed is the binding only the pattern can give;
+  (3) hap selection = latest-onset active hap at T, none → write omitted (the
+  expr-NaN contract). **Cross-plan fact:** the meta track record now has four
+  source kinds — any studio timeline UI switching on `source` (07's lanes) gets
+  `'pattern'` rows once P3 makes them drive; until then they compile clean and
+  emit nothing. No golden changed (the new byte only appears for pattern tracks).
+  Gates: zig test 126, audit 29/29, verify green, npm lint + typecheck clean.

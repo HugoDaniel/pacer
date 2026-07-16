@@ -161,6 +161,8 @@ pub const Code = enum(u16) {
     scene_duplicate_name,
     scene_cap_exceeded,
     trigger_invalid,
+    pattern_eval_failed,
+    pattern_result_invalid,
 };
 
 /// One pacer load diagnostic. `span` indexes the combined text (same
@@ -599,21 +601,48 @@ const Builder = struct {
             return true;
         };
 
-        if (kvNode(tree, hdr.children, "expr")) |expr_node| {
+        // Three explicit value sources — keys XOR :expr XOR :pattern.
+        // Any pairing is one `track_source_conflict` at the later-listed
+        // source's span (collection over abort: one diagnostic names the
+        // pair, the track is skipped, the walk continues).
+        const expr_node = kvNode(tree, hdr.children, "expr");
+        const pattern_node = kvNode(tree, hdr.children, "pattern");
+        if (expr_node != null and pattern_node != null) {
+            try self.emit(.track_source_conflict, tree.spanOf(pattern_node.?), "track `{s}` has both :expr and :pattern — exactly one value source", .{target_name});
+            return true;
+        }
+        if (expr_node) |node| {
             if (firstKeyChild(tree, hdr.children) != null) {
-                try self.emit(.track_source_conflict, tree.spanOf(expr_node), "track `{s}` has both (key …) children and :expr — exactly one value source", .{target_name});
+                try self.emit(.track_source_conflict, tree.spanOf(node), "track `{s}` has both (key …) children and :expr — exactly one value source", .{target_name});
                 return true;
             }
-            if (try self.dryRunExpr(transport, expr_node, target.ncomp, scene_win)) {
+            if (try self.dryRunExpr(transport, node, target.ncomp, scene_win)) {
                 tracks.append(ta, .{
                     .target_id = target.id,
                     .registry = target.registry,
                     .ncomp = target.ncomp,
-                    .source = .{ .expr = expr_node },
+                    .source = .{ .expr = node },
                     .scene = scene_index,
                 }) catch return error.OutOfMemory;
                 track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
             }
+            return true;
+        }
+        if (pattern_node) |node| {
+            if (firstKeyChild(tree, hdr.children) != null) {
+                try self.emit(.track_source_conflict, tree.spanOf(node), "track `{s}` has both (key …) children and :pattern — exactly one value source", .{target_name});
+                return true;
+            }
+            // Plan 03 Phase 2 adds the compile-time dry-run (a query at
+            // tick 0 through the shared pattern module) here.
+            tracks.append(ta, .{
+                .target_id = target.id,
+                .registry = target.registry,
+                .ncomp = target.ncomp,
+                .source = .{ .pattern = node },
+                .scene = scene_index,
+            }) catch return error.OutOfMemory;
+            track_spans.append(ta, tree.spanOf(idx)) catch return error.OutOfMemory;
             return true;
         }
 
@@ -633,7 +662,7 @@ const Builder = struct {
         const track_keys = keys.items[keys_start..];
         const track_key_spans = key_spans.items[keys_start..];
         if (track_keys.len == 0) {
-            try self.emit(.track_empty, tree.spanOf(idx), "track `{s}` has no value source — give it (key …) children or :expr", .{target_name});
+            try self.emit(.track_empty, tree.spanOf(idx), "track `{s}` has no value source — give it (key …) children, :expr, or :pattern", .{target_name});
             return true;
         }
 
@@ -1439,6 +1468,54 @@ test "compile diagnostics: keys XOR expr — both is a conflict" {
     defer r.deinit();
     try t.expect(!r.ok());
     try t.expect(r.findDiag(.track_source_conflict) != null);
+}
+
+test "compile accepts pattern tracks: node recorded, walk-opaque interior" {
+    // The pattern interior (`euclid`, `pure`, …) is SJON Pattern
+    // vocabulary, not pacer schema — `:walk-opaque` keeps the validator
+    // out, exactly like `:expr`. Recording the node is Phase 1; the
+    // dry-run (Phase 2) and eval (Phase 3) land later in plan 03.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target circle-radius :pattern (euclid 5 8 (pure 0.7)))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const table = r.table.?;
+    try t.expectEqual(@as(usize, 1), table.tracks.len);
+    try t.expectEqual(@as(usize, 0), table.keys.len);
+    try t.expect(table.tracks[0].source == .pattern);
+}
+
+test "compile diagnostics: pattern XOR keys XOR expr — any pairing is a conflict" {
+    var with_keys = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius
+        \\  :pattern (euclid 3 8 (pure 1))
+        \\  (key :at 0b :value 0.2))
+    , &test_targets);
+    defer with_keys.deinit();
+    try t.expect(!with_keys.ok());
+    try t.expect(with_keys.findDiag(.track_source_conflict) != null);
+
+    var with_expr = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius
+        \\  :expr (+ beat 0)
+        \\  :pattern (euclid 3 8 (pure 1)))
+    , &test_targets);
+    defer with_expr.deinit();
+    try t.expect(!with_expr.ok());
+    try t.expect(with_expr.findDiag(.track_source_conflict) != null);
+}
+
+test "pattern diagnostic codes are wire-stable appendices" {
+    // The codes land ahead of their emission paths (plan 03: dry-run in
+    // Phase 2, eval in Phase 3) so the wire values are pinned from the
+    // first commit — Code is append-only and crosses in 'PACD'.
+    try t.expectEqual(@as(u16, 27), @intFromEnum(Code.pattern_eval_failed));
+    try t.expectEqual(@as(u16, 28), @intFromEnum(Code.pattern_result_invalid));
 }
 
 test "compile diagnostics: expr dry-run failures carry user spans" {

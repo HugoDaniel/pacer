@@ -140,3 +140,44 @@ Gate: `zig build verify` + npm gate.
   Gate: `zig build test` ✓ + `zig build wasm` ✓. No JS/TS touched. **STOP** —
   per Wave 0 this is the spike only; Phases 1–4 are scheduled in Wave 3,
   informed by this verdict.
+
+- **Phase 1 — schema + validation (done, 2026-07-16).** TDD reds first
+  (missing enum members → compile error; `:pattern` unknown schema key →
+  validation failure; conflict diag absent), then green in compiler-driven
+  steps. Landed:
+  - **Schema**: `(key :name pattern :type any :optional true :walk-opaque
+    true)` on the track form — same walk-opaque discipline as `:expr`
+    (interior is SJON Pattern vocabulary, checked by the Phase 2 dry-run,
+    never by the schema). Track form + `:expr` descriptions updated to name
+    the three-way exclusivity.
+  - **Codes appended** (wire-stable, ride in `'PACD'`): `pattern_eval_failed`
+    = 27, `pattern_result_invalid` = 28 — values pinned by a dedicated test
+    ("wire-stable appendices") ahead of their Phase 2 emission paths, so
+    `audit-diagnostics` passes honestly (29/29) and the appendix can never
+    silently renumber.
+  - **`TrackTable.Source.pattern`** (node index, like `.expr`). The exhaustive
+    switches drove the rest: `Abi.encodeMeta` emits append-only source byte
+    **3** (npm glue's `TRACK_SOURCES` + `MetaTrack` typedef mirror it in
+    lockstep); `Eval` has a placeholder omit arm (no writes until Phase 3 —
+    the same shape as its eventual no-active-hap contract).
+  - **`buildTrackForm`**: three-way source dispatch — `:expr`+`:pattern`,
+    keys+`:expr`, keys+`:pattern` each emit one `track_source_conflict` at
+    the later source's span; bare `:pattern` records the track (dry-run slot
+    marked for Phase 2); `track_empty` message now names all three sources.
+  - **DESIGN FROZEN** (the plan's three open questions):
+    1. *Cycle↔bar = identity.* 1 pattern cycle = 1 bar; `Pattern.PPC` IS
+       pacer's per-bar tick count — no conversion exists.
+    2. *Env merge = pattern-local shadows.* Inside a hap's value expr,
+       PatternQuery's `cycle`/`tick`/`seed` bindings SHADOW pacer's time env
+       names; pacer's env supplies everything else (t, beat, bar, phase,
+       bpm, dur + controls). With identity mapping the shadowed names agree
+       numerically anyway; the seed is the binding only the pattern can give.
+    3. *Hap selection = latest-onset active hap at T.* Query the enclosing
+       cycle once; take the hap active at T with the greatest onset; no
+       active hap → the write is OMITTED (the expr-NaN contract).
+  Gate: `zig build test` ✓ (126) · `zig build audit-diagnostics` ✓ 29/29 ·
+  `zig build verify` ✓ (corpus + wasm parity, 48 node tests — no golden
+  changed; the new source byte only appears for pattern tracks) · npm lint +
+  typecheck ✓. Next: **Phase 2 — compile dry-run** (`PatternTrack.zig`
+  sibling to ExprTrack; malformed pattern → `pattern_eval_failed`, bad t=0
+  value → `pattern_result_invalid`).

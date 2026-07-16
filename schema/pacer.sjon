@@ -218,7 +218,7 @@
       :description "Window length; the child tracks play over [at, at+dur)."))
 
   (form :name track
-    :description "One animated target with exactly one value source: keyframe children interpolated with easing programs, XOR an :expr evaluated every frame. Hosts receive final values and never interpolate."
+    :description "One animated target with exactly one value source: keyframe children interpolated with easing programs, XOR an :expr evaluated every frame, XOR a :pattern queried on the bar grid. Hosts receive final values and never interpolate."
     :positional key-section
     (key :name target :type target-name
       :description "Resolved at load() against the ordered host registries; unresolved names are a load diagnostic, not a schema error.")
@@ -226,7 +226,12 @@
     ; its interior is SJON Expr vocabulary, checked by the compile-time
     ; dry-run at t=0 (spans on failure), not by this schema.
     (key :name expr :type any :optional true :walk-opaque true
-      :description "Expression evaluated each frame with the time env bound (t, tick, beat, bar, cycle, phase, bpm, dur) plus every (control …) id. Must yield a finite number or an ncomp-component numeric vector. Exclusive with (key …) children."))
+      :description "Expression evaluated each frame with the time env bound (t, tick, beat, bar, cycle, phase, bpm, dur) plus every (control …) id. Must yield a finite number or an ncomp-component numeric vector. Exclusive with (key …) children and :pattern.")
+    ; :walk-opaque — same discipline as :expr: the interior is SJON
+    ; Pattern vocabulary (euclid, fastcat, pure, …), checked by the
+    ; compile-time dry-run (spans on failure), not by this schema.
+    (key :name pattern :type any :optional true :walk-opaque true
+      :description "Pattern queried each frame on the shared tick grid, 1 cycle = 1 bar. At tick T the hap active at T with the latest onset supplies the value; no active hap omits the write. Exclusive with (key …) children and :expr."))
 
   (form :name key
     :description "A keyframe. Before the first key a track holds its first value; after the last, its last."

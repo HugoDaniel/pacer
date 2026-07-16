@@ -335,16 +335,19 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
         const us = userSpan(v, span);
         const range: struct { start: u32, len: u32 } = switch (track.source) {
             .keys => |ks| .{ .start = ks.start, .len = ks.len },
-            .expr, .trigger => .{ .start = 0, .len = 0 },
+            .expr, .trigger, .pattern => .{ .start = 0, .len = 0 },
         };
         const rec: MetaTrackRec = .{
             .target_id = track.target_id,
             .registry = track.registry,
             .ncomp = track.ncomp,
+            // Append-only wire values — the npm glue's TRACK_SOURCES
+            // mirrors this mapping by index.
             .source = switch (track.source) {
                 .keys => 0,
                 .expr => 1,
                 .trigger => 2,
+                .pattern => 3,
             },
             .key_start = range.start,
             .key_len = range.len,
