@@ -463,3 +463,48 @@ once the cube reveals (trigger cadence), the palette warms across the reveal
 (grade crossfade), and the Motion tab timeline shows the two new lanes
 (`env.0` keys, `env.1` trigger row). On a green smoke: tick 05 on the board
 → benchmark #2 closes Wave 2.
+
+### Manual studio smoke GREEN — plan 05 COMPLETE (2026-07-16, pngine journal §255)
+
+The last gate item ran against a fresh Demoscene-seeded draft on `:4321`, real
+Chrome via CDP, after rebuilding the editor's in-browser compiler
+(`zig build web` — it was the one remaining pre-§253 artifact; the worker JS
+loads live from `npm/pngine/src/worker.js` and the executor never reads the
+uniform table, so nothing else was stale).
+
+**Seam-level verification** (a `Worker.prototype.postMessage` patch capturing
+the live `draw` messages — the exact payload `setUniform` receives):
+
+- uniforms ship as `{beat, sceneMix, spin, chromaAmt, env}` — `env` is ONE
+  coalesced 8-float write, element keys folded away.
+- t=0.5 (beat 1.4): `env[0..3] = [0.85, 0.95, 1.25, 0.4]` — the cool grade
+  key VERBATIM; trigger lanes `[0.408, 1, 0, 0.408]` (count 1, first beat).
+- t=5.0 (beat 14.2): `[1.2, 1.0, 0.75, 0.55]` — warm grade landed exactly as
+  the beat-14 ease finished; count lane 14.
+- t=7.5 (beat 21.25): warm grade held, count 21, sceneMix 1.
+- The phase lane sawtooths 0→1 with period 0.353 s — exactly one beat at the
+  AUTHORED 170 BPM (the §149 armPacer tempo fix holding in production).
+
+**Eyeball items, all green:** per-beat flash + warming grade animate in the
+preview and across the timeline filmstrip thumbnails; the Motion tab timeline
+shows both element lanes — `env.0` with its vec4 per-lane key curves
+crossfading at the beat-10→14 window, `env.1` as a trigger row. Score panel
+0 errors / 0 warnings.
+
+**Smoke war story (recorded in pngine CONTRIBUTING, Debugging §3):** ~40 min
+chasing a "dead" transport that was macOS window occlusion — Chrome freezes
+canvas COMPOSITING for a fully-occluded window while the page's rAF keeps
+firing at 120 fps, so CDP screenshots and `drawImage` readbacks return one
+stale frame forever ("`pngine diff` = 0 differing pixels" across seconds of
+confirmed 120 Hz draws). Frontmost window → 856k pixels differing. Also:
+`drawImage` of a transferred-control placeholder canvas can stay stale even
+when compositing is live — screenshots or the postMessage seam are the honest
+probes.
+
+One repo hygiene note: a concurrent session's in-flight edit put a stray dead
+`bands` buffer into `72d49f8` via the shared working tree; removed in pngine
+`b017abc` (the template's one array uniform is `env`).
+
+**Plan 05 is COMPLETE end-to-end**: §253 reflection (elemCount) → §254 studio
+re-base (dotted targets, derived stride) → §255 authored demoscene example +
+live smoke. Next per 00-strategy: benchmark #2 closes Wave 2.

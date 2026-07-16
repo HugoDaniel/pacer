@@ -117,7 +117,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 1 | studio refresh + benchmark #1 | ☑ |
 | 2 | 09 workflow fixes | ☑ |
 | 2 | 07 timeline editor P1–P5 | ☑ |
-| 2 | 05 array targets · P0–P3 code ✓ (dotted lanes in the demoscene) · **manual smoke left** | ☐ |
+| 2 | 05 array targets · ALL phases ✓ (dotted lanes in the demoscene, smoke green 2026-07-16) | ☑ |
 | 2 | benchmark #2 (after 05) | ☐ |
 | 3 | 06 tracker import | ☐ |
 | 3 | 10 audio bus | ☐ |
@@ -128,18 +128,18 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **05 array-targets: ONE item left — the manual studio smoke; then tick 05 and run benchmark #2.**
-All Phase 3 code is DONE (2026-07-16, pngine `72d49f8`, 05's Progress log): the demoscene template
-now drives a **bare `env: array<vec4f, 2>` post binding** through the DOTTED element targets —
-`env.0` a keyframed color grade (cool→warm across the cube reveal), `env.1` a `(trigger :every 1b)`
-whose phase lane pulses a per-beat flash (triggers × array lanes in the flagship template, zero
-`Motion`-struct churn). The real-wasm template test derives its registries through the REAL
-`buildRegistries` and pins the bit-exact vec4 landing, the trigger lanes, and the coalesced 8-float
-`env` write; the compiled doc's actual reflection was verified to match the model byte-for-byte.
-Editor gate **1627/1627**, tsc 0, biome clean (touched scope), svelte-check 0 err. **The smoke
-(user, in the running studio):** load Demoscene → expect the per-beat flash once the cube reveals,
-the palette warming across the reveal, and the two `env.*` lanes on the Motion timeline. Green
-smoke ⇒ tick 05 → **benchmark #2** closes Wave 2; after that Waves 3 (06 → 10 → 03) and 4.
+→ **05 array-targets is COMPLETE — run benchmark #2 to close Wave 2.** The manual studio smoke
+went GREEN 2026-07-16 (pngine journal §255; 05's Progress log has the detail): a fresh
+Demoscene-seeded draft on `:4321` against the rebuilt §253 compiler wasm, verified at the worker
+`draw` seam (Worker.postMessage patch) — `env` ships as ONE coalesced 8-float write, the cool
+grade key `[0.85 0.95 1.25 0.4]` verbatim at t=0.5, the warm `[1.2 1.0 0.75 0.55]` landed by
+beat 14, the trigger's count lane matching the beat number exactly and the phase lane sawtoothing
+at precisely one 170 BPM beat (0.353 s) — plus all three eyeball items: per-beat flash + warming
+grade animate in the preview and filmstrip, and the Motion timeline shows both `env.*` lanes
+(`env.0` vec4 key curves, `env.1` trigger row). All Phase 3 code was already in
+(pngine `72d49f8`): the demoscene template drives a **bare `env: array<vec4f, 2>` post binding**
+through the DOTTED element targets, real-wasm test pinning the bit-exact vec4 landing and the
+coalesced write. Next: **benchmark #2** closes Wave 2; after that Waves 3 (06 → 10 → 03) and 4.
 
 **07 timeline-editor is COMPLETE** (all 5 phases, 2026-07-15) — the visual timeline ships end-to-end.
 Phase 1 (**anchors lib, pngine `5be6884`**) → `lib/score/anchors.ts`: `scoreAnchors(meta, source)`
