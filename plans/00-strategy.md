@@ -128,15 +128,17 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 10 audio-bus — Phase 0 DONE (2026-07-16, pngine `7b54680`); next: Phase 1
-(chiptuneHost).** Phase 0 characterized the driver↔worklet port (7 pins, editor tests
-1663) and settled the v1 target list: `audio.volume` (GainNode, reachable today) +
-`audio.tempo` / `audio.pitch` (worklet already handles `setTempo`/`setPitch` ctls — the
-driver just needs methods that post them; NO worklet fork needed). `audio.ch<N>.*` is
-DEFERRED: libopenmpt's ext-interactive interface is C function pointers and the shipped
-emscripten build hides the wasm table — unreachable from JS without a libopenmpt rebuild
-(logged in plan 10). Phases left: 1 chiptuneHost → 2 arm both buses → 3 template+docs.
-After 10: 03 pattern tracks P1–P4 close Wave 3.
+→ **Wave 3 · 10 audio-bus — Phases 0–1 DONE (2026-07-16, pngine `7b54680` + `0f3c2a6`);
+next: Phase 2 (arm both buses + per-frame apply).** Phase 1 landed `chiptune-host.ts`
+(the `AudioTargetHost` over the driver: `audio.volume`/`audio.tempo`/`audio.pitch`,
+ncomp 1, clamped to declared ranges) and the driver's `setTempo`/`setPitch`/`hasTrack`
+— posting the worklet's existing ctl messages, no worklet change. Editor tests 1675,
+tsc + biome clean; pins run pacer's real `paramRegistry`/`applyParams`. Phase 2 wires
+`armPacer` to `[visualRegistry, audioRegistry]`, routes registry-1 writes per frame,
+re-arms on track load/unload (see plan 10's Phase 1 log for the baked decisions).
+Phases left: 2 arm both buses → 3 template+docs. `audio.ch<N>.*` stays DEFERRED
+(ext-interactive unreachable from JS — Phase 0 log). After 10: 03 pattern tracks
+P1–P4 close Wave 3.
 
 **Benchmark #2 is CLOSED — A/B CONFIRMED 2026-07-16.** The user eyeballed beats 148–204 in the
 studio against the pre-rewrite build: the dots choreography is identical (icon strobe from 162,
@@ -817,3 +819,14 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   upstream-owned worklet (`public/chiptune` is a symlink into `node_modules/chiptune3`)
   never gets forked. **Cross-plan fact for 07 timeline-editor / docs:** registry 1's
   name set is three globals, not per-channel — any audio-lane UI plans around that.
+- 2026-07-16 — **10 audio-bus Phase 1** (pngine `0f3c2a6`): `chiptune-host.ts` implements
+  `AudioTargetHost` over a minimal `ChiptuneControls` slice; the driver grew
+  `setTempo`/`setPitch` (posting the existing worklet ctl messages) + `hasTrack`. Baked
+  decisions (all pinned): **the host clamps to declared [min,max]** (volume [0,1],
+  factors [0.25,4]) because `paramRegistry` strips min/max — pacer never clamps, and a
+  keyframe through 0 must not hand libopenmpt a zero tempo factor; **tempo/pitch don't
+  persist across boot** (per-frame re-apply heals a fresh module — only `setVolume`, the
+  one-shot UI control, holds); **`clock()` is null** (the studio rAF loop stays time
+  master). Specs carry `min`/`max`/`default` — **cross-plan fact for 08 knob-lift:**
+  registry-1 knobs can read their ranges straight off `host.params()`. Editor tests
+  1675, tsc + biome clean.

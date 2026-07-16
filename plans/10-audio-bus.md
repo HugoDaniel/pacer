@@ -108,3 +108,39 @@ required forking it (per-channel control) is blocked below the worklet anyway.
 Phase 1's chiptuneHost therefore targets exactly `audio.volume`, `audio.tempo`,
 `audio.pitch` — ncomp 1 each — with the driver growing `setTempo` / `setPitch`
 methods that post the existing messages.
+
+### Phase 1 — chiptuneHost (done, 2026-07-16)
+
+**Landed** (pngine `0f3c2a6`, reds first): the driver grew `setTempo` /
+`setPitch` — posting the worklet's existing ctl messages verbatim, no worklet
+change — plus `hasTrack()` so the host can answer "no module → empty
+registry". `lib/audio/chiptune-host.ts` implements `AudioTargetHost` over a
+minimal `ChiptuneControls` slice (tests substitute a recorder; `AudioDriver`
+satisfies it structurally). The pins run pacer's REAL `paramRegistry` /
+`applyParams` (via the `pacer/audio` export, already resolvable in the editor)
+so the whole write-entry→`laneValue`→`setParam`→driver route is covered.
+Gate: editor tests 1675/1675 (+12), tsc clean, biome clean.
+
+Decisions baked into the host (each pinned):
+
+- **Clamp to declared [min, max] in `setParam`** — `paramRegistry` carries
+  only `{name, ncomp}`, so pacer never clamps; a keyframe passing through 0
+  must not hand libopenmpt a zero tempo factor. Volume [0, 1]; factors
+  [0.25, 4] (the musically sane window). The specs carry `min`/`max`/
+  `default` (all defaults 1) — the future 08 knob-lift surface.
+- **`setTempo`/`setPitch` do NOT persist across boot** (unlike `setVolume`,
+  the one-shot UI control): the audio bus re-applies its writes every frame,
+  so a fresh module is corrected by the next eval — holding would only add a
+  stale-value replay path. Pinned as "no replay on boot".
+- **`clock()` returns null** — the studio's rAF playback loop is the time
+  master (the driver is slaved via `PlaybackAudioSink`); the host offering no
+  clock keeps that topology honest.
+- Unknown param names no-op (a stale-registry write after re-arm must not
+  throw); non-finite values are dropped (pacer's NaN rejection already
+  guarantees this upstream — the host stays total anyway).
+- The phase-0 vocabulary pin was consciously widened to
+  `config play setPos pause unpause setTempo setPitch stop`.
+
+Phase 2 wires `armPacer` to pass `[visualRegistry, audioRegistry]` and routes
+registry-1 writes through `applyParams(entries, chiptuneHost(driver), 1)` per
+frame, re-arming on track load/unload (`hasTrack` flips → registries change).
