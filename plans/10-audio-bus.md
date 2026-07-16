@@ -144,3 +144,49 @@ Decisions baked into the host (each pinned):
 Phase 2 wires `armPacer` to pass `[visualRegistry, audioRegistry]` and routes
 registry-1 writes through `applyParams(entries, chiptuneHost(driver), 1)` per
 frame, re-arming on track load/unload (`hasTrack` flips → registries change).
+
+### Phase 2 — arm both buses + per-frame apply (done, 2026-07-16)
+
+**Landed** (pngine `712ab92`, reds first): `initPreview` gained an `audioHost`
+option (an `AudioTargetHost`, null = empty bus). `armPacer` samples
+`paramRegistry(audioHost)` at arm time and loads
+`[visualRegistry, audioRegistry]`; the arm key widened to a registry
+fingerprint — visual reflection key + audio params JSON — so EITHER side
+changing (shader reload / track load-unload) forces the fresh-load path.
+`renderFrame` splits ONE `pacer.eval` across the buses: registry 0 →
+`toUniforms` → coalescer → `draw.uniforms` (unchanged), registry 1 →
+`applyParams(writes, audioHost, 1)`. App.svelte creates the driver BEFORE the
+preview and passes `chiptuneHost(driver)`; `preview.refreshAudioRegistry()` is
+called at all five track-state flip sites (picker load, IndexedDB restore,
+player boot, player replace, clear). Gate: editor tests 1682/1682 (+7:
+6 preview pins + 1 end-to-end), tsc clean, biome clean.
+
+Decisions baked in (each pinned):
+
+- **Audio applies on LIVE frames only** — `renderFrame` is the single seam
+  that touches the host; the thumbnail prefetch and curve sampler eval out of
+  playback order and stay visual-only (`uniformsAt` is registry-0 by
+  contract now, documented). Paused re-renders DO apply — arming or
+  scrubbing while paused brings the audio params to the playhead's score
+  state, same as visuals (pinned: the arm-time paused re-render applies the
+  score's opening `audio.volume`).
+- **`refreshAudioRegistry` is a keyed no-op** — it recomputes the fingerprint
+  and skips the re-arm when the param surface is unchanged (a same-surface
+  track replace must not invalidate the thumbnail strip). When an arm is
+  in flight (`pacer` still null), it re-arms anyway: the generation token
+  supersedes the stale load — the plan's "generation token holds".
+- **No track → whole-score diagnostic, nothing drives** — pinned end to end:
+  with an empty registry 1 a score targeting `audio.volume` fails its load
+  (`unknown_target`, pacer.ok false), so neither bus runs until a track
+  loads and the refresh re-arms (the load "heals" the score).
+- The planned end-to-end red in `score-uniforms.test.js` (real wasm × real
+  `chiptuneHost` × recording driver, clamping included) came up GREEN
+  immediately — the pacer-side chain was already whole after Phase 1; the
+  gap was purely preview plumbing. Kept as the integration pin.
+
+**Phase 3 consideration:** the demo player's warm-up path (`playerWarmup`
+mutes via `setVolume(0)` until GO) can be overridden by a score-driven
+`audio.volume` on any paused re-render during the countdown — per-frame
+re-apply is the bus's contract. If the Phase 3 template keyframes
+`audio.volume`, either start it at 1 (warm-up mute holds unless a re-render
+fires) or prefer `audio.tempo`/`audio.pitch` for the musical use.

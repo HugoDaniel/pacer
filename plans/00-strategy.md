@@ -128,17 +128,19 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 10 audio-bus — Phases 0–1 DONE (2026-07-16, pngine `7b54680` + `0f3c2a6`);
-next: Phase 2 (arm both buses + per-frame apply).** Phase 1 landed `chiptune-host.ts`
-(the `AudioTargetHost` over the driver: `audio.volume`/`audio.tempo`/`audio.pitch`,
-ncomp 1, clamped to declared ranges) and the driver's `setTempo`/`setPitch`/`hasTrack`
-— posting the worklet's existing ctl messages, no worklet change. Editor tests 1675,
-tsc + biome clean; pins run pacer's real `paramRegistry`/`applyParams`. Phase 2 wires
-`armPacer` to `[visualRegistry, audioRegistry]`, routes registry-1 writes per frame,
-re-arms on track load/unload (see plan 10's Phase 1 log for the baked decisions).
-Phases left: 2 arm both buses → 3 template+docs. `audio.ch<N>.*` stays DEFERRED
-(ext-interactive unreachable from JS — Phase 0 log). After 10: 03 pattern tracks
-P1–P4 close Wave 3.
+→ **Wave 3 · 10 audio-bus — Phases 0–2 DONE (2026-07-16, pngine `7b54680` +
+`0f3c2a6` + `712ab92`); next: Phase 3 (template + docs + audible smoke).** Phase 2
+armed both buses: `armPacer` samples `paramRegistry(audioHost)` at arm time and
+loads `[visualRegistry, audioRegistry]`; `renderFrame` splits ONE eval — registry 0
+→ `draw.uniforms`, registry 1 → `applyParams` into the module player, LIVE frames
+only (thumbnail prefetch stays visual-only). `refreshAudioRegistry` re-arms on
+track load/unload (registry fingerprint = visual key + audio params; gen token
+supersedes in-flight arms), wired at all five flip sites in App.svelte. Editor
+tests 1682, tsc + biome clean. Phase 3: template score with a musical use, studio
+docs, Sointu-host follow-up filed, audible manual smoke — mind the demo-player
+warm-up mute vs. a score-driven `audio.volume` (plan 10 Phase 2 log). `audio.ch<N>.*`
+stays DEFERRED (ext-interactive unreachable from JS — Phase 0 log). After 10: 03
+pattern tracks P1–P4 close Wave 3.
 
 **Benchmark #2 is CLOSED — A/B CONFIRMED 2026-07-16.** The user eyeballed beats 148–204 in the
 studio against the pre-rewrite build: the dots choreography is identical (icon strobe from 162,
@@ -830,3 +832,17 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   master). Specs carry `min`/`max`/`default` — **cross-plan fact for 08 knob-lift:**
   registry-1 knobs can read their ranges straight off `host.params()`. Editor tests
   1675, tsc + biome clean.
+- 2026-07-16 — **10 audio-bus Phase 2** (pngine `712ab92`): registry 1 is LIVE in the
+  studio. `armPacer` loads `[visualRegistry, paramRegistry(audioHost)]`; `renderFrame`
+  splits ONE eval — registry 0 → `draw.uniforms`, registry 1 → `applyParams` into the
+  module player. Baked decisions (all pinned): **audio applies on live frames only**
+  (thumbnail prefetch + curve sampler eval out of playback order and stay visual-only;
+  paused re-renders DO apply, so arming/scrubbing tracks the score); **the arm key is a
+  registry fingerprint** (visual reflection + audio params), so a track load/unload
+  forces a fresh `Pacer.load` while `refreshAudioRegistry` no-ops on an unchanged
+  surface (strip not invalidated) and re-arms over an in-flight load (gen token holds);
+  **no track → `unknown_target` fails the whole load** — nothing drives until a load
+  heals the score. **Phase 3 watch-out:** the demo player's warm-up mute
+  (`setVolume(0)` until GO) loses to a score-driven `audio.volume` on any paused
+  re-render — template should start volume at 1 or ride tempo/pitch instead. Editor
+  tests 1682 (+7), tsc + biome clean.
