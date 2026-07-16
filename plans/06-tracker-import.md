@@ -109,3 +109,30 @@ A8/A4 rows (average 12 ticks per row-pair = speed-6 baseline, so beat *pairs* st
 on-grid while odd rows drift late) and Txx never occurs. Phase 1's Txx/Axx warning
 fires on the real module; word it to say the pairwise-average case keeps the beat
 grid honest even though row onsets swing.
+
+### Phase 1 — timing model (done, 2026-07-16)
+
+**RED first.** `it-timing.test.js` (same `.test.js` glob rule as phase 0) — ten
+reds over plain `ItModule` literals (no bytes; the layer is pure over parsed
+data): speed-6 baseline 4 rows/beat, the demo's named "4 rows/beat, 16 rows/bar"
+case, speed-derived rows/beat (24 ticks/beat — the PHiligt hint is cosmetic),
+order-position → absolute beat with `+++` (254) contributing zero rows,
+`songBeats()`, and Axx/Txx `warnings` (silent when command-free; separate
+entries when both occur). GREEN: `it-timing.ts` — `timingOf(mod): ItTiming`
+with `rowsPerBeat`, `beatOf(orderPos, row)`, `songBeats()`, `warnings`.
+pngine commit `ea81031`. Gate: 1644/1644, `tsc` clean, biome clean.
+
+**Realism check** (scratch, not committed) — the plan's "Why" validated
+directly: the hand-computed WGSL anchors reproduce from the module.
+`beatOf(10, 0)` = **160** (full drop, bar 41.1) and `beatOf(13, 48)` = **220**
+(breakdown, bar 56.1); `songBeats()` = 400. Exactly one warning fires — the
+Axx entry ("appears 1024× — beats assume the initial speed 6; an alternating
+swing (e.g. A8/A4) averages out per row pair, so beat boundaries stay honest
+while odd rows land late") — per the Decision-log wording guidance.
+
+**Carry-forward for Phase 2:** onset emission should quantize trigger `:at`
+lists to the even-row grid (the swing means odd rows land late by 4 ticks ≈
+beat/24 at A8/A4); order-boundary beats come straight from `beatOf(orderPos, 0)`
+for the `; bar N — pattern P` comment lines. Interfaces to load:
+`parseIt(bytes): ItModule` (it-reader.ts) + `timingOf(mod): ItTiming`
+(it-timing.ts).

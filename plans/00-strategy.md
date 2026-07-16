@@ -119,7 +119,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 2 | 07 timeline editor P1–P5 | ☑ |
 | 2 | 05 array targets · ALL phases ✓ (dotted lanes in the demoscene, smoke green 2026-07-16) | ☑ |
 | 2 | benchmark #2 · A/B CONFIRMED 2026-07-16 | ☑ |
-| 3 | 06 tracker import · P0 ✓ (.it reader, 2026-07-16) | ☐ |
+| 3 | 06 tracker import · P0–P1 ✓ (.it reader + timing model, 2026-07-16) | ☐ |
 | 3 | 10 audio bus | ☐ |
 | 3 | 03 pattern tracks P1–P4 | ☐ |
 | 4 | 08 knob lift | ☐ |
@@ -128,12 +128,13 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 06 tracker-import in flight — Phase 0 done (pure-TS `.it` reader, pngine
-`4f5e061`, 2026-07-16); Phase 1 (timing model: rows→beats, order-pos→beat, Txx/Axx warnings)
-is next**, then P2 score emission and P3 studio UI. Byte-layout notes + the realism findings
-live in 06's Progress log — the demo module swings its groove with 1024 alternating A8/A4
-set-speed rows (beat pairs stay on-grid, odd rows drift), so Phase 1's Axx warning is a real
-case, not hypothetical. After 06: 10 audio-bus, then 03 pattern tracks P1–P4.
+→ **Wave 3 · 06 tracker-import in flight — Phases 0–1 done (`.it` reader pngine `4f5e061`,
+timing model pngine `ea81031`, 2026-07-16); Phase 2 (score emission: golden SJON text +
+reload through the real pacer.wasm) is next**, then P3 studio UI. The timing realism check
+reproduced the hand-computed WGSL anchors from the module — `beatOf(10, 0)` = 160 (the drop,
+bar 41.1), `beatOf(13, 48)` = 220 (the breakdown) — so the importer provably replaces the
+transcription step. Phase 2 carry-forward (quantize onsets to the even-row grid; interfaces
+to load) is in 06's Progress log. After 06: 10 audio-bus, then 03 pattern tracks P1–P4.
 
 **Benchmark #2 is CLOSED — A/B CONFIRMED 2026-07-16.** The user eyeballed beats 148–204 in the
 studio against the pre-rewrite build: the dots choreography is identical (icon strobe from 162,
@@ -764,3 +765,15 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   for triggers should either quantize to the even-row grid or model the per-row
   speed ledger; the Phase-1 warning must fire here (Txx is absent — the BPM itself
   never moves, so `(transport :bpm 125)` stays honest).
+- 2026-07-16 — 06 Phase 1 complete (pngine `ea81031`): timing model
+  (`studio/editor/src/lib/score/it-timing.ts`, `timingOf(mod): ItTiming` —
+  `rowsPerBeat`, `beatOf(orderPos, row)`, `songBeats()`, `warnings`), pure over the
+  parsed module (tests are literal `ItModule`s, no bytes). Rows/beat derives from
+  24 ticks/beat ÷ initial speed — the PHiligt highlight is cosmetic; `+++` (254)
+  order entries count zero rows. The Axx warning fired on the real module with the
+  agreed pairwise-honest wording. **Cross-plan fact for 06 Phase 2 / 07 write-back:**
+  the timing realism check REPRODUCED the demo's hand-computed WGSL anchors from the
+  module alone — `beatOf(10, 0)` = 160 (full drop, bar 41.1), `beatOf(13, 48)` = 220
+  (breakdown, bar 56.1), `songBeats()` = 400 = the live score's `:dur 400b` — so
+  emitted `(transport …)` + order-boundary comments can be trusted as the score's
+  ground truth, and the transcription step is provably redundant.
