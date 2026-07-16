@@ -20,6 +20,9 @@ aspiration into a tested surface.
   `audio.volume` (global gain), `audio.tempo` (tempo factor ctl), `audio.pitch`
   (pitch factor ctl), `audio.ch<N>.volume`, `audio.ch<N>.mute` (N from the loaded
   module's channel count).
+  **Phase 0 verdict (2026-07-16): `audio.ch<N>.*` is DEFERRED** — the shipped
+  libopenmpt build cannot invoke the ext-interactive interface from JS (see the
+  log). v1 ships `audio.volume` / `audio.tempo` / `audio.pitch`.
 - The worklet boundary makes application async — fine: pacer stays the pure function,
   the host applies writes best-effort per frame (that's already `applyParams`'s
   contract). Determinism claims cover the writes, not the speaker.
@@ -72,3 +75,36 @@ log.
 Gate: editor tests + manual smoke with audible result.
 
 ## Progress log
+
+### Phase 0 — worklet control surface investigation (done, 2026-07-16)
+
+**Characterization landed** (pngine `7b54680`): a new "worklet port vocabulary"
+suite in `studio/editor/src/lib/audio/audio-driver.test.js` (the FakeNode mock
+now records `port.posted`). Seven pins, green on first run against the real
+driver: boot posts exactly one `config` (`{repeatCount: -1, stereoSeparation:
+100, interpolationFilter: 0}`); `play` carries a standalone ArrayBuffer copy of
+the held bytes (start at 0 posts no seek; a mid-timeline start follows with
+`setPos`); pause/resume map to `pause`/`unpause` (the worklet keeps position);
+replacing a live track posts `stop` first; `setVolume` never crosses the port
+(main-thread GainNode); and the complete outbound vocabulary is
+`config play setPos pause unpause stop`. Gate: editor tests 1663/1663 (+7),
+biome clean.
+
+**Reachability of the v1 target list** (chiptune3 0.8.7; the studio serves the
+worklet via the `public/chiptune → node_modules/chiptune3` symlink, so the
+worklet files are upstream-owned, not a repo copy):
+
+| target | verdict | how |
+|---|---|---|
+| `audio.volume` | reachable TODAY | `driver.setVolume` → main-thread GainNode; no worklet message involved |
+| `audio.tempo` | worklet-ready, driver gap | the worklet switch already handles `setTempo` → `openmpt_module_ctl_set('play.tempo_factor', v)`; nothing in the studio posts it — Phase 1 adds a driver method. **No worklet change needed.** |
+| `audio.pitch` | worklet-ready, driver gap | same via `setPitch` → `play.pitch_factor` |
+| `audio.ch<N>.volume` / `.mute` | **NOT reachable — deferred** | no message at either end (upstream's `toggleMute` case is commented out). The emscripten build DOES export the ext API (`_openmpt_module_ext_create_from_memory` / `_ext_get_interface` / `_ext_get_module` / `_ext_destroy`, id strings `interactive`/`2`/`3` present) — but `openmpt_module_ext_interface_interactive` is a struct of C function pointers, and the build keeps the indirect table closure-only (`__indirect_function_table = wasmTable = wasmExports["tf"]`; `Module` exports no `wasmTable`, `getWasmTableEntry`, or `dynCall_*`). JS cannot call the pointers. Fix requires rebuilding libopenmpt with wider `EXPORTED_RUNTIME_METHODS` (or upstream chiptune3 work) — out of scope for this plan; filed as follow-up alongside the Sointu host. |
+
+The plan's expectation "extending the worklet message switch is expected" came
+out BETTER than expected for v1: tempo and pitch need no worklet change at all
+(good — the worklet is upstream's file), and the one thing that would have
+required forking it (per-channel control) is blocked below the worklet anyway.
+Phase 1's chiptuneHost therefore targets exactly `audio.volume`, `audio.tempo`,
+`audio.pitch` — ncomp 1 each — with the driver growing `setTempo` / `setPitch`
+methods that post the existing messages.

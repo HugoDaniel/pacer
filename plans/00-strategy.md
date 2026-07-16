@@ -128,13 +128,14 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 06 tracker-import is COMPLETE (2026-07-16: reader `4f5e061`, timing `ea81031`,
-emission `50a9fe0`, studio UI `4388ce5` — all pngine). Next: 10 audio-bus.** The import
-dialog lives on the Motion tab (view-toggle row): it seeds from the loaded audio track,
-shows the timing warnings + a channel checklist (1-based labels, played-onset census,
-editable trigger names), and insert dispatches one SET_SCORE with the skeleton appended
-(or replacing a blank score). Manual smoke with the real `impulse-04.it` landed the full
-400-beat skeleton — the drop's `; bar 41` anchor generated, diagnostics channel live.
+→ **Wave 3 · 10 audio-bus — Phase 0 DONE (2026-07-16, pngine `7b54680`); next: Phase 1
+(chiptuneHost).** Phase 0 characterized the driver↔worklet port (7 pins, editor tests
+1663) and settled the v1 target list: `audio.volume` (GainNode, reachable today) +
+`audio.tempo` / `audio.pitch` (worklet already handles `setTempo`/`setPitch` ctls — the
+driver just needs methods that post them; NO worklet fork needed). `audio.ch<N>.*` is
+DEFERRED: libopenmpt's ext-interactive interface is C function pointers and the shipped
+emscripten build hides the wasm table — unreachable from JS without a libopenmpt rebuild
+(logged in plan 10). Phases left: 1 chiptuneHost → 2 arm both buses → 3 template+docs.
 After 10: 03 pattern tracks P1–P4 close Wave 3.
 
 **Benchmark #2 is CLOSED — A/B CONFIRMED 2026-07-16.** The user eyeballed beats 148–204 in the
@@ -805,3 +806,14 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   the emitted-text → pacer-load → diagnostics loop is live in the UI.
   **Cross-plan fact for 10 audio-bus / 03 pattern-tracks:** the Motion tab now has
   a working modal-dialog idiom + census pattern to reuse for bus/track pickers.
+- 2026-07-16 — **10 audio-bus Phase 0** (pngine `7b54680`): the driver↔worklet port is
+  characterized (7 pins; vocabulary today = `config play setPos pause unpause stop`) and
+  the v1 audio target list is SETTLED: `audio.volume` + `audio.tempo` + `audio.pitch`.
+  `audio.ch<N>.volume/.mute` is **deferred** — libopenmpt's ext-interactive interface is
+  a struct of C function pointers and the shipped emscripten build keeps the wasm
+  indirect table closure-only (no `wasmTable`/`dynCall_*` on `Module`), so JS cannot call
+  `set_channel_volume` without rebuilding libopenmpt. Silver lining: tempo/pitch need NO
+  worklet change (upstream already maps `setTempo`/`setPitch` to the ctls), so the
+  upstream-owned worklet (`public/chiptune` is a symlink into `node_modules/chiptune3`)
+  never gets forked. **Cross-plan fact for 07 timeline-editor / docs:** registry 1's
+  name set is three globals, not per-channel — any audio-lane UI plans around that.
