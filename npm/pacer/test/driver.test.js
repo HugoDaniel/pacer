@@ -284,6 +284,75 @@ test('meta.scenes: a score with no scenes yields an empty array', async () => {
   assert.deepEqual(driver.meta.scenes, []);
 });
 
+test('meta.easePrograms: the deduped table decodes with per-key refs', async () => {
+  const score = `(transport :bpm 120 :meter [4 4])
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 4b :value 1 :ease out-cubic))
+(track :target cutoff
+  (key :at 0b :value 0)
+  (key :at 4b :value 1 :ease smoothstep))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  const meta = driver.meta;
+
+  // programs[0] linear (default) + out-cubic + smoothstep = 3 distinct.
+  assert.equal(meta.easePrograms.length, 3);
+  assert.deepEqual(
+    meta.easePrograms.map((p) => p.index),
+    [0, 1, 2],
+  );
+  // Program 0 is the default linear: one stage [0,1]→[0,1], one linear op.
+  const lin = meta.easePrograms[0];
+  assert.equal(lin.stages.length, 1);
+  assert.deepEqual([lin.stages[0].tEnd, lin.stages[0].vBase, lin.stages[0].vSpan], [1, 0, 1]);
+  assert.equal(lin.stages[0].ops[0].code, 'linear');
+  // The authored eases intern in first-seen order.
+  assert.equal(meta.easePrograms[1].stages[0].ops[0].code, 'out_cubic');
+  assert.equal(meta.easePrograms[2].stages[0].ops[0].code, 'smoothstep');
+
+  // Each key names its program: first keys are linear (0), the eased
+  // second keys point at out-cubic (1) and smoothstep (2).
+  assert.deepEqual(
+    meta.tracks.flatMap((t) => t.keys.map((k) => k.easeRef)),
+    [0, 1, 0, 2],
+  );
+});
+
+test('meta.easePrograms: parametric ops carry their params', async () => {
+  const score = `(transport :bpm 120 :meter [4 4])
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 4b :value 1 :ease (chain (cubic-bezier :p [0.4 0 0.2 1]) (steps :n 4 :jump end))))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  // programs[0] linear + the authored chain = 2.
+  const prog = driver.meta.easePrograms[1];
+  assert.equal(prog.stages.length, 1); // a chain is one stage
+  const [bezier, steps] = prog.stages[0].ops;
+  assert.equal(bezier.code, 'cubic_bezier');
+  assert.deepEqual(
+    bezier.params.map((p) => Math.fround(p)),
+    [Math.fround(0.4), 0, Math.fround(0.2), 1],
+  );
+  assert.equal(steps.code, 'steps_end');
+  assert.equal(steps.params[0], 4);
+});
+
+test('meta.easePrograms: a linear-only score yields an empty table', async () => {
+  // SCORE uses in-out-quad, so build a purely-linear score to prove the
+  // section is omitted (older blobs without it decode the same way).
+  const score = `(transport :bpm 120)
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 4b :value 1))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  assert.deepEqual(driver.meta.easePrograms, []);
+  // With no 'EASE' section every key defaults to the linear program (0).
+  assert.deepEqual(
+    driver.meta.tracks.flatMap((t) => t.keys.map((k) => k.easeRef)),
+    [0, 0],
+  );
+});
+
 test('registerControl drives an unpinned target while held', async () => {
   const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
   const slot = driver.registerControl('cutoff');

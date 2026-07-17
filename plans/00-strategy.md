@@ -123,13 +123,36 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 3 | 10 audio bus · ALL phases ✓ (pitch ride audible, smoke green 2026-07-16) | ☑ |
 | 3 | 03 pattern tracks · ALL phases ✓ (`:pattern` third source; `pattern-basic` golden + wasm parity green 2026-07-17) | ☑ |
 | 4 | 08 knob lift · ALL phases ✓ (⛭ lift chip + live-loop round-trip, pngine `c43164b` 2026-07-17) | ☑ |
-| 4 | 11 P3–P5 | ☐ |
+| 4 | 11 P3 · `'EASE'` meta section ✓ (2026-07-17); P4–P5 next | ◐ |
 | 4 | 1.0 review | ☐ |
 
 ## What's next
 
-→ **Wave 4 · 08 knob-lift COMPLETE (all phases, 2026-07-17); next is Wave 4 · 11 P3–P5
-(ease programs → `'PACM'`).**
+→ **Wave 4 · 11 Phase 3 COMPLETE (2026-07-17); next is Wave 4 · 11 Phase 4** (compose-mode
+`(target …)` declarations — standalone scores), then **11 Phase 5** (diagnostic goldens),
+then the **1.0 review** (the last Wave-4 item).
+Phase 3 landed the `'EASE'` meta section: the deduped easing program table (`programs[0]` =
+linear) + a per-key `ease_ref` array, serialized as fixed extern records after `'SCEN'`
+(append-only, no `META_VERSION` bump, omitted when only linear → linear-only blobs stay
+byte-stable). npm `Pacer#meta` gained `easePrograms` + `MetaKey.easeRef`; both `renderMeta`s
+(native + JS parity) render `(mease …)` / `(measerefs …)`; the three ease goldens
+(`keys-basic`, `ease-composed`, `ease-primitives`) now pin it, 13 linear-only goldens
+byte-identical. `META_CAP` 192→320 KiB for the worst-case section. Gate: `zig build verify`
+(corpus 16/16 native+wasm, npm 52 incl. +3) + audit 29/29. Full detail in 11's Progress log +
+the Decision-log entry below. **Deferred (not blockers):** the studio refresh (copy new wasm +
+re-link glue) waits for the Wave-4 close — nothing consumes `easePrograms` yet (07 still
+samples; dropping that is the "if it's a win" optimization); the npm triple-pin stays 0.1.0
+(accumulate-till-publish).
+
+Open `plans/11-*.md` next and run **11 Phase 4** (compose-mode `(target …)`) under the same
+TDD + compaction discipline — the first Wave-4 item that adds a diagnostic code
+(`target_decl_invalid`) + touches `'PACT'`-adjacent join logic and the schema.
+TWO carried cross-repo follow-ups (NOT blockers): `euclid` is NOT in SJON's
+pattern vocabulary yet (SJON-side add), and pacer's time env in hap exprs (the SJON
+outer-`Expr.Env` `queryTree` variant) is a DEFERRED slice — hap exprs bind only
+pattern-locals `cycle`/`tick`/`seed` today.
+
+Prior context — **Wave 4 · 08 knob-lift COMPLETE (all phases, 2026-07-17).**
 Phase 3 (pngine `c43164b`, `~/Dev/pngine`, its own repo + gate) landed the `⛭ lift` chip in
 the WGSL editor and the live loop, end to end. Built as the house pure/edge split
 (cf. `sjon-shader-links.ts`): the tested pure controller `lib/knobs/lift-controller.ts`
@@ -1069,3 +1092,31 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   groups are the v2 asks. Gate: editor `npm test` 1704/1704 (+4), tsc + svelte-check 0 errors,
   biome clean. No pacer wire surface moved (all studio-side). Wave-4 remaining: 11 P3–P5, then
   the 1.0 review.
+- 2026-07-17 — **11 Phase 3 done — the `'EASE'` meta section.** The compiled easing
+  program table now serializes into `'PACM'`, so `Easing.Op` moves from "future wire" to a
+  realized surface. **Wire-stable carry-forward (append-only):** `'EASE'` = `0x45534145`
+  is a claimed section id, emitted AFTER `'SCEN'` in the fixed section order (a third
+  section would come after it); no `META_VERSION` bump. **Omit rule that matters
+  downstream:** the section is omitted when `programs.len <= 1` — NOT "0 programs", because
+  `programs[0]` is ALWAYS the default linear, so `<= 1` is the real "score authored no
+  non-linear ease" test; this keeps every linear-only blob byte-identical to a pre-ease
+  one (13/16 goldens unchanged on regen). **Layout:** fixed extern records
+  (`MetaEaseProgramRec` 772 B = `len u8` + 8 × `MetaEaseStageRec` 96 B, each with 4 ×
+  `MetaEaseOpRec` 20 B; unused slots ZEROED to match the program's zero-fill so equal
+  programs give equal bytes), mirroring the `'SCEN'` `[count][rec × count]` pattern and
+  earning three `@sizeOf` comptime pins. After the program array comes a `[key_ref_count
+  u32]` + `ease_ref u16 ×` array **parallel to the key stream** — a key's ref names the
+  program for the segment ENDING at it (0 = linear); this is how an editor associates a
+  curve with a segment WITHOUT growing the frozen 32-byte `MetaKeyRec` (the section is the
+  escape hatch for per-key data). `META_CAP` 192→320 KiB to hold a worst-case section.
+  **npm surface grew** (no triple-pin bump — accumulate-till-publish): `Pacer#meta` gained
+  `easePrograms` (typed `MetaEaseProgram/Stage/Op`, op codes the snake_case `Easing.Op`
+  `@tagName` mirrored by an `EASE_OPS` table) and every `MetaKey` gained `easeRef` (0
+  default). **Both `renderMeta`s** (native `corpus_runner.zig` + JS `corpus.test.js`) render
+  `(mease …)` + `(measerefs …)` — the 01-Phase-5 obligation honored. **Studio consumption
+  deferred:** 07's `curve-sample.ts` can drop live-sampling in favor of analytic rendering
+  from `easePrograms` — a future "if it's a win" optimization, and the studio wasm refresh
+  waits for the Wave-4 close (nothing reads `easePrograms` yet). Gate: `zig build verify`
+  (corpus 16/16 native+wasm, npm 52) + audit 29/29 (no new codes). Detail in 11's Progress
+  log. Wave-4 remaining: 11 P4 (compose-mode `(target …)`, adds `target_decl_invalid`),
+  11 P5 (diagnostic goldens), then the 1.0 review.

@@ -9,7 +9,25 @@
     (mkey :at 720720 :value ["3F800000" "00000000" "00000000" "00000000"] :span [605 665]))
   (mtrack :id 2 :target swatch :registry 0 :ncomp 1 :source keys :span [668 811]
     (mkey :at 0 :value ["00000000" "00000000" "00000000" "00000000"] :span [692 713])
-    (mkey :at 720720 :value ["3F800000" "00000000" "00000000" "00000000"] :span [716 810])))
+    (mkey :at 720720 :value ["3F800000" "00000000" "00000000" "00000000"] :span [716 810]))
+  (mease :index 0
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code linear :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 1
+    (mstage :t-end "3ECCCCCD" :v-base "00000000" :v-span "3F933333"
+      (mop :code out_cubic :params ["00000000" "00000000" "00000000" "00000000"]))
+    (mstage :t-end "3F400000" :v-base "3F933333" :v-span "BE3851EC"
+      (mop :code in_out_quad :params ["00000000" "00000000" "00000000" "00000000"]))
+    (mstage :t-end "3F800000" :v-base "3F7851EC" :v-span "3CF5C28F"
+      (mop :code out_quad :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 2
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code spring :params ["40B4F4AB" "4196CBE4" "00000000" "00000000"])))
+  (mease :index 3
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code cubic_bezier :params ["3ECCCCCD" "00000000" "3E4CCCCD" "3F800000"])
+      (mop :code steps_end :params ["40800000" "00000000" "00000000" "00000000"])))
+  (measerefs [0 1 0 2 0 3]))
 (eval :t "0000000000000000"
   (write :target logo-y :id 0 :registry 0 :ncomp 1 :value ["00000000" "00000000" "00000000" "00000000"])
   (write :target wobble :id 1 :registry 0 :ncomp 1 :value ["00000000" "00000000" "00000000" "00000000"])

@@ -50,8 +50,8 @@ pub const Error = error{
     EaseParamsInvalid,
 };
 
-/// Primitive op codes. Wire-stable once programs serialize into driver
-/// metadata: append-only, never reorder.
+/// Primitive op codes. Wire-stable: they serialize into `'PACM'`'s
+/// `'EASE'` section (`Abi.encodeMeta`) — append-only, never reorder.
 pub const Op = enum(u8) {
     linear,
     hold,
@@ -123,8 +123,8 @@ pub const StageSpec = struct {
     ops: []const OpSpec,
 };
 
-/// Compiled primitive record. Params are f32 (compact, future
-/// wire-friendly); evaluation widens to f64 (exact).
+/// Compiled primitive record. Params are f32 (compact, wire-carried in
+/// `'PACM'`'s `'EASE'` section); evaluation widens to f64 (exact).
 pub const OpRec = struct {
     code: Op,
     params: [4]f32 = .{ 0, 0, 0, 0 },

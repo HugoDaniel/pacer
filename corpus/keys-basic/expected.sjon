@@ -9,7 +9,14 @@
     (mkey :at 360360 :value ["00000000" "3F800000" "00000000" "00000000"] :span [290 335]))
   (mtrack :id 2 :target cutoff :registry 1 :ncomp 1 :source keys :span [338 413]
     (mkey :at 0 :value ["43480000" "00000000" "00000000" "00000000"] :span [362 385])
-    (mkey :at 1441440 :value ["45FA0000" "00000000" "00000000" "00000000"] :span [388 412])))
+    (mkey :at 1441440 :value ["45FA0000" "00000000" "00000000" "00000000"] :span [388 412]))
+  (mease :index 0
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code linear :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 1
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_out_quad :params ["00000000" "00000000" "00000000" "00000000"])))
+  (measerefs [0 0 0 1 0 0]))
 (eval :t "0000000000000000"
   (write :target radius :id 0 :registry 0 :ncomp 1 :value ["3E4CCCCD" "00000000" "00000000" "00000000"])
   (write :target tint :id 1 :registry 0 :ncomp 3 :value ["3F800000" "00000000" "00000000" "00000000"])

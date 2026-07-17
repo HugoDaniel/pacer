@@ -63,7 +63,71 @@
     (mkey :at 720720 :value ["3F800000" "00000000" "00000000" "00000000"] :span [2311 2361]))
   (mtrack :id 20 :target steps-start :registry 0 :ncomp 1 :source keys :span [2363 2466]
     (mkey :at 0 :value ["00000000" "00000000" "00000000" "00000000"] :span [2391 2412])
-    (mkey :at 720720 :value ["3F800000" "00000000" "00000000" "00000000"] :span [2413 2465])))
+    (mkey :at 720720 :value ["3F800000" "00000000" "00000000" "00000000"] :span [2413 2465]))
+  (mease :index 0
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code linear :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 1
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code hold :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 2
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code smoothstep :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 3
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_quad :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 4
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code out_quad :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 5
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_out_quad :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 6
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_cubic :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 7
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code out_cubic :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 8
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_out_cubic :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 9
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_quart :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 10
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code out_quart :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 11
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_out_quart :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 12
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_sine :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 13
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code out_sine :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 14
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_out_sine :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 15
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_expo :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 16
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code out_expo :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 17
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code in_out_expo :params ["00000000" "00000000" "00000000" "00000000"])))
+  (mease :index 18
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code cubic_bezier :params ["3ED70A3D" "00000000" "3F147AE1" "3F800000"])))
+  (mease :index 19
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code steps_end :params ["40000000" "00000000" "00000000" "00000000"])))
+  (mease :index 20
+    (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+      (mop :code steps_start :params ["40000000" "00000000" "00000000" "00000000"])))
+  (measerefs [0 0 0 1 0 2 0 3 0 4 0 5 0 6 0 7 0 8 0 9 0 10 0 11 0 12 0 13 0 14 0 15 0 16 0 17 0 18 0 19 0 20]))
 (eval :t "0000000000000000"
   (write :target linear :id 0 :registry 0 :ncomp 1 :value ["00000000" "00000000" "00000000" "00000000"])
   (write :target hold :id 1 :registry 0 :ncomp 1 :value ["00000000" "00000000" "00000000" "00000000"])

@@ -65,6 +65,23 @@
 //!       (the scene's name rides as a span like a track's — the editor
 //!       slices it from source; scenes aren't a setControl lookup key.)
 //!
+//!     'EASE' easing programs — the deduped program table (`programs[0]`
+//!       is the default linear) so an editor renders authored curves
+//!       without re-parsing ease specs. Emitted AFTER 'SCEN', and OMITTED
+//!       when the only program is linear (a linear-only blob stays
+//!       byte-stable). Payload:
+//!         [program_count u32]
+//!         program_count × 772 {                 // MetaEaseProgramRec
+//!           len u8, pad×3,
+//!           8 × 96 {                            // MetaEaseStageRec (unused zeroed)
+//!             t_end f32, v_base f32, v_span f32, ops_len u8, pad×3,
+//!             4 × 20 { code u8, pad×3, params f32×4 } } }  // MetaEaseOpRec
+//!         [key_ref_count u32]                    // == the key stream length
+//!         key_ref_count × { ease_ref u16 }       // program index per key, in key order
+//!       (a key's `ease_ref` names the program for the segment ENDING at
+//!       it; index 0 = linear. The array parallels the `key_count` key
+//!       records, so a decoder zips it with them.)
+//!
 //! Both formats are wire-stable from day one: append/version, never
 //! reorder. The third boundary format, `'PACW'`, lives in `Writes`.
 
@@ -72,6 +89,7 @@ const std = @import("std");
 const sjon = @import("sjon");
 const Compile = @import("Compile.zig");
 const TrackTable = @import("TrackTable.zig");
+const Easing = @import("Easing.zig");
 
 const Ast = sjon.Ast;
 
@@ -102,6 +120,14 @@ pub const META_SECTION_HEADER_LEN: usize = 8;
 pub const SCENES_SECTION_ID: u32 = 0x4e454353;
 /// Bytes per scene record inside the `'SCEN'` payload.
 pub const SCENE_REC_LEN: usize = 24;
+/// `"EASE"` read LE — the easing-program section id in the meta stream.
+pub const EASE_SECTION_ID: u32 = 0x45534145;
+/// Bytes per compiled-op record inside an `'EASE'` program.
+pub const META_EASE_OP_LEN: usize = 20;
+/// Bytes per stage record inside an `'EASE'` program.
+pub const META_EASE_STAGE_LEN: usize = 96;
+/// Bytes per program record inside the `'EASE'` payload.
+pub const META_EASE_PROGRAM_LEN: usize = 772;
 
 /// Most registries any host may join at load. Generous: pngine uniform
 /// tables run tens of fields, not hundreds.
@@ -276,17 +302,70 @@ const MetaSceneRec = extern struct {
     name_span_start: u32,
     name_span_end: u32,
 };
+/// One compiled easing op inside an `'EASE'` program record — mirrors
+/// `Easing.OpRec` for the wire, with explicit padding so `asBytes`
+/// carries no undefined bytes.
+const MetaEaseOpRec = extern struct {
+    code: u8, // Easing.Op
+    _pad: [3]u8 = .{ 0, 0, 0 },
+    params: [4]f32,
+};
+/// One stage inside an `'EASE'` program record — mirrors `Easing.Stage`.
+/// Unused op slots are ZEROED (matching the compiled program's zero-fill),
+/// so two equal programs serialize to equal bytes.
+const MetaEaseStageRec = extern struct {
+    t_end: f32,
+    v_base: f32,
+    v_span: f32,
+    ops_len: u8,
+    _pad: [3]u8 = .{ 0, 0, 0 },
+    ops: [Easing.MAX_OPS]MetaEaseOpRec,
+};
+/// One compiled easing program — mirrors `Easing.Program`. Fixed size
+/// (all stage/op slots present, unused ones zeroed) so the `'EASE'`
+/// payload is `[count u32][rec × count]` exactly like `'SCEN'`.
+const MetaEaseProgramRec = extern struct {
+    len: u8, // live stage count
+    _pad: [3]u8 = .{ 0, 0, 0 },
+    stages: [Easing.MAX_STAGES]MetaEaseStageRec,
+};
 
 comptime {
     std.debug.assert(@sizeOf(MetaTrackRec) == META_TRACK_LEN);
     std.debug.assert(@sizeOf(MetaKeyRec) == META_KEY_LEN);
     std.debug.assert(@sizeOf(MetaControlRec) == META_CONTROL_LEN);
     std.debug.assert(@sizeOf(MetaSceneRec) == SCENE_REC_LEN);
+    std.debug.assert(@sizeOf(MetaEaseOpRec) == META_EASE_OP_LEN);
+    std.debug.assert(@sizeOf(MetaEaseStageRec) == META_EASE_STAGE_LEN);
+    std.debug.assert(@sizeOf(MetaEaseProgramRec) == META_EASE_PROGRAM_LEN);
     // spot-check a couple of offsets so a field reorder is a build break
     std.debug.assert(@offsetOf(MetaTrackRec, "key_start") == 8);
     std.debug.assert(@offsetOf(MetaControlRec, "value") == 8);
     std.debug.assert(@offsetOf(MetaControlRec, "value_span_start") == 56);
     std.debug.assert(@offsetOf(MetaSceneRec, "name_span_start") == 16);
+    std.debug.assert(@offsetOf(MetaEaseStageRec, "ops") == 16);
+    std.debug.assert(@offsetOf(MetaEaseProgramRec, "stages") == 4);
+}
+
+/// Widen one compiled `Easing.Program` into its wire record — all stage
+/// and op slots copied (unused ones already zeroed on the program), so
+/// the bytes are a pure function of the program.
+fn easeProgramRec(prog: *const Easing.Program) MetaEaseProgramRec {
+    var rec: MetaEaseProgramRec = .{ .len = prog.len, .stages = undefined };
+    for (0..Easing.MAX_STAGES) |i| {
+        const s = prog.stages[i];
+        var srec: MetaEaseStageRec = .{
+            .t_end = s.t_end,
+            .v_base = s.v_base,
+            .v_span = s.v_span,
+            .ops_len = s.ops_len,
+            .ops = undefined,
+        };
+        for (0..Easing.MAX_OPS) |j|
+            srec.ops[j] = .{ .code = @intFromEnum(s.ops[j].code), .params = s.ops[j].params };
+        rec.stages[i] = srec;
+    }
+    return rec;
 }
 
 /// Exact encoded size of the meta blob. Asserts a live table.
@@ -300,6 +379,11 @@ pub fn metaEncodedLen(result: *const Compile.CompileResult) usize {
     // blob stays byte-identical to a pre-scenes one).
     if (table.scenes.len > 0)
         len += META_SECTION_HEADER_LEN + 4 + table.scenes.len * SCENE_REC_LEN;
+    // 'EASE' section (omitted when the only program is the default linear
+    // — `programs[0]` — so a linear-only blob stays byte-stable).
+    if (table.programs.len > 1)
+        len += META_SECTION_HEADER_LEN + 4 + table.programs.len * META_EASE_PROGRAM_LEN +
+            4 + table.keys.len * 2;
     return len;
 }
 
@@ -409,6 +493,30 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
             };
             @memcpy(dest[pos..][0..SCENE_REC_LEN], std.mem.asBytes(&rec));
             pos += SCENE_REC_LEN;
+        }
+    }
+
+    // The 'EASE' section (after 'SCEN', fixed order): the deduped easing
+    // program table plus a per-key program-index array parallel to the key
+    // stream. An external editor renders authored curves from this without
+    // re-parsing ease specs. Present only when a non-linear program exists.
+    if (table.programs.len > 1) {
+        const payload_len = 4 + table.programs.len * META_EASE_PROGRAM_LEN + 4 + table.keys.len * 2;
+        std.mem.writeInt(u32, dest[pos..][0..4], EASE_SECTION_ID, .little);
+        std.mem.writeInt(u32, dest[pos + 4 ..][0..4], @intCast(payload_len), .little);
+        pos += META_SECTION_HEADER_LEN;
+        std.mem.writeInt(u32, dest[pos..][0..4], @intCast(table.programs.len), .little);
+        pos += 4;
+        for (table.programs) |*prog| {
+            const rec = easeProgramRec(prog);
+            @memcpy(dest[pos..][0..META_EASE_PROGRAM_LEN], std.mem.asBytes(&rec));
+            pos += META_EASE_PROGRAM_LEN;
+        }
+        std.mem.writeInt(u32, dest[pos..][0..4], @intCast(table.keys.len), .little);
+        pos += 4;
+        for (table.keys) |key| {
+            std.mem.writeInt(u16, dest[pos..][0..2], key.ease_ref, .little);
+            pos += 2;
         }
     }
 
@@ -757,4 +865,112 @@ test "PACM section walk: an unknown-id section is skipped, scenes still decode" 
     }
     try t.expectEqual(stream_len, off); // landed exactly at end-of-stream
     try t.expectEqual(@as(usize, 1), scenes_seen); // the unknown frame didn't disturb it
+}
+
+test "encodeMeta: an easing program table rides as an 'EASE' section" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0)
+        \\  (key :at 4b :value 1 :ease out-cubic))
+        \\(track :target cutoff
+        \\  (key :at 0b :value 0)
+        \\  (key :at 4b :value 1 :ease smoothstep))
+    ;
+    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    var buf: [8192]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    try t.expectEqual(metaEncodedLen(&r), m.len);
+
+    // 2 tracks, 4 keys, 0 controls, 0 scenes → the section stream is 'EASE'.
+    try t.expectEqual(@as(u32, 2), std.mem.readInt(u32, m[28..32], .little));
+    try t.expectEqual(@as(u32, 4), std.mem.readInt(u32, m[32..36], .little));
+    try t.expectEqual(@as(u32, 0), std.mem.readInt(u32, m[36..40], .little));
+
+    const sec = META_HEADER_LEN + 2 * META_TRACK_LEN + 4 * META_KEY_LEN;
+    try t.expectEqual(EASE_SECTION_ID, std.mem.readInt(u32, m[sec..][0..4], .little));
+    const plen = std.mem.readInt(u32, m[sec + 4 ..][0..4], .little);
+    try t.expectEqual(m.len, sec + META_SECTION_HEADER_LEN + plen); // self-delimiting
+
+    var off: usize = sec + META_SECTION_HEADER_LEN;
+    // programs[0] linear (default) + out-cubic + smoothstep = 3 distinct.
+    try t.expectEqual(@as(u32, 3), std.mem.readInt(u32, m[off..][0..4], .little));
+    off += 4;
+
+    // Program 0 = the default linear: one stage [0,1]→[0,1], one linear op.
+    {
+        const p = m[off..][0..META_EASE_PROGRAM_LEN];
+        try t.expectEqual(@as(u8, 1), p[0]); // len (stage count)
+        const st = p[4..][0..META_EASE_STAGE_LEN];
+        try t.expectEqual(@as(f32, 1), @as(f32, @bitCast(std.mem.readInt(u32, st[0..4], .little)))); // t_end
+        try t.expectEqual(@as(f32, 0), @as(f32, @bitCast(std.mem.readInt(u32, st[4..8], .little)))); // v_base
+        try t.expectEqual(@as(f32, 1), @as(f32, @bitCast(std.mem.readInt(u32, st[8..12], .little)))); // v_span
+        try t.expectEqual(@as(u8, 1), st[12]); // ops_len
+        try t.expectEqual(@intFromEnum(Easing.Op.linear), st[16]); // op0.code
+    }
+    // Program 1 = out-cubic (interned first), program 2 = smoothstep.
+    try t.expectEqual(
+        @intFromEnum(Easing.Op.out_cubic),
+        m[off + META_EASE_PROGRAM_LEN + 4 + 16],
+    );
+    try t.expectEqual(
+        @intFromEnum(Easing.Op.smoothstep),
+        m[off + 2 * META_EASE_PROGRAM_LEN + 4 + 16],
+    );
+    off += 3 * META_EASE_PROGRAM_LEN;
+
+    // Per-key ease refs, parallel to the key stream: circle-radius
+    // [linear, out-cubic] then cutoff [linear, smoothstep].
+    try t.expectEqual(@as(u32, 4), std.mem.readInt(u32, m[off..][0..4], .little));
+    off += 4;
+    try t.expectEqual(@as(u16, 0), std.mem.readInt(u16, m[off..][0..2], .little));
+    try t.expectEqual(@as(u16, 1), std.mem.readInt(u16, m[off + 2 ..][0..2], .little));
+    try t.expectEqual(@as(u16, 0), std.mem.readInt(u16, m[off + 4 ..][0..2], .little));
+    try t.expectEqual(@as(u16, 2), std.mem.readInt(u16, m[off + 6 ..][0..2], .little));
+}
+
+test "encodeMeta: a linear-only score emits no 'EASE' section" {
+    var r = try Compile.compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0)
+        \\  (key :at 4b :value 1))
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    var buf: [1024]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    // 1 track, 2 keys, 0 controls, no scenes, only the default linear
+    // program → the blob ends at the last key (byte-stable vs pre-ease).
+    try t.expectEqual(META_HEADER_LEN + META_TRACK_LEN + 2 * META_KEY_LEN, m.len);
+}
+
+test "encodeMeta: 'EASE' rides after 'SCEN' when both are present" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4])
+        \\(scene :name intro :at 0b :dur 4b
+        \\  (track :target circle-radius
+        \\    (key :at 0b :value 0)
+        \\    (key :at 4b :value 1 :ease out-cubic)))
+    ;
+    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    var buf: [4096]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    try t.expectEqual(metaEncodedLen(&r), m.len);
+
+    // Section stream after 1 track, 2 keys, 0 controls: 'SCEN' then 'EASE'.
+    var off: usize = META_HEADER_LEN + META_TRACK_LEN + 2 * META_KEY_LEN;
+    try t.expectEqual(SCENES_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(EASE_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(m.len, off); // the two frames account for the whole stream
 }

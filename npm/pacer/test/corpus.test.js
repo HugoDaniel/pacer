@@ -199,6 +199,26 @@ function renderMeta(meta) {
     out += `\n  (mscene :name ${s.name} :at ${s.startTick} :dur ${s.durTicks}`;
     out += ` :name-span [${s.nameSpan.start} ${s.nameSpan.end}])`;
   }
+  // The 'EASE' section (after 'SCEN'): the deduped program table, then a
+  // flat per-key program-index list in key order. Present only when a
+  // non-linear program exists — mirror of the native runner's walk.
+  if (meta.easePrograms.length) {
+    for (const prog of meta.easePrograms) {
+      out += `\n  (mease :index ${prog.index}`;
+      for (const st of prog.stages) {
+        out += `\n    (mstage :t-end "${hex(f32Bits(st.tEnd), 8)}"`;
+        out += ` :v-base "${hex(f32Bits(st.vBase), 8)}" :v-span "${hex(f32Bits(st.vSpan), 8)}"`;
+        for (const op of st.ops) {
+          const params = op.params.map((p) => `"${hex(f32Bits(p), 8)}"`).join(' ');
+          out += `\n      (mop :code ${op.code} :params [${params}])`;
+        }
+        out += ')';
+      }
+      out += ')';
+    }
+    const refs = meta.tracks.flatMap((tr) => tr.keys.map((k) => k.easeRef));
+    out += `\n  (measerefs [${refs.join(' ')}])`;
+  }
   return `${out})\n`;
 }
 

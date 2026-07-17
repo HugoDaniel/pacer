@@ -86,6 +86,9 @@ export {};
  * @property {bigint} at Tick position on the PPC grid.
  * @property {ReadonlyArray<number>} value Four lanes (trailing lanes are 0).
  * @property {Span} span
+ * @property {number} easeRef Index into {@link Meta.easePrograms} for the
+ *   segment ENDING at this key; 0 = linear (the default). See the `'EASE'`
+ *   section in Abi.zig.
  */
 
 /**
@@ -129,12 +132,44 @@ export {};
  */
 
 /**
+ * One primitive op inside a compiled easing program — the wire mirror of
+ * `Easing.OpRec`.
+ * @typedef {object} MetaEaseOp
+ * @property {'linear' | 'hold' | 'smoothstep' | 'in_quad' | 'out_quad' | 'in_out_quad' | 'in_cubic' | 'out_cubic' | 'in_out_cubic' | 'in_quart' | 'out_quart' | 'in_out_quart' | 'in_sine' | 'out_sine' | 'in_out_sine' | 'in_expo' | 'out_expo' | 'in_out_expo' | 'steps_end' | 'steps_start' | 'cubic_bezier' | 'spring'} code
+ *   The `Easing.Op` tag.
+ * @property {ReadonlyArray<number>} params Four f32 op parameters (`steps` n,
+ *   `cubic-bezier` control points, `spring` λ/ω); trailing lanes are 0.
+ */
+
+/**
+ * One stage of a compiled easing program — the wire mirror of
+ * `Easing.Stage`. The stage maps normalized time `[prev.tEnd, tEnd]` onto
+ * value `vBase + vSpan · (op-chain applied to the local ramp)`.
+ * @typedef {object} MetaEaseStage
+ * @property {number} tEnd Cumulative normalized end time (last stage = 1).
+ * @property {number} vBase Value base at the stage start.
+ * @property {number} vSpan Value span across the stage (may be negative).
+ * @property {ReadonlyArray<MetaEaseOp>} ops The stage's flattened op chain.
+ */
+
+/**
+ * A compiled easing program (`'EASE'` section) — a deduped entry of the
+ * score's program table; `easePrograms[0]` is always the default linear.
+ * A {@link MetaKey} names one by index via `easeRef`.
+ * @typedef {object} MetaEaseProgram
+ * @property {number} index Position in the program table (the `easeRef` value).
+ * @property {ReadonlyArray<MetaEaseStage>} stages One or more stages.
+ */
+
+/**
  * Decoded score metadata ('PACM'): the editor's timeline anchors.
  * @typedef {object} Meta
  * @property {Transport} transport
  * @property {ReadonlyArray<MetaTrack>} tracks
  * @property {ReadonlyArray<MetaControl>} controls
  * @property {ReadonlyArray<MetaScene>} scenes Named windows; `[]` when none.
+ * @property {ReadonlyArray<MetaEaseProgram>} easePrograms Deduped easing
+ *   program table; `[]` when the score uses only linear easing.
  */
 
 /**

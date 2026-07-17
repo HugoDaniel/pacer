@@ -36,6 +36,35 @@ const PACM_NO_TARGET = 0xffff;
 const PACM_SECTION_HEADER_LEN = 8;
 const PACM_SCENES_ID = 0x4e454353; // 'SCEN' read little-endian
 const PACM_SCENE_REC_LEN = 24;
+const PACM_EASE_ID = 0x45534145; // 'EASE' read little-endian
+const PACM_EASE_PROGRAM_LEN = 772;
+const PACM_EASE_STAGE_LEN = 96;
+const PACM_EASE_OP_LEN = 20;
+/** Mirror of `Easing.Op` (array index = wire op code). */
+const EASE_OPS = /** @type {const} */ ([
+  'linear',
+  'hold',
+  'smoothstep',
+  'in_quad',
+  'out_quad',
+  'in_out_quad',
+  'in_cubic',
+  'out_cubic',
+  'in_out_cubic',
+  'in_quart',
+  'out_quart',
+  'in_out_quart',
+  'in_sine',
+  'out_sine',
+  'in_out_sine',
+  'in_expo',
+  'out_expo',
+  'in_out_expo',
+  'steps_end',
+  'steps_start',
+  'cubic_bezier',
+  'spring',
+]);
 const NO_SLOT = 0xffffffff;
 /** Mirror of `Abi.MAX_TARGETS` — the flat registry join's ceiling. */
 const MAX_TARGETS = 1024;
@@ -244,6 +273,8 @@ export class Pacer {
         at: dv.getBigInt64(off, true),
         value: lanes(off + 8),
         span: { start: dv.getUint32(off + 24, true), end: dv.getUint32(off + 28, true) },
+        // Default linear; the 'EASE' section (when present) overwrites it.
+        easeRef: 0,
       });
     }
     /** @type {import('./types.js').MetaControl[]} */
@@ -273,6 +304,8 @@ export class Pacer {
     // blob carrying a section this glue predates decodes without a throw.
     /** @type {import('./types.js').MetaScene[]} */
     const scenes = [];
+    /** @type {import('./types.js').MetaEaseProgram[]} */
+    const easePrograms = [];
     while (off < len) {
       const id = dv.getUint32(off, true);
       const plen = dv.getUint32(off + 4, true);
@@ -289,6 +322,48 @@ export class Pacer {
             durTicks: dv.getBigInt64(s + 8, true),
             nameSpan: { start: nameStart, end: nameEnd },
           });
+        }
+      } else if (id === PACM_EASE_ID) {
+        // Program records (fixed 772 B, unused stage/op slots zeroed) then a
+        // per-key `ease_ref` array parallel to the key stream.
+        const progCount = dv.getUint32(body, true);
+        let p = body + 4;
+        for (let i = 0; i < progCount; i++, p += PACM_EASE_PROGRAM_LEN) {
+          const stageCount = dv.getUint8(p);
+          /** @type {import('./types.js').MetaEaseStage[]} */
+          const stages = [];
+          for (let s = 0; s < stageCount; s++) {
+            const so = p + 4 + s * PACM_EASE_STAGE_LEN;
+            const opsLen = dv.getUint8(so + 12);
+            /** @type {import('./types.js').MetaEaseOp[]} */
+            const ops = [];
+            for (let o = 0; o < opsLen; o++) {
+              const oo = so + 16 + o * PACM_EASE_OP_LEN;
+              ops.push({
+                code: EASE_OPS[dv.getUint8(oo)] ?? 'linear',
+                params: [
+                  dv.getFloat32(oo + 4, true),
+                  dv.getFloat32(oo + 8, true),
+                  dv.getFloat32(oo + 12, true),
+                  dv.getFloat32(oo + 16, true),
+                ],
+              });
+            }
+            stages.push({
+              tEnd: dv.getFloat32(so, true),
+              vBase: dv.getFloat32(so + 4, true),
+              vSpan: dv.getFloat32(so + 8, true),
+              ops,
+            });
+          }
+          easePrograms.push({ index: i, stages });
+        }
+        // ease_ref per key, in key order — attach to the decoded keys.
+        const refCount = dv.getUint32(p, true);
+        let r = p + 4;
+        for (let i = 0; i < refCount; i++, r += 2) {
+          const k = keys[i];
+          if (k) k.easeRef = dv.getUint16(r, true);
         }
       }
       off = body + plen;
@@ -307,6 +382,7 @@ export class Pacer {
       })),
       controls,
       scenes,
+      easePrograms,
     };
     return this.#meta;
   }

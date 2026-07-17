@@ -147,3 +147,53 @@ Gate: `zig build verify`.
   `-- --update` generated them. Gate: `zig build verify` ✓ (native corpus 13/13 + wasm
   parity `node --test` 43/43, +3 for the new cases). No JS/TS touched. **Wave 0's `11
   P1–P2` obligation is now complete** — Phases 3–5 are scheduled in Wave 4.
+
+- **Phase 3 — easing program table into `'PACM'` (done, 2026-07-17).** The compiled
+  program table (`table.programs`, deduped, `[0]` = default linear) now serializes as a
+  new `'EASE'` meta section so an external editor renders authored curves without
+  re-parsing ease specs (plan 07's `curve-sample.ts` can drop live-sampling later — a
+  deferred win, not this phase).
+  - **RED first** — three `Abi.zig` tests (`git`-visible before the encoder existed):
+    the `'EASE'` frame after the controls (programs[0] linear + out-cubic + smoothstep,
+    self-delimiting `payload_len`, per-key refs `[0 1 0 2]`), a linear-only score emits
+    NO section (byte-stable), and `'EASE'` rides AFTER `'SCEN'` when both are present.
+    First run failed to compile (`undeclared identifier 'EASE_SECTION_ID'`).
+  - **Wire (append-only, no `META_VERSION` bump).** `'EASE'` = `0x45534145`, emitted
+    after `'SCEN'` (fixed order), **OMITTED when `programs.len <= 1`** (the only program
+    is the default linear — so a linear-only blob stays byte-identical to a pre-ease
+    one; this is the meaningful omit test, since `programs[0]` always exists). Payload:
+    `[program_count u32]`, then `program_count ×` a fixed 772-byte `MetaEaseProgramRec`
+    (`len u8` + 8 × 96-byte `MetaEaseStageRec`, each `t_end/v_base/v_span f32 + ops_len
+    u8` + 4 × 20-byte `MetaEaseOpRec` `{code u8, params f32×4}`; unused slots ZEROED to
+    match the program's zero-fill → equal programs give equal bytes), then
+    `[key_ref_count u32]` + `key_ref_count × ease_ref u16` **parallel to the key stream**
+    (a key's ref names the program for the segment ENDING at it; 0 = linear). Fixed
+    records mirror the `'SCEN'` house pattern and earn three `@sizeOf` comptime pins.
+    `META_CAP` 192→320 KiB (its comptime pin now covers a full `'EASE'` section:
+    `MAX_EASE_PROGRAMS`(128) maximal programs + one ref per `MAX_KEYS`).
+  - **Both `renderMeta`s extended** (the cross-plan obligation from 01 Phase 5): the
+    native runner (`corpus_runner.zig` `renderEasePrograms`, walking the `'EASE'` TLV)
+    and the JS parity renderer (`corpus.test.js`, from `driver.meta.easePrograms` +
+    per-key `easeRef`) emit the same `(mease :index N (mstage … (mop :code NAME :params
+    […])))` blocks + a flat `(measerefs […])` list. Op names are the `Easing.Op`
+    `@tagName` (snake_case), mirrored by the npm `EASE_OPS` table.
+  - **Goldens** — `-- --update` touched exactly the three ease-using cases
+    (`keys-basic`, `ease-composed`, `ease-primitives`); the 13 linear-only goldens stayed
+    byte-identical (omit-when-linear works). **Hand-verified spot values:** `ease-composed`'s
+    seq normalizes to stage-1 `t_end 0.4`(`3ECCCCCD`)/`v_span 1.15`(`3F933333`), stage-2
+    `v_span -0.18`(`BE3851EC`), stage-3 `v_base 0.97`(`3F7851EC`); the spring precomputes
+    `λ≈5.655`(`40B4F4AB`)/`ω≈18.85`(`4196CBE4`) from `(:damping 0.3 :periods 3)`; the chain's
+    bezier carries `[0.4 0 0.2 1]` and steps `n=4`(`40800000`); refs `[0 1 0 2 0 3]`.
+    `keys-basic` pins the minimal `[linear, in_out_quad]` table + refs `[0 0 0 1 0 0]`.
+  - **npm** — `Pacer#meta` gained `easePrograms` (typed `MetaEaseProgram/Stage/Op`) and
+    every `MetaKey` gained `easeRef` (0 default). Three new `driver.test.js` tests over
+    the real wasm (table + refs, parametric-op params, linear-only → `[]` with all refs 0
+    — the old-blob-tolerance proof). No triple-pin bump (accumulate-till-publish; the
+    next publish 0.1.0 → 0.2.0 covers this + prior surface growth).
+  - **Gate green:** `zig build verify` (native corpus **16/16** byte-identical, wasm
+    parity **16/16** + `driver` **52** incl. +3) + `audit-diagnostics` 29/29 (no new
+    codes — programs were already a compiled surface) + npm lint/typecheck clean. Docs:
+    `Abi.zig` `//!` header defines `'EASE'`; `CLAUDE.md` lists it in the section stream +
+    updates the `Easing.Op` wire row; `Easing.zig` `Op`/`OpRec` comments drop "future
+    wire". **Studio refresh deferred** to the Wave-4 close (07 already ships; nothing
+    consumes `easePrograms` yet, so the studio wasm can stay as-is until P4–P5 land).

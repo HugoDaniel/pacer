@@ -40,7 +40,11 @@
 //!       (mtrack :id 0 :target radius :registry 0 :ncomp 1 :source keys :span [S E]
 //!         (mkey :at 0 :value ["3E4CCCCD" "0" "0" "0"] :span [S E]))
 //!       (mcontrol :index 0 :id knob :target radius :registry 0 :ncomp 1 :type slider
-//!         :value [...] :min none :max none :value-span [S E]))
+//!         :value [...] :min none :max none :value-span [S E])
+//!       (mease :index 1
+//!         (mstage :t-end "3F800000" :v-base "00000000" :v-span "3F800000"
+//!           (mop :code out_cubic :params ["00000000" "00000000" "00000000" "00000000"])))
+//!       (measerefs [0 1]))
 //!     (eval :t "3FE0000000000000"
 //!       (write :target radius :id 0 :registry 0 :ncomp 1 :value ["3F000000" "00000000" "00000000" "00000000"]))
 //!     (set-control :index 0 :value ["3F000000" "00000000" "00000000" "00000000"] :ok true)
@@ -72,6 +76,7 @@ const std = @import("std");
 const sjon = @import("sjon");
 const Abi = @import("Abi.zig");
 const Compile = @import("Compile.zig");
+const Easing = @import("Easing.zig");
 const Eval = @import("Eval.zig");
 const Writes = @import("Writes.zig");
 
@@ -652,10 +657,61 @@ fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult,
                 }) catch return error.OutOfMemory;
                 srec += Abi.SCENE_REC_LEN;
             }
+        } else if (sid == Abi.EASE_SECTION_ID) {
+            try renderEasePrograms(w, blob[body..][0..plen]);
         }
         soff = body + plen;
     }
     w.writeAll(")\n") catch return error.OutOfMemory;
+}
+
+/// Render an `'EASE'` section payload: one `(mease …)` form per compiled
+/// program (its live stages/ops with f32-bit weights + params), then a
+/// flat `(measerefs …)` list of the per-key program index in key order.
+fn renderEasePrograms(w: *Io.Writer, payload: []const u8) !void {
+    const prog_count = std.mem.readInt(u32, payload[0..4], .little);
+    var poff: usize = 4;
+    for (0..prog_count) |pi| {
+        const prog = payload[poff..][0..Abi.META_EASE_PROGRAM_LEN];
+        const stage_count = prog[0];
+        w.print("\n  (mease :index {d}", .{pi}) catch return error.OutOfMemory;
+        for (0..stage_count) |si| {
+            const st = prog[4 + si * Abi.META_EASE_STAGE_LEN ..][0..Abi.META_EASE_STAGE_LEN];
+            w.print("\n    (mstage :t-end \"{X:0>8}\" :v-base \"{X:0>8}\" :v-span \"{X:0>8}\"", .{
+                std.mem.readInt(u32, st[0..4], .little),
+                std.mem.readInt(u32, st[4..8], .little),
+                std.mem.readInt(u32, st[8..12], .little),
+            }) catch return error.OutOfMemory;
+            const ops_len = st[12];
+            for (0..ops_len) |oi| {
+                const op = st[16 + oi * Abi.META_EASE_OP_LEN ..][0..Abi.META_EASE_OP_LEN];
+                w.print("\n      (mop :code {s} :params [", .{easeOpName(op[0])}) catch return error.OutOfMemory;
+                for (0..4) |q| {
+                    const sep = if (q == 0) "" else " ";
+                    w.print("{s}\"{X:0>8}\"", .{ sep, std.mem.readInt(u32, op[4 + q * 4 ..][0..4], .little) }) catch return error.OutOfMemory;
+                }
+                w.writeAll("])") catch return error.OutOfMemory;
+            }
+            w.writeByte(')') catch return error.OutOfMemory; // close mstage
+        }
+        w.writeByte(')') catch return error.OutOfMemory; // close mease
+        poff += Abi.META_EASE_PROGRAM_LEN;
+    }
+    const ref_count = std.mem.readInt(u32, payload[poff..][0..4], .little);
+    poff += 4;
+    w.writeAll("\n  (measerefs [") catch return error.OutOfMemory;
+    for (0..ref_count) |ri| {
+        const sep = if (ri == 0) "" else " ";
+        w.print("{s}{d}", .{ sep, std.mem.readInt(u16, payload[poff..][0..2], .little) }) catch return error.OutOfMemory;
+        poff += 2;
+    }
+    w.writeAll("])") catch return error.OutOfMemory;
+}
+
+/// The `Easing.Op` tag name for a wire code byte — the golden's stable
+/// spelling of an op (mirrored by the npm renderer's `EASE_OPS` table).
+fn easeOpName(code: u8) []const u8 {
+    return @tagName(@as(Easing.Op, @enumFromInt(code)));
 }
 
 /// Four f32 lanes as space-separated `"H8"` bit patterns (no brackets).
