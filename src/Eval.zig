@@ -15,6 +15,12 @@
 //! keyframes) and writes the (phase, count, gate, beats-since) lanes,
 //! each an i64 tick delta through one f64 division, truncated to the
 //! target's ncomp — before the first event the write is omitted.
+//! Pattern tracks: `PatternTrack.queryCycle` samples the `:pattern` node
+//! over this tick's enclosing cycle (1 cycle = 1 bar, identity), fronted by
+//! the same fixed scratch as exprs, and `PatternTrack.sampleAt` selects the
+//! active hap (latest onset, top `stack` layer on a tie); no active hap
+//! omits the write (a gap). Hap value exprs bind the pattern-locals
+//! cycle/tick/seed only this slice.
 //!
 //! Boundary semantics (load-bearing for the corpus): before a track's
 //! first key it holds the first value; after the last, the last
@@ -23,13 +29,15 @@
 //! there is selected, so the value is the key's own, bit-exactly —
 //! easing residue (springs!) never leaks across a key.
 //!
-//! Expr-track runtime failure (compile dry-ran t = 0; a later tick can
-//! still divide by zero, hit a budget, or yield the wrong shape): the
-//! track's write is OMITTED for that frame and `expr_failures` counts
-//! it. Hosts hold the last delivered value — the documented fill
-//! default — and, unlike emitting a stale value from the driver,
-//! omission keeps the write buffer a pure function of time: whether a
-//! write exists at time t never depends on what was evaluated before.
+//! Expr / pattern runtime failure (compile dry-ran cycle 0 / t = 0; a
+//! later tick can still divide by zero, hit a budget, drop a hap, or
+//! yield the wrong shape): the track's write is OMITTED for that frame
+//! and `expr_failures` counts it (the one shared probe — a pattern
+//! `:pattern` track that omits at a later cycle bumps the same counter).
+//! Hosts hold the last delivered value — the documented fill default —
+//! and, unlike emitting a stale value from the driver, omission keeps the
+//! write buffer a pure function of time: whether a write exists at time t
+//! never depends on what was evaluated before.
 //!
 //! Controls are the one deliberate piece of API state: the buffer is a
 //! pure function of (time, control state) — same table, same tick, same
@@ -58,6 +66,7 @@ const TrackTable = @import("TrackTable.zig");
 const TimeMap = @import("TimeMap.zig");
 const Writes = @import("Writes.zig");
 const ExprTrack = @import("ExprTrack.zig");
+const PatternTrack = @import("PatternTrack.zig");
 const Compile = @import("Compile.zig");
 
 pub const Tick = sjon.Pattern.Tick;
@@ -114,8 +123,14 @@ pub const Evaluator = struct {
     slots: []ControlSlot,
     /// Live count of registered dynamic slots.
     dyn_controls: usize = 0,
-    /// Lifetime count of expr-track evaluations that failed at runtime
-    /// (their writes were omitted). A debugging probe, not semantics.
+    /// Lifetime count of frames a track's write was OMITTED by a runtime
+    /// failure: an expr that raised or yielded the wrong shape, or a
+    /// pattern whose query refused, whose selected hap was uncoercible, or
+    /// whose sample fell in a cycle the engine dropped a hap in. Counts
+    /// omitted writes only — a frame that still produced a write never
+    /// bumps it (for patterns the drop signal is cycle-coarse; see the
+    /// `.pattern` arm). A debugging probe, not semantics — the determinism
+    /// claim never reads it.
     expr_failures: u64 = 0,
 
     pub fn init(gpa: std.mem.Allocator, result: *const Compile.CompileResult) error{OutOfMemory}!Evaluator {
@@ -130,12 +145,21 @@ pub const Evaluator = struct {
             Writes.Entry,
             table.transport.emit.len + table.tracks.len + table.controls.len + MAX_DYNAMIC_CONTROLS,
         );
-        var has_expr = false;
+        // Frame scratch fronts every expr / pattern eval so the hot path
+        // never touches the gpa; size it to the largest consumer present.
+        // A pattern query needs materially more than an expr — SJON's own
+        // per-query expr scratch alone is 256 KiB (see
+        // `PatternTrack.SCRATCH_BYTES`) — so a pattern track dominates.
+        var scratch_need: usize = 0;
         for (table.tracks) |tr| {
-            if (tr.source == .expr) has_expr = true;
+            switch (tr.source) {
+                .expr => scratch_need = @max(scratch_need, ExprTrack.SCRATCH_BYTES),
+                .pattern => scratch_need = @max(scratch_need, PatternTrack.SCRATCH_BYTES),
+                else => {},
+            }
         }
-        const scratch: []u8 = if (has_expr)
-            try arena.allocator().alloc(u8, ExprTrack.SCRATCH_BYTES)
+        const scratch: []u8 = if (scratch_need > 0)
+            try arena.allocator().alloc(u8, scratch_need)
         else
             &.{};
         const ctl_bindings = try arena.allocator().alloc(ExprTrack.ControlBinding, table.controls.len);
@@ -307,10 +331,44 @@ pub const Evaluator = struct {
                         n += 1;
                     }
                 },
-                .pattern => {
-                    // Plan 03 Phase 3 wires the point-sample query; until
-                    // then a pattern track omits every write — the same
-                    // shape its no-active-hap contract will use.
+                .pattern => |node| {
+                    // Query this tick's enclosing cycle through the shared
+                    // module — fronted by the fixed scratch, so the frame path
+                    // never touches the gpa — then point-sample the active hap
+                    // (`PatternTrack.sampleAt`). `expr_failures` counts only
+                    // frames whose write is actually OMITTED by a failure: a
+                    // query refusal, an uncoercible selected value, or an empty
+                    // sample in a cycle the engine dropped a hap in (the active
+                    // hap was likely the one that failed). A plain silence gap
+                    // is uncounted; when a sibling hap still lands, the write is
+                    // produced and nothing is counted even if another hap
+                    // dropped. `result.dropped` is a cycle-level count, so the
+                    // probe is coarse — a real gap in a cycle that also dropped
+                    // elsewhere is counted too — but it never miscounts a frame
+                    // that wrote.
+                    var fba = std.heap.FixedBufferAllocator.init(self.scratch);
+                    var result = PatternTrack.queryCycle(fba.allocator(), self.tree, self.schema, node, t) catch {
+                        self.expr_failures += 1;
+                        continue;
+                    };
+                    defer result.deinit();
+                    if (PatternTrack.sampleAt(result.haps, t)) |pv| {
+                        const value = PatternTrack.coerce(pv) orelse {
+                            self.expr_failures += 1; // selected hap violates the numeric contract
+                            continue;
+                        };
+                        self.entries[n] = .{
+                            .target_id = track.target_id,
+                            .flags = track.registry,
+                            .ncomp = track.ncomp,
+                            .value = value,
+                        };
+                        n += 1;
+                    } else if (result.dropped > 0) {
+                        // No active hap AND the engine dropped one this cycle:
+                        // the sample is a failure-induced hole, not silence.
+                        self.expr_failures += 1;
+                    }
                 },
             }
         }
@@ -1205,4 +1263,177 @@ test "triggers: same time twice → byte-identical encoded writes (cold cursor v
         const b = try Writes.encode(try ev2.evalSeconds(s), &buf_b);
         try t_.expectEqualSlices(u8, a, b);
     }
+}
+
+// ---------------------------------------------------------------------------
+// (track … :pattern …) frame eval — plan 03 Phase 3. At wrapped tick T the
+// pattern track queries its enclosing cycle window ([c·PPC, (c+1)·PPC), 1
+// cycle = 1 bar as identity) once through the shared `PatternTrack`, then
+// point-samples: the hap whose part span contains T with the latest onset
+// (ties → last in query order — the top `stack` layer). No active hap → the
+// write is OMITTED (a gap), like an expr-NaN. A per-hap expr drop at a later
+// cycle (SJON `result.dropped`) or an uncoercible selected value counts in
+// `expr_failures` and omits the write. Hap value exprs bind only the
+// pattern-locals cycle/tick/seed this slice (pacer's time env in hap exprs is
+// a separate follow-up — see the plan); literals + those locals are plenty.
+// ---------------------------------------------------------------------------
+
+test "pattern frame: structural landing on each fastcat slot, mid-slot holds" {
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target radius :pattern [0.1 0.2 0.3 0.4])
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // One 4/4 bar = one cycle = PPC ticks; the four slots start on beats
+    // 0/1/2/3. At an exact slot onset the slot STARTING there lands (half-open
+    // [begin, end), like a keyframe on its key) — structural, bit-exact.
+    try t_.expectEqual(@as(f32, 0.1), ev.evalTicks(0)[0].value[0]);
+    try t_.expectEqual(@as(f32, 0.2), ev.evalTicks(try map.tickFromBeats(1))[0].value[0]);
+    try t_.expectEqual(@as(f32, 0.3), ev.evalTicks(try map.tickFromBeats(2))[0].value[0]);
+    try t_.expectEqual(@as(f32, 0.4), ev.evalTicks(try map.tickFromBeats(3))[0].value[0]);
+    // Mid-slot (half a beat into slot 0) still holds slot 0's value.
+    const mid = ev.evalTicks(try map.tickFromBeats(1) - @divExact(try map.tickFromBeats(1), 2));
+    try t_.expectEqual(@as(f32, 0.1), mid[0].value[0]);
+    // Scalar target: exactly one write, higher lanes zero.
+    const at0 = ev.evalTicks(0);
+    try t_.expectEqual(@as(usize, 1), at0.len);
+    try t_.expectEqual(@as(u8, 1), at0[0].ncomp);
+    try t_.expectEqual(@as(f32, 0), at0[0].value[1]);
+    try t_.expectEqual(@as(u64, 0), ev.expr_failures);
+}
+
+test "pattern frame: a silence slot is a gap — the write is omitted" {
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target radius :pattern [0.5 (silence)])
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    // First half of the cycle carries 0.5; the silent second half yields no
+    // hap → no active hap at T → the write is omitted (len 0).
+    try t_.expectEqual(@as(usize, 1), ev.evalTicks(0).len);
+    try t_.expectEqual(@as(f32, 0.5), ev.evalTicks(0)[0].value[0]);
+    try t_.expectEqual(@as(usize, 0), ev.evalTicks(try map.tickFromBeats(3)).len);
+    try t_.expectEqual(@as(u64, 0), ev.expr_failures); // a gap is not a failure
+}
+
+test "pattern frame: a seeded expr leaf differs across cycles, identical across evaluators" {
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target radius :pattern (pure (rand01 seed cycle)))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const PPC = sjon.Pattern.PPC;
+
+    // A bare `pure_expr` is one hap per cycle valued rand01(seed=0, cycle):
+    // cycle 1 and cycle 2 bind cycle = 1 / 2, so the samples differ, yet each
+    // is bit-identical from a cold second evaluator (pure function of tick).
+    const c1 = ev.evalTicks(PPC)[0].value[0];
+    const c2 = ev.evalTicks(2 * PPC)[0].value[0];
+    try t_.expect(c1 != c2);
+    try t_.expect(std.math.isFinite(c1) and std.math.isFinite(c2));
+
+    var buf_a: [Writes.encodedLen(1)]u8 align(4) = undefined;
+    var buf_b: [Writes.encodedLen(1)]u8 align(4) = undefined;
+    for ([_]Tick{ 0, PPC, 2 * PPC, 5 * PPC }) |t| {
+        const a = try Writes.encode(ev.evalTicks(t), &buf_a);
+        var ev2 = try Evaluator.init(t_.allocator, &r);
+        defer ev2.deinit();
+        const b = try Writes.encode(ev2.evalTicks(t), &buf_b);
+        try t_.expectEqualSlices(u8, a, b);
+    }
+}
+
+test "pattern frame: a later-cycle expr drop counts in expr_failures and omits the write" {
+    // Dry-run at cycle 0 passes (1/(1-0) = 1); cycle 1 divides by zero and
+    // the hap drops; cycle 2 recovers (1/(1-2) = -1). The sibling expr track
+    // always writes, so the pattern omission is isolated to its own entry.
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target radius :pattern (pure (/ 1 (- 1 cycle))))
+        \\(track :target tint :expr [phase phase phase])
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const PPC = sjon.Pattern.PPC;
+
+    // Cycle 0: pattern writes 1, tint writes → two entries.
+    const c0 = ev.evalTicks(0);
+    try t_.expectEqual(@as(usize, 2), c0.len);
+    try t_.expectEqual(@as(f32, 1), c0[0].value[0]);
+    try t_.expectEqual(@as(u64, 0), ev.expr_failures);
+
+    // Cycle 1: the pattern hap drops (÷0) → only tint survives, and the drop
+    // is counted.
+    const c1 = ev.evalTicks(PPC);
+    try t_.expectEqual(@as(usize, 1), c1.len);
+    try t_.expectEqual(@as(u8, 3), c1[0].ncomp); // the tint entry
+    try t_.expectEqual(@as(u64, 1), ev.expr_failures);
+
+    // Cycle 2: 1/(1-2) = -1 is finite → the pattern recovers; the counter
+    // does not decrease.
+    const c2 = ev.evalTicks(2 * PPC);
+    try t_.expectEqual(@as(usize, 2), c2.len);
+    try t_.expectEqual(@as(f32, -1), c2[0].value[0]);
+    try t_.expectEqual(@as(u64, 1), ev.expr_failures);
+}
+
+test "pattern frame: a dropped layer under a surviving one writes and is NOT counted" {
+    // `(stack 0.5 (pure (/ 1 (- 1 cycle))))` layers a constant over an expr
+    // that divides by zero at cycle 1. The expr hap drops there, but the 0.5
+    // layer always lands — the write is produced, so the failure probe must
+    // NOT tick (it counts omitted writes, not dropped haps).
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target radius :pattern (stack 0.5 (pure (/ 1 (- 1 cycle)))))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const PPC = sjon.Pattern.PPC;
+
+    // Cycle 0: both layers land; the top (last) layer 1/(1-0)=1 wins the tie.
+    try t_.expectEqual(@as(f32, 1), ev.evalTicks(0)[0].value[0]);
+    // Cycle 1: the expr layer drops, 0.5 survives → the write is produced and
+    // nothing is counted, even sampling several ticks inside the cycle.
+    for ([_]Tick{ PPC, PPC + @divExact(PPC, 3), 2 * PPC - 1 }) |t| {
+        const w = ev.evalTicks(t);
+        try t_.expectEqual(@as(usize, 1), w.len);
+        try t_.expectEqual(@as(f32, 0.5), w[0].value[0]);
+    }
+    try t_.expectEqual(@as(u64, 0), ev.expr_failures);
+}
+
+test "pattern frame: a hap-dense expr pattern fits the fixed frame scratch (no gpa)" {
+    // `evalTicks` takes no allocator — the frame path can only draw on the
+    // evaluator's fixed pattern scratch. A cycle of 16 `pure_expr` haps drives
+    // 16 SJON leaf evals (each through SJON's own 256 KiB internal scratch) on
+    // top of the compile + hap arenas; if the buffer were too small the query
+    // would OOM into a counted drop. A clean write with zero failures proves
+    // the fixed buffer alone suffices.
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target radius :pattern (fast 16 (pure (rand01 seed cycle))))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const PPC = sjon.Pattern.PPC;
+
+    for ([_]Tick{ 0, @divExact(PPC, 3), PPC, 7 * PPC + 12345 }) |t| {
+        const w = ev.evalTicks(t);
+        try t_.expectEqual(@as(usize, 1), w.len);
+        try t_.expect(std.math.isFinite(w[0].value[0]));
+    }
+    try t_.expectEqual(@as(u64, 0), ev.expr_failures);
 }

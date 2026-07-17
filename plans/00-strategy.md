@@ -128,16 +128,19 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 · 03 pattern-tracks — P3 next** (P1 done 2026-07-16 — design FROZEN:
-cycle↔bar identity, pattern-local env shadows, latest-onset hap selection. P2 done
-2026-07-16: `PatternTrack.zig` shared module + `dryRunPattern` — every-hap sweep of
-the first cycle, scened tracks dry-run at scene start, engine diagnostics forwarded
-with their own spans, ncomp≠1 statically rejected; wasm +18.5 KiB real. TWO
-DISCOVERIES in the P2 log: `euclid` is NOT in SJON's vocabulary yet — SJON-side
-follow-up — and Phase 3 has an SJON PRE-REQ: `queryTree` needs an outer-`Expr.Env`
-variant so pacer's time env reaches hap exprs under the frozen shadows).
-Open `plans/03-pattern-tracks.md`, run P3 (frame eval: point-sample in `Eval`'s
-`.pattern` arm; extend the `has_expr` scratch check; pin the equal-onset tie-break)
+→ **Wave 3 · 03 pattern-tracks — P4 next** (P1–P3 done. Design FROZEN:
+cycle↔bar identity, pattern-local env shadows, latest-onset hap selection with the
+equal-onset tie-break now pinned to the LAST/top-`stack` layer. P3 done 2026-07-17:
+`Eval`'s `.pattern` arm point-samples via `PatternTrack.sampleAt`, fronted by a 1 MiB
+per-evaluator fixed scratch — the frame path never touches the gpa — with pattern
+omissions counted in the SHARED `expr_failures` probe. wasm +940 B; zig test 142.
+TWO carried follow-ups from the P2/P3 logs: `euclid` is NOT in SJON's vocabulary yet
+— SJON-side — and pacer's time env in hap exprs (the SJON outer-`Expr.Env`
+`queryTree` variant) is a DEFERRED cross-repo slice, NOT a P4 blocker; hap exprs use
+pattern-locals `cycle`/`tick`/`seed` this slice).
+Open `plans/03-pattern-tracks.md`, run P4 (corpus + parity: a `pattern-basic` case
+— fastcat + alternation + seeded rand + a silence gap + a cycle wrap; `zig build
+corpus -- --update`, review; wasm parity via `zig build verify` is the prize)
 under the README discipline; P1–P4 close Wave 3. Context from plan 10 (CLOSED
 2026-07-16, all phases, smoke audible — pngine `7b54680` `0f3c2a6` `712ab92`
 `3d83e82` `b31a896`): registry 1 is live end to end; the demoscene ships a
@@ -902,3 +905,23 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   delta for linking the engine: +18.5 KiB (supersedes P0's +2 B probe — a
   reference isn't a call). No golden changed. Gates: zig test 133, audit 29/29,
   verify green. No JS/TS touched.
+- 2026-07-17 — **03 pattern-tracks Phase 3 (frame eval).** `Eval`'s `.pattern`
+  arm now point-samples: `PatternTrack.sampleAt` picks the hap whose half-open
+  part span contains T with the latest onset, fronted by a per-track
+  `FixedBufferAllocator` over the evaluator's fixed scratch (so the frame path
+  never touches the gpa). Three decisions recorded in the P3 log: **(1)
+  tie-break PINNED** — equal onsets resolve to the LAST hap in query order (the
+  top `stack` layer), locked by test; **(2)** the failure counter is the SHARED
+  `expr_failures` probe (a pattern omission at a later cycle bumps it) — a
+  separate `drv_patternFailures` export was rejected as not worth a wire bump
+  for a debug probe; **(3) SCOPE CORRECTION** — pacer's time env in hap exprs
+  (the SJON outer-`Expr.Env` `queryTree` variant the P2 log called a "P3
+  pre-req") is NOT needed for Phase 3 and is DEFERRED to a separate cross-repo
+  slice: Phase 3's reds all use pattern-locals `cycle`/`tick`/`seed` only, which
+  is already expressive (seeded `rand01`, oscillators on `cycle`).
+  **Cross-plan fact:** the plan's open memory question is answered — 256 KiB
+  does NOT suffice for a pattern query scratch (SJON's own internal per-query
+  scratch is already 256 KiB); `PatternTrack.SCRATCH_BYTES` is 1 MiB, allocated
+  once per evaluator only when a pattern track exists. wasm +940 B (engine
+  already linked in P2). No golden changed. Gates: zig test 142, audit 29/29,
+  verify green (corpus 15/15 unchanged, node parity 48). No JS/TS touched.

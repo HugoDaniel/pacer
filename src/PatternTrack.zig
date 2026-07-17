@@ -42,6 +42,32 @@ pub const Tick = TrackTable.Tick;
 /// reaches hap value exprs as the pattern-local `seed` binding.
 pub const SEED: i64 = 0;
 
+/// Frame-path scratch budget for ONE `queryCycle` call. `Eval` fronts the
+/// query with a `FixedBufferAllocator` this large (a fresh one per pattern
+/// track), so the hot path never touches the gpa. It must exceed SJON's
+/// own internal per-query expr scratch (`PATTERN_EXPR_SCRATCH`, 256 KiB) —
+/// which `queryTree` allocates from the allocator handed in — plus the
+/// compiled-`Node` + hap result arena and the transient work stacks all
+/// live at once; a `FixedBufferAllocator` reclaims only LIFO, so the buffer
+/// holds the call's whole high-water mark, not its peak. So 256 KiB does
+/// NOT suffice (the plan's open question): the `(fast 16 (pure …))` frame
+/// test measured a floor between 256 and 320 KiB. 1 MiB leaves the 256 KiB
+/// SJON scratch plus room for ~a few thousand haps (~200 B each once the
+/// `out` list, the result-arena dupe, and FBA fragmentation are counted) —
+/// comfortably past realistic patterns (dozens–hundreds of haps/cycle),
+/// allocated once per evaluator only when a pattern track is present.
+///
+/// It is NOT sized for a pathologically dense cycle: SJON's `MAX_HAPS` is
+/// 64k (~8 MiB of haps), and the load-time dry-run queries with the real
+/// gpa (SJON's 64 MiB `MAX_QUERY_BYTES` budget), so it is MORE permissive
+/// than this buffer — a thousands-of-haps pattern (or one dense only on a
+/// cycle past the dry-run's) can load yet exhaust this buffer at runtime.
+/// Exhaustion stays a deterministic, counted omission — never a process
+/// OOM, never nondeterminism — so the byte-identical claim holds; the write
+/// is simply dropped. Raise this (or bound the dry-run to match) if silent
+/// runtime omission of a load-accepted dense pattern becomes a problem.
+pub const SCRATCH_BYTES: usize = 1024 * 1024;
+
 /// The engine's deterministic outcome set (depth / hap / byte ceilings,
 /// tick overflow) plus `OutOfMemory` — same shape as `ExprTrack.Error`'s
 /// pass-through: callers map everything but OOM to a diagnostic.
@@ -75,6 +101,36 @@ pub fn queryCycle(
 ) Error!PatternQuery.Result {
     const window = try cycleWindowOf(tick);
     return PatternQuery.queryTree(gpa, tree, node, schema, window, SEED);
+}
+
+/// Point-sample the queried cycle at tick `t`: the hap whose PART span
+/// contains `t` (half-open `[begin, end)`, so an exact onset lands on the
+/// hap STARTING there — structural, like a keyframe on its key) with the
+/// LATEST onset. Overlapping haps (a `stack`) share an onset; the tie
+/// breaks to the LAST in query order — a `stack` concatenates its layers
+/// in child order, so the top-most declared layer wins (pinned, plan 03
+/// Phase 3). No hap active at `t` → null: the write is OMITTED for the
+/// frame (a gap, the expr-NaN contract). The returned value may be a
+/// non-numeric `PatValue`; the caller runs it through `coerce`.
+///
+/// `haps` is what `queryCycle(…, t)` returned, so every hap's part sits
+/// inside `t`'s enclosing cycle. Onset is the true `whole.begin` when the
+/// hap carries one, else the part begin (discrete haps have `whole ==
+/// part`). O(haps).
+pub fn sampleAt(haps: []const PatternQuery.Hap, t: Tick) ?PatternQuery.PatValue {
+    var best: ?PatternQuery.Hap = null;
+    var best_onset: Tick = undefined;
+    for (haps) |h| {
+        const part = h.timing.part;
+        if (t < part.begin or t >= part.end) continue; // not active at t
+        const onset = if (h.timing.whole) |w| w.begin else part.begin;
+        // `>=` keeps the LAST hap among equal onsets — the top stack layer.
+        if (best == null or onset >= best_onset) {
+            best = h;
+            best_onset = onset;
+        }
+    }
+    return if (best) |h| h.value else null;
 }
 
 /// Apply the result contract to one hap payload: a finite number, with
@@ -130,6 +186,54 @@ test "queryCycle: the window is the tick's enclosing cycle (slowcat alternation)
     try t_.expectEqual(@as(usize, 0), result.diagnostics.len);
     try t_.expectEqual(@as(usize, 1), result.haps.len);
     try t_.expect(result.haps[0].value.eql(.{ .number = 0.2 }));
+}
+
+test "sampleAt: fastcat slots land structurally, the boundary picks the later slot" {
+    // `[0.1 0.2 0.3 0.4]` tiles cycle 0 into quarter-bar slots. Sampling at a
+    // slot onset returns that slot (half-open), a slot boundary returns the
+    // NEXT slot, and an interior tick holds its slot.
+    const gpa = t_.allocator;
+    var tree = try sjon.parse(gpa, "[0.1 0.2 0.3 0.4]");
+    defer tree.deinit();
+    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], 0);
+    defer result.deinit();
+
+    const q = @divExact(Pattern.PPC, 4);
+    try t_.expect(sampleAt(result.haps, 0).?.eql(.{ .number = 0.1 }));
+    try t_.expect(sampleAt(result.haps, q - 1).?.eql(.{ .number = 0.1 })); // interior
+    try t_.expect(sampleAt(result.haps, q).?.eql(.{ .number = 0.2 })); // boundary → next
+    try t_.expect(sampleAt(result.haps, 2 * q).?.eql(.{ .number = 0.3 }));
+    try t_.expect(sampleAt(result.haps, 3 * q).?.eql(.{ .number = 0.4 }));
+    try t_.expect(sampleAt(result.haps, Pattern.PPC - 1).?.eql(.{ .number = 0.4 }));
+}
+
+test "sampleAt: a silence slot has no active hap → null" {
+    const gpa = t_.allocator;
+    var tree = try sjon.parse(gpa, "[0.5 (silence)]");
+    defer tree.deinit();
+    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], 0);
+    defer result.deinit();
+
+    try t_.expect(sampleAt(result.haps, 0).?.eql(.{ .number = 0.5 }));
+    // Second half is silent: no hap covers it.
+    try t_.expectEqual(@as(?PatternQuery.PatValue, null), sampleAt(result.haps, 3 * @divExact(Pattern.PPC, 4)));
+}
+
+test "sampleAt: overlapping stack layers tie on onset → the last (top) layer wins" {
+    // `(stack 0.1 0.2)` layers two full-cycle haps sharing onset 0; the tie
+    // breaks to the last child in query order (the top declared layer).
+    const gpa = t_.allocator;
+    var tree = try sjon.parse(gpa, "(stack 0.1 0.2)");
+    defer tree.deinit();
+    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], 0);
+    defer result.deinit();
+    try t_.expectEqual(@as(usize, 2), result.haps.len);
+    try t_.expect(sampleAt(result.haps, 0).?.eql(.{ .number = 0.2 }));
+    try t_.expect(sampleAt(result.haps, @divExact(Pattern.PPC, 2)).?.eql(.{ .number = 0.2 }));
+}
+
+test "sampleAt: an empty hap list is a gap → null" {
+    try t_.expectEqual(@as(?PatternQuery.PatValue, null), sampleAt(&.{}, 0));
 }
 
 test "coerce: finite numbers pass, everything else is null" {

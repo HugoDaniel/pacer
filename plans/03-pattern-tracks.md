@@ -241,3 +241,80 @@ Gate: `zig build verify` + npm gate.
   outer-env addition above; extend `Eval`'s `has_expr` scratch-allocation
   check to pattern tracks; freeze the hap-selection tie-break — latest
   onset is frozen, equal-onset ties need a pinned order).
+
+- **Phase 3 — frame eval (done, 2026-07-17).** TDD reds first (5 `Eval`
+  integration tests failing on the omit-everything `.pattern` arm + 4
+  `PatternTrack.sampleAt` unit tests that would not compile), then green
+  via the shared module + the eval arm. Landed:
+  - **`PatternTrack.sampleAt(haps, t)`** — the point-sample: the hap whose
+    PART span contains `t` (half-open `[begin, end)`, so an exact onset
+    lands on the hap STARTING there — structural, like a keyframe on its
+    key) with the LATEST onset (`whole.begin` when present, else
+    `part.begin`). No active hap → null (a gap, write omitted). Because it
+    reads the deterministic hap list `queryCycle` returned, selection is a
+    pure function of `(haps, t)` — no float, no host-order hazard.
+  - **`PatternTrack.SCRATCH_BYTES = 1 MiB`** — answers the plan's open
+    memory question: **256 KiB does NOT suffice.** `queryTree` allocates
+    SJON's own 256 KiB per-query expr scratch *from the allocator handed
+    in*, plus the compiled-`Node`/hap arena and work stacks, all live at
+    once, and a `FixedBufferAllocator` reclaims only LIFO — so the buffer
+    holds the whole call's high-water mark. The `(fast 16 (pure …))` frame
+    test measured a floor between 256 and 320 KiB; 1 MiB leaves room for ~a
+    few thousand haps past the SJON scratch — comfortably beyond realistic
+    patterns (dozens–hundreds of haps/cycle), allocated once per evaluator
+    only when a pattern track is present. It is NOT sized for a max-hap
+    cycle (`MAX_HAPS` 64k ≈ 8 MiB), and the load-time dry-run uses the real
+    gpa (SJON's 64 MiB budget) so it is MORE permissive — a thousands-of-hap
+    pattern can load yet exhaust this buffer at runtime. That stays a
+    deterministic, counted omission (never a process OOM, never
+    nondeterminism), so the byte-identical claim holds; a review-flagged
+    ceiling to raise (or bound the dry-run to match) only if silent runtime
+    omission of a load-accepted dense pattern ever bites.
+  - **`Eval`'s `.pattern` arm** fronts `queryCycle` with a fresh
+    `FixedBufferAllocator` over `self.scratch` (so the frame path never
+    touches the gpa — `evalTicks` takes no allocator), point-samples, and
+    coerces. The old `has_expr` bool became a `scratch_need = max(…)` sweep
+    over expr (`ExprTrack.SCRATCH_BYTES`) and pattern (the larger) sources
+    — a pattern track dominates the sizing.
+  - **DECISION — hap-selection tie-break PINNED: equal onsets → the LAST
+    hap in query order.** A `stack` concatenates its layers in child order,
+    so the top-most declared layer wins; `sampleAt` keeps the last on a tie
+    (`onset >= best_onset`). Locked by a `(stack 0.1 0.2)` unit test (→
+    0.2). This completes the frozen hap-selection rule (latest onset was
+    already frozen; this pins the remaining ambiguity).
+  - **DECISION — the failure counter is `expr_failures`, SHARED, and
+    counts OMITTED writes only.** A pattern bumps the same probe as an expr
+    track when — and only when — its write is actually omitted: a query
+    refusal, an uncoercible selected value, or an empty sample in a cycle
+    the engine dropped a hap in. A frame that still produces a write never
+    counts, even if another hap in the cycle dropped (locked by a
+    `(stack 0.5 (pure …÷0))` test: the surviving 0.5 layer writes and the
+    counter stays 0 — a review catch; the first cut counted `dropped > 0`
+    unconditionally and inflated the probe on every writing frame). The
+    signal is cycle-coarse (`result.dropped` is per-cycle), so a real
+    silence gap in a cycle that also dropped elsewhere is counted — but no
+    writing frame is ever miscounted. Rejected a separate
+    `drv_patternFailures` export: the counter is a debugging probe the
+    determinism claim never reads, and a new wire export (wasm_entry + npm
+    glue + types + exports test) is not worth it for one slice.
+  - **SCOPE CORRECTION — pacer's time env in hap exprs is a SEPARATE
+    slice, NOT a Phase 3 blocker.** The Phase 2 log framed the SJON
+    outer-`Expr.Env` `queryTree` variant as a Phase 3 pre-req, but
+    re-reading Phase 3's actual spec, none of its reds need it: hap value
+    exprs bind the pattern-locals `cycle`/`tick`/`seed` only, and that is
+    already expressive (seeded `rand01`, oscillators on `cycle`). So
+    `(pure (* beat 2))` still fails at load (honest — `beat` is unbound in
+    the engine). Threading pacer's env under the frozen shadows — the SJON
+    `queryTreeWithEnv` addition + the compile dry-run env + an
+    `ExprTrack.buildEnv` reuse — is a cohesive cross-repo follow-up on its
+    own, scheduled AFTER Wave 3's 03 closes (or folded into a later wave).
+  - **Code size:** `pacer.wasm` 489776 → 490716 B (**+940 B**) — the query
+    engine was already linked by the Phase 2 dry-run, so Phase 3 adds only
+    `sampleAt` + the eval arm.
+  Gate: `zig build test` ✓ (142) · `zig build audit-diagnostics` ✓ 29/29
+  (no new codes) · `zig build verify` ✓ (corpus 15/15 unchanged — no
+  `:pattern` corpus case until Phase 4 — + wasm parity 48 node tests). No
+  JS/TS touched. Next: **Phase 4 — corpus + parity** (a `pattern-basic`
+  case: fastcat + alternation + seeded rand + a silence gap + a cycle
+  wrap; `zig build corpus -- --update`, review; wasm parity via `zig build
+  verify` is the prize — it pins SJON's pattern engine cross-target).
