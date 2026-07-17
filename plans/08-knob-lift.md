@@ -134,3 +134,44 @@ liftable, span: { start, end } }] }` (`span` is a byte range into the document s
 `value`/`typ` are verbatim source text, `typ` empty when the const omitted its
 annotation). The studio's `lib/knobs/inventory.ts` sends this through the wgslender LSP
 worker and filters to `typ == "f32" && liftable` for the v1 lift.
+
+### Phase 1 — studio access (const inventory thin client) — DONE 2026-07-17
+
+**Deliverable — `studio/editor/src/lib/knobs/inventory.ts`** (pngine `35c6cb7`, its own
+repo + gate). `fetchConstInventory(lsp, wgsl, opts?) → Promise<ConstInventory>` opens a
+throwaway virtual WGSL document under its own URI (`inmemory://knob-inventory-N.wgsl`, a
+module-level counter — never collides with the editor's open regions), notifies
+`textDocument/didOpen`, requests `wgslender/constInventory`, and `didClose`s in a
+`finally` so the temp doc never leaks. Span offsets in the result index into the passed
+`wgsl` string. Returns typed `ConstInventory { uri, consts: KnobConst[] }` where
+`KnobConst = { name, typ, value, liftable, span: { start, end } }`; JSON-RPC being
+dynamically shaped, a defensive normalizer coerces the wire payload with sane defaults
+(bad/absent fields → empty string / `false` / `{0,0}`, unnamed entries dropped) rather
+than trusting it. `liftableF32(inv) → KnobConst[]` selects the v1 lift set (`liftable &&
+typ === "f32"`) — vec/int consts are inventoried but not yet liftable.
+
+**The port, not the transport.** The client depends on a minimal
+`InventoryLsp { request(method, params): Promise<unknown>; notify(method, params): void }`
+— NOT the editor's full `LspTransport` (which adds version gating + a stale sentinel). A
+one-shot inventory fetch has no staleness concern, so the narrow port keeps `inventory.ts`
+decoupled and trivially fakeable. Phase 3 wires production by binding the editor's existing
+transport (`(m, p) => _transport.request(m, p, v)` / `notify`) — reusing the one worker
+the editor already runs, no second wasm instance.
+
+**RED→GREEN (TDD):** wrote `inventory.test.js` first (RED: `ERR_MODULE_NOT_FOUND` for
+`./inventory.ts`). It drives the REAL `public/wgslender-lsp.wasm` (the sibling wgslender
+`zig build lsp-wasm` output, symlinked in) through the same `wgslender_lsp_alloc/_send/
+_dealloc/_recv` framing the LSP worker uses (a byte-for-byte mirror of `lsp-wasm-framing.ts`
+— the worker and inline backends share this exact wire), wrapped in the minimal
+`{ request, notify }` port. Three cases: typed consts + liftability + span bracketing the
+full decl (`GRID_N: u32 = 4u` non-liftable via array count, `TUN_SPEED: f32 = 0.55`
+liftable), the `liftableF32` filter, and an empty inventory for const-free WGSL. Skips
+(not fails) when the wasm isn't built. **Gate: editor `npm test` green (3/3 new; 1696/1696
+suite), `tsc` + `svelte-check` clean (0 errors), biome clean.**
+
+**Carry-forward for Phase 2** (the transform): `liftConst(doc, score, moduleName,
+constName) → {doc, score} | {refused}`, text→text on both documents (pure, golden-testable).
+Consume Phase 1's `fetchConstInventory` to get the chosen const's `value`/`span`/liftability;
+refuse when `!liftable` with a clear reason. The RED calls the LSP diagnostics on the
+emitted WGSL as the assertion that step (2) — struct field + binding, delete the `const`,
+keep every use site valid — survives wgslender validation. See Phase 2 section above.

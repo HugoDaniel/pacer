@@ -128,25 +128,28 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 4 · 08 knob-lift — Phase 0 DONE (2026-07-17); next is Phase 1 (studio
-access).** Phase 0 shipped the wgslender side: `Reflect.constInventory` + a dedicated
-**`wgslender/constInventory`** WASM LSP request (wgslender `8c6a49e`, in `~/Dev/wgslender`,
-its own repo + gate). Module-scope `const`s surface with name / scalar type / initializer
-text / decl-span + a `liftable` flag — `false` when the const is referenced from a
-const-required position (array element count, `@workgroup_size`, `const_assert`, a
-symbol-bearing attribute arg, an `override` initializer, or transitively another
-const-required const). **Exposure decision:** a dedicated request, NOT an extension of
-`wgslender/reflect` — reflect's JSON is cross-checked vs the reference `wgsl_reflect`
-library and consumed by npm, so a knob-lift `liftable` flag there is a layering leak +
-wire churn; the dedicated request keeps the gate at `zig build test`, isolated.
-**Carry-forward for Phase 1** (full detail in `plans/08` Progress log): request
-`wgslender/constInventory`, params `{ textDocument: { uri } }`, result `{ uri, consts:
-[{ name, typ, value, liftable, span: { start, end } }] }` (`span` = byte range into the
-source; `value`/`typ` verbatim source text, `typ` empty when the annotation was omitted).
-The studio's `lib/knobs/inventory.ts` sends this through the wgslender LSP worker and
-filters to `typ == "f32" && liftable` for the v1 lift. Function bodies are unscanned in
-v1 — Phase 2's transform re-validates the emitted WGSL (the hard gate). Open
-`plans/08-knob-lift.md` Phase 1 next; the board item stays ☐ until all phases land.
+→ **Wave 4 · 08 knob-lift — Phase 1 DONE (2026-07-17); next is Phase 2 (the transform).**
+Phase 1 shipped the studio thin client `lib/knobs/inventory.ts` (pngine `35c6cb7`, in
+`~/Dev/pngine`, its own repo + gate): `fetchConstInventory(lsp, wgsl)` opens a throwaway
+virtual WGSL doc under its own URI (never collides with the editor's open regions),
+queries **`wgslender/constInventory`**, closes it, and returns typed `{ uri, consts:
+[{ name, typ, value, liftable, span: { start, end } }] }`; `liftableF32(inv)` selects the
+v1 lift set (liftable scalar `f32` consts). RED-first against the REAL
+`public/wgslender-lsp.wasm` through the same alloc/send/recv framing the LSP worker uses
+(`lsp-wasm-framing.ts`), wrapped in the minimal `{ request, notify }` port the client
+depends on — so the test exercises the true request wire, not a stub. Design note: the
+client depends on that minimal port (not the full `LspTransport`), so Phase 3 wires it by
+binding the editor's existing transport (`request`/`notify`) — no second worker.
+**Carry-forward for Phase 2** (full detail in `plans/08` Progress log): the transform is
+text→text on both docs — `liftConst(doc, score, moduleName, constName) → {doc, score} |
+{refused}`. Given a liftable f32 const it (1) adds/extends a `knobs` uniform buffer in the
+SJON doc + bind-group entries only on affected pipelines, (2) rewrites the WGSL (struct
+field + binding, delete the `const`, keep use sites valid — the riskiest step), (3)
+appends `(control :id … :target … :value <literal> :min/:max guessed)` to the score. The
+hard gate is calling the LSP diagnostics on the emitted WGSL as the red's assertion.
+Phase 0's const inventory (Phase 1 client) supplies name / value / span / liftability to
+drive the rewrite. Open `plans/08-knob-lift.md` Phase 2 next; the board item stays ☐ until
+all phases land.
 TWO carried cross-repo follow-ups (NOT knob-lift blockers): `euclid` is NOT in SJON's
 pattern vocabulary yet (SJON-side add), and pacer's time env in hap exprs (the SJON
 outer-`Expr.Env` `queryTree` variant) is a DEFERRED slice — hap exprs bind only
@@ -1015,3 +1018,18 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   `wgslender/constInventory`, params `{ textDocument: { uri } }`, result `{ uri, consts:
   [{ name, typ, value, liftable, span: { start, end } }] }`; the studio filters
   `typ == "f32" && liftable` for v1. No pacer wire surface moved (all wgslender-side).
+- 2026-07-17 — **08 knob-lift Phase 1 done (pngine `35c6cb7`, its own repo).** The studio
+  thin client `lib/knobs/inventory.ts`: `fetchConstInventory(lsp, wgsl)` opens a throwaway
+  virtual WGSL doc (its own URI, never colliding with the editor's open regions), queries
+  `wgslender/constInventory`, closes it, returns typed `{ uri, consts: [{ name, typ,
+  value, liftable, span }] }`; `liftableF32(inv)` selects the v1 lift set. **Design
+  decision: the client depends on a minimal `InventoryLsp { request, notify }` port, NOT
+  the editor's full `LspTransport`** — a one-shot fetch has no staleness concern, so the
+  narrow port keeps `inventory.ts` decoupled + fakeable; Phase 3 wires it by binding the
+  editor's existing transport, reusing the one worker (no second wasm). RED-first against
+  the REAL `public/wgslender-lsp.wasm` through the same alloc/send/recv framing the worker
+  uses — the test exercises the true request wire, not a stub. Gate: editor tests green
+  (3/3 new, 1696/1696 suite), tsc + svelte-check clean, biome clean. Phase-2 carry-forward:
+  `liftConst(doc, score, moduleName, constName) → {doc, score} | {refused}`, text→text on
+  both docs, LSP diagnostics on the emitted WGSL as the red's hard gate. No pacer wire
+  surface moved (all studio-side).
