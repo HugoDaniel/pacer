@@ -318,3 +318,50 @@ Gate: `zig build verify` + npm gate.
   case: fastcat + alternation + seeded rand + a silence gap + a cycle
   wrap; `zig build corpus -- --update`, review; wasm parity via `zig build
   verify` is the prize — it pins SJON's pattern engine cross-target).
+
+- **Phase 4 — corpus + parity (done, 2026-07-17). Plan 03 COMPLETE; Wave 3
+  CLOSED.** The `pattern-basic` golden lands `:pattern` in the determinism
+  gate. Three tracks under `(transport :bpm 120 :meter [4 4])` — deliberately
+  NO `:dur`/`:end loop`, so the clock advances freely and the pattern's own
+  `tick mod PPC` math drives the bar wrap (a transport loop would pin every
+  frame to cycle 0 and erase the alternation / rand-across-cycles signal, the
+  whole point of the case):
+  - `grid` `[0.1 0.2 (silence) 0.4]` — fastcat, four quarter-bar slots, the
+    third silent;
+  - `alt` `(slowcat 0.25 0.75)` — one child per cycle, alternating across the
+    wrap;
+  - `noise` `(pure (rand01 seed cycle))` — one seeded hap per cycle.
+  Six eval times pin every behavior: structural landing on slot onsets
+  (t = 0, 0.5, 2.0 s land the exact authored f32 — integer tick math, no
+  float drift), a mid-slot HOLD (t = 0.75 s still 0.2), the SILENCE gap
+  (t = 1.0 s — `grid`'s write is OMITTED while `alt`/`noise` still land, and
+  it is NOT counted: `dropped` is 0), and two bar WRAPS (t = 2.0 → cycle 1,
+  t = 4.0 → cycle 2) where `alt` flips 0.25 → 0.75 → 0.25 and `noise` is
+  identical within a cycle (0.0 across all four cycle-0 frames) yet distinct
+  per cycle (`3EF5681C` ≈ 0.479, `3EA5D5B0` ≈ 0.324). The generated golden was
+  human-reviewed hex-by-hex against these hand predictions before committing —
+  every one matched.
+  - **TDD red (the honest one):** the FIRST `zig build corpus` panicked at
+    `renderMeta`'s `:source` switch — `else => unreachable` on source byte 3.
+    The golden renderer had never seen a pattern track. Fixed with `3 =>
+    "pattern"`; two `Abi.zig` doc comments (`0 keys / 1 expr / 2 trigger`) now
+    also list `3 pattern` — the encoder already emitted 3 (`.pattern => 3`) and
+    JS `TRACK_SOURCES` already carried `'pattern'` at index 3, so only the
+    native renderer + docs lagged.
+  - **euclid dropped.** The plan text named `euclid` for this case, but it is
+    NOT in SJON's pattern vocabulary yet (established in P0/P1). The case uses
+    the available fastcat / slowcat / `rand01` forms instead; `euclid` stays a
+    SJON-side follow-up.
+  - **wasm parity is the prize, and it is GREEN.** `corpus parity:
+    pattern-basic` re-derives the identical golden text from `pacer.wasm`
+    output — so SJON's whole pattern closure (compile + query walker + every
+    combinator + the per-hap `Expr` leaf + `rand01`'s deterministic kernel +
+    `Pattern` tick math) is byte-identical native vs wasm32.
+  - **Code size:** `pacer.wasm` UNCHANGED at 490710 B — P4 is a native-only
+    corpus case + doc/runner edits; the eval path shipped in P3.
+  Gate: `zig build test` ✓ (143) · `zig build audit-diagnostics` ✓ 29/29 (no
+  new codes) · `zig build verify` ✓ (native corpus 16/16 + wasm parity 49 node
+  tests). No JS/TS touched. **Plan 03 is done.** Carried follow-ups (both
+  cross-repo, neither a Wave-4 blocker): `euclid` in SJON's vocabulary, and
+  pacer's time env in hap exprs (the SJON `queryTreeWithEnv` outer-`Expr.Env`
+  variant). Next per strategy: the end-of-wave studio refresh, then Wave 4.

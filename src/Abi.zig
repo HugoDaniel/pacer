@@ -34,7 +34,7 @@
 //!         flags: bit0 = dur present, bit1 = end is loop.
 //!     [track_count u32][key_count u32][control_count u32]
 //!     track_count × 24 { target_id u16, registry u8, ncomp u8,
-//!                        source u8 (0 keys / 1 expr / 2 trigger), pad u8×3,
+//!                        source u8 (0 keys / 1 expr / 2 trigger / 3 pattern), pad u8×3,
 //!                        key_start u32, key_len u32 (0,0 for expr/trigger),
 //!                        span_start u32, span_end u32 }
 //!     key_count × 32 { at i64, value f32×4, span_start u32, span_end u32 }
@@ -241,7 +241,7 @@ const MetaTrackRec = extern struct {
     target_id: u16,
     registry: u8,
     ncomp: u8,
-    source: u8, // 0 keys / 1 expr / 2 trigger
+    source: u8, // 0 keys / 1 expr / 2 trigger / 3 pattern
     _pad: [3]u8 = .{ 0, 0, 0 },
     key_start: u32,
     key_len: u32,

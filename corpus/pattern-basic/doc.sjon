@@ -1,0 +1,23 @@
+; pattern-basic: :pattern as the third track source, queried on the bar
+; grid (1 cycle = 1 bar, identity). The case exists for wasm parity —
+; hap selection and the seeded rand kernel must be byte-identical native
+; vs wasm32. No :dur/:end loop: the clock advances freely so the
+; pattern's own cycle math (tick mod PPC) drives the bar wrap; a
+; transport loop would pin every frame to cycle 0 and erase the
+; alternation / rand-across-cycles signal. (euclid is not yet in SJON's
+; pattern vocabulary — deferred; see plan 03.)
+(transport :bpm 120 :meter [4 4])
+
+; fastcat: four quarter-bar slots, the third silent. The silent slot
+; OMITS the write (a gap) while the sibling tracks still land, so parity
+; must agree on which frames produce a write.
+(track :target grid :pattern [0.1 0.2 (silence) 0.4])
+
+; slowcat: one child per cycle — 0.25 on even cycles, 0.75 on odd —
+; pinning alternation across the bar wrap.
+(track :target alt :pattern (slowcat 0.25 0.75))
+
+; seeded rand: one hap per cycle valued rand01(seed, cycle). The whole
+; reason parity matters here — SJON's deterministic rand kernel must
+; yield the identical float on wasm32, and distinct floats per cycle.
+(track :target noise :pattern (pure (rand01 seed cycle)))

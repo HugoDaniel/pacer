@@ -1,0 +1,16 @@
+; pattern-basic times: 120 bpm 4/4 ⇒ one bar = one cycle = 2.0 s,
+; 360360 ticks/s, quarter-bar slots at i·180180. Times land on slot
+; onsets, one mid-slot hold, the silence gap, and two bar wraps so the
+; slowcat alternation (0.25 → 0.75 → 0.25) and the per-cycle rand are
+; pinned across the wrap. Flat (target …) order IS the target_id space.
+(target grid  :registry 0)
+(target alt   :registry 0)
+(target noise :registry 0)
+(times
+  "0000000000000000" ; 0.00 s — cycle 0 slot 0: grid 0.1, alt 0.25, noise r(0)
+  "3FE0000000000000" ; 0.50 s — cycle 0 slot 1 onset: grid 0.2
+  "3FE8000000000000" ; 0.75 s — cycle 0 slot 1 mid (hold): grid still 0.2
+  "3FF0000000000000" ; 1.00 s — cycle 0 slot 2 SILENCE: grid omitted; alt/noise write
+  "4000000000000000" ; 2.00 s — cycle 1 slot 0 WRAP: grid 0.1, alt 0.75, noise r(1)
+  "4010000000000000" ; 4.00 s — cycle 2 slot 0: grid 0.1, alt 0.25, noise r(2)
+)

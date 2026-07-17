@@ -121,27 +121,31 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 2 | benchmark #2 · A/B CONFIRMED 2026-07-16 | ☑ |
 | 3 | 06 tracker import · ALL phases ✓ (.it → dialog on the Motion tab, smoke green 2026-07-16) | ☑ |
 | 3 | 10 audio bus · ALL phases ✓ (pitch ride audible, smoke green 2026-07-16) | ☑ |
-| 3 | 03 pattern tracks P1–P4 | ☐ |
+| 3 | 03 pattern tracks · ALL phases ✓ (`:pattern` third source; `pattern-basic` golden + wasm parity green 2026-07-17) | ☑ |
 | 4 | 08 knob lift | ☐ |
 | 4 | 11 P3–P5 | ☐ |
 | 4 | 1.0 review | ☐ |
 
 ## What's next
 
-→ **Wave 3 · 03 pattern-tracks — P4 next** (P1–P3 done. Design FROZEN:
-cycle↔bar identity, pattern-local env shadows, latest-onset hap selection with the
-equal-onset tie-break now pinned to the LAST/top-`stack` layer. P3 done 2026-07-17:
-`Eval`'s `.pattern` arm point-samples via `PatternTrack.sampleAt`, fronted by a 1 MiB
-per-evaluator fixed scratch — the frame path never touches the gpa — with pattern
-omissions counted in the SHARED `expr_failures` probe. wasm +940 B; zig test 142.
-TWO carried follow-ups from the P2/P3 logs: `euclid` is NOT in SJON's vocabulary yet
-— SJON-side — and pacer's time env in hap exprs (the SJON outer-`Expr.Env`
-`queryTree` variant) is a DEFERRED cross-repo slice, NOT a P4 blocker; hap exprs use
-pattern-locals `cycle`/`tick`/`seed` this slice).
-Open `plans/03-pattern-tracks.md`, run P4 (corpus + parity: a `pattern-basic` case
-— fastcat + alternation + seeded rand + a silence gap + a cycle wrap; `zig build
-corpus -- --update`, review; wasm parity via `zig build verify` is the prize)
-under the README discipline; P1–P4 close Wave 3. Context from plan 10 (CLOSED
+→ **Wave 3 CLOSED — studio refresh, then Wave 4 · 08 knob-lift.** 03 pattern-tracks
+is DONE (P1–P4, 2026-07-17): `:pattern` is the third track source end to end —
+compile dry-run + frame-eval point-sample (`PatternTrack.sampleAt`, 1 MiB fixed
+scratch, omissions in the SHARED `expr_failures` probe), and the `pattern-basic`
+golden pins fastcat + a silence gap + slowcat alternation across a bar wrap + a
+per-cycle `rand01` — **wasm parity green** (SJON's pattern engine is byte-identical
+native vs wasm32). wasm shipped delta 0 B at P4 (the eval path was already compiled;
+P4 is a native-only golden + doc/runner edits).
+**First task next session = the end-of-wave STUDIO REFRESH** (standing checklist):
+rebuild `zig build wasm`, sync the copies the studio/editor load, run the editor's
+real-wasm tests — pattern scores can't load in the studio until it carries the new
+wasm. Decide then whether a template should demo `:pattern`.
+THEN open `plans/08-knob-lift.md` and run Wave 4 · 08 knob-lift (the wgslender/studio
+bridge — most cross-repo, least urgent). TWO carried cross-repo follow-ups (NOT Wave 4
+blockers): `euclid` is NOT in SJON's pattern vocabulary yet (SJON-side add), and
+pacer's time env in hap exprs (the SJON outer-`Expr.Env` `queryTree` variant) is a
+DEFERRED slice — hap exprs bind only pattern-locals `cycle`/`tick`/`seed` today.
+Context from plan 10 (CLOSED
 2026-07-16, all phases, smoke audible — pngine `7b54680` `0f3c2a6` `712ab92`
 `3d83e82` `b31a896`): registry 1 is live end to end; the demoscene ships a
 commented `;;` `audio.pitch` ride (a live `audio.*` target fails the whole load
@@ -925,3 +929,22 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   once per evaluator only when a pattern track exists. wasm +940 B (engine
   already linked in P2). No golden changed. Gates: zig test 142, audit 29/29,
   verify green (corpus 15/15 unchanged, node parity 48). No JS/TS touched.
+- 2026-07-17 — **03 pattern-tracks Phase 4 (corpus + parity) — plan 03 DONE, Wave 3
+  CLOSED.** New `pattern-basic` golden: three `:pattern` tracks under 120 bpm 4/4
+  (1 bar = 1 cycle = 2.0 s, no `:dur`/loop so the clock advances and the pattern's
+  own tick-mod-PPC math drives the wrap) — a fastcat `[0.1 0.2 (silence) 0.4]` with
+  a silence gap, a `(slowcat 0.25 0.75)` alternating across the bar wrap, and a
+  `(pure (rand01 seed cycle))` seeded per-cycle. Times pin structural landing on slot
+  onsets, a mid-slot hold, the gap (grid write OMITTED while siblings land), and two
+  wraps (alt 0.25→0.75→0.25; noise distinct per cycle). **wasm parity green** — the
+  prize: SJON's pattern engine (query walker + combinators + `rand01` kernel) is
+  byte-identical native vs wasm32. Scope note carried from the plan: the plan text
+  named `euclid`, which is NOT in SJON's vocabulary yet — dropped from the case
+  (SJON-side follow-up). Two source touches to make the golden renderable: the native
+  runner's `renderMeta` `:source` switch gained `3 => "pattern"` (it hit `unreachable`
+  on the first run — the honest red), and two `Abi.zig` doc comments now list `3
+  pattern` (the encoder already emitted it; JS `TRACK_SOURCES` already had it). wasm
+  UNCHANGED at 490710 B (native-only case + doc edits). Gates: zig test 143, audit
+  29/29, verify green (corpus 16/16, node parity 49). No JS/TS touched.
+  **Cross-plan:** `:pattern` is now a shipped score feature end to end — the studio
+  can't load a pattern score until the end-of-wave refresh carries the new wasm.
