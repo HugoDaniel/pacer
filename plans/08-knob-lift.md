@@ -233,3 +233,51 @@ entry, both controls). **Gate: editor `npm test` green (4/4 new; 1700/1700 suite
 non-blocking notice. The new control then round-trips through `pacer.setControl` to a changed
 uniform next frame (the real-wasm integration red). `liftConst` targets `@group(0)` and f32
 scalars only — vec/int lifts and non-zero groups are the first v2 asks.
+
+### Phase 3 — UI + live loop — DONE 2026-07-17 · **plan 08 COMPLETE**
+
+**Deliverable** (pngine `c43164b`, studio editor's own repo + gate). The WGSL editor gains a
+`⛭ lift` chip after each liftable module-scope const; clicking it lifts the const end to end
+and the new `(control …)` drives a live uniform. Built as the house **pure/edge split**
+(cf. `sjon-shader-links.ts`): the logic is a tested pure controller, the CodeMirror widget +
+Svelte wiring is the thin (manual-smoke-gated) shell.
+
+1. **`lib/knobs/lift-controller.ts`** (PURE, the tested heart): `planKnobLifts(inventory) →
+   KnobMark[]` — the affordance placement, the liftable-f32 set (`liftableF32`) with each decl's
+   byte span. `liftToActions({ source, score, moduleName, constName, inventory }) → { actions } |
+   { refused }` — wraps Phase-2 `liftConst` and hands back the SAME document-edit actions a
+   hand-edit dispatches: `[{ type: 'SOURCE_CHANGED', source }, { type: 'SET_SCORE', score }]`,
+   or a `{ refused }` notice (no actions). Reducing those through the REAL `reduce` proves the
+   lift lands on AppState identically — that IS the "dispatches both edits through the normal
+   actions" red.
+2. **`lib/codemirror/knob-lift.ts`** (edge shell): a Facet carrying the lift callback, a
+   `setKnobMarks` StateEffect the host pushes fresh marks through, and a StateField rendering the
+   `⛭ lift` widget at each decl end. Inert until marks are pushed, so safe to install
+   unconditionally. Its pure planner (`planKnobLifts`) is the tested part; the DOM shell is not
+   DOM-tested (house convention — the studio has NO jsdom/component harness).
+3. **Wiring** (edge, typecheck + manual-smoke gated): `codemirror-setup` gains an `onLiftKnob`
+   option + a `pushKnobMarks` handle method + the chip style; `lsp-integration` exports
+   `fetchWgslConstInventory(wgsl)` binding the ONE live LSP transport to Phase-1's
+   `fetchConstInventory` (throwaway virtual doc, no second wasm); `CodePane` takes a `score`
+   prop, pushes inventory-derived marks on the shader-module WGSL tab, and on click runs
+   `liftToActions` + dispatches (refusal → `console.warn`, a defensive backstop since the chip
+   only shows for liftable consts); `App.svelte` passes `score={appState.score}`.
+
+**RED→GREEN (TDD):** wrote `lift-controller.test.js` first (RED: `ERR_MODULE_NOT_FOUND`). It drives
+BOTH real wasms — `public/wgslender-lsp.wasm` (Phase-1 inventory) AND `public/pacer.wasm` (the
+driver) — end to end. Four cases: the planner marks TUN_SPEED + DECAY (not the array-size GRID_N)
+with decl-bracketing spans; `liftToActions` → the two actions, which reduced through the real
+`reduce` yield the lifted doc (knobs buffer) + score (control); a refusal carries a reason and no
+actions; and the **LIVE LOOP** — the lifted score `Pacer.load`s, the control holds the authored
+`0.55`, `setControl('TUN_SPEED', 0.9)` changes the next `eval`'s uniform to `0.9`, and
+`clearControl` returns it to `0.55`. **Gate: editor `npm test` 1704/1704 (+4 new), `tsc` +
+`svelte-check` 0 errors (5 pre-existing App.svelte warnings), biome clean.**
+
+**Scope note — no control-pin slider.** The plan's Phase-3 load list said "control-pin UI **if one
+exists** (grep `setControl`)" — and none exists in the studio. So Phase 3 delivers the lift
+affordance + controller + a proven `setControl` round-trip; a drag-slider widget is the plan's
+explicitly-conditional piece and is NOT built. Live tuning today is via the control's `:value` in
+the score (a `SET_SCORE` edit re-arms the driver); a slider bound to `pacer.setControl` is the
+natural first v2 ask, alongside vec/int lifts and non-zero bind groups. **Manual smoke** (lift a
+const, play, confirm the uniform is driven) is the user's to run — the browser preview can't be
+driven from here.

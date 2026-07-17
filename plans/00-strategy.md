@@ -122,37 +122,36 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 3 | 06 tracker import · ALL phases ✓ (.it → dialog on the Motion tab, smoke green 2026-07-16) | ☑ |
 | 3 | 10 audio bus · ALL phases ✓ (pitch ride audible, smoke green 2026-07-16) | ☑ |
 | 3 | 03 pattern tracks · ALL phases ✓ (`:pattern` third source; `pattern-basic` golden + wasm parity green 2026-07-17) | ☑ |
-| 4 | 08 knob lift | ☐ |
+| 4 | 08 knob lift · ALL phases ✓ (⛭ lift chip + live-loop round-trip, pngine `c43164b` 2026-07-17) | ☑ |
 | 4 | 11 P3–P5 | ☐ |
 | 4 | 1.0 review | ☐ |
 
 ## What's next
 
-→ **Wave 4 · 08 knob-lift — Phase 2 DONE (2026-07-17); next is Phase 3 (UI + live loop).**
-Phase 2 shipped the pure text→text transform `lib/knobs/lift.ts` (pngine `af61d2d`, in
-`~/Dev/pngine`, its own repo + gate): `liftConst({ doc, score, moduleName, constName,
-inventory }) → LiftOk | LiftRefused` rewrites three surfaces — (1) the pngine doc (adds a
-`(buffer :name knobs …)` form + `(entry … :buffer knobs)` on the `@group(0)` bind groups of
-the affected pipelines ONLY), (2) the module WGSL via `sjon-regions` (prepend `struct Knobs`
-+ `@group(0)` binding, delete the `const`, rewrite uses to `knobs.<name>`), (3) the score
-(append a pinned `(control …)` with a guessed :min/:max). Module→pipeline→bind-group is
-resolved with `sjon-read`; the doc inserts use a span-aware form scanner applied right-to-left.
-Refuses non-liftable / non-f32 / reserved-id / duplicate-control with a reason (docs
-untouched); an `extend` path appends to an existing `Knobs` struct + buffer without dupes.
-**Design note:** the transform is PURE — the caller (Phase 3 UI, or the test) resolves the
-inventory via Phase 1's `fetchConstInventory` and passes it in; the LSP is used only to
-*validate* the emitted WGSL, not as a dependency. RED-first against the REAL
-`public/wgslender-lsp.wasm`: pull-model `textDocument/diagnostic` on the lifted module,
-`severity === 1` errors ⇒ failed lift — that IS the hard gate (4/4 green; editor suite
-1700/1700, tsc + svelte-check clean, biome clean).
-**Carry-forward for Phase 3** (full detail in `plans/08` Progress log): the WGSL-editor gutter
-action on a liftable const calls `fetchConstInventory` → `liftConst`, dispatches the returned
-`{ doc, score }` through the editor's normal document-edit actions, and surfaces `{ refused }`
-as a non-blocking notice; the new control then round-trips through `pacer.setControl` to a
-changed uniform next frame (the real-wasm integration red). v1 targets `@group(0)` + f32
-scalars only. Open `plans/08-knob-lift.md` Phase 3 next; the board item stays ☐ until it lands
-(Phase 3 is the last).
-TWO carried cross-repo follow-ups (NOT knob-lift blockers): `euclid` is NOT in SJON's
+→ **Wave 4 · 08 knob-lift COMPLETE (all phases, 2026-07-17); next is Wave 4 · 11 P3–P5
+(ease programs → `'PACM'`).**
+Phase 3 (pngine `c43164b`, `~/Dev/pngine`, its own repo + gate) landed the `⛭ lift` chip in
+the WGSL editor and the live loop, end to end. Built as the house pure/edge split
+(cf. `sjon-shader-links.ts`): the tested pure controller `lib/knobs/lift-controller.ts`
+(`planKnobLifts(inventory)` → affordance marks; `liftToActions(…)` wraps Phase-2 `liftConst`
+as `SOURCE_CHANGED` + `SET_SCORE`, or a `{ refused }` notice) + the thin CodeMirror shell
+`lib/codemirror/knob-lift.ts` + the Svelte wiring (`codemirror-setup` `onLiftKnob`/`pushKnobMarks`,
+`lsp-integration` `fetchWgslConstInventory` over the one live transport, `CodePane` marks + lift
+dispatch, `App` passes `score`). RED-first `lift-controller.test.js` over BOTH real wasms:
+planner marks, `liftToActions`→real-`reduce`→lifted doc+score, refusal, and the LIVE LOOP —
+`setControl('TUN_SPEED', 0.9)` changes the next `eval` uniform (authored `0.55` → `0.9` →
+`clearControl` → `0.55`) through `public/pacer.wasm`. Gate: editor `npm test` 1704/1704 (+4),
+tsc + svelte-check 0 errors, biome clean.
+**Scope note:** no drag-slider control-pin UI — the plan's load list said "control-pin UI *if
+one exists*", and none does; the `setControl` round-trip is proven and waiting. Live tuning
+today is via the control's `:value` in the score. First v2 asks: a slider bound to
+`pacer.setControl`, vec/int lifts, non-`@group(0)` bind groups. Manual smoke (lift a const,
+play, confirm the uniform is driven) is the user's to run — the browser preview can't be driven
+from here.
+Open `plans/11-*.md` next and run **11 Phase 3** (ease programs → a new `'PACM'` section) under
+the same TDD + compaction discipline; this returns to the pacer repo proper (schema, diags,
+corpus regen, npm parity). The `1.0 review` board item is the only Wave-4 work after 11.
+TWO carried cross-repo follow-ups (NOT blockers): `euclid` is NOT in SJON's
 pattern vocabulary yet (SJON-side add), and pacer's time env in hap exprs (the SJON
 outer-`Expr.Env` `queryTree` variant) is a DEFERRED slice — hap exprs bind only
 pattern-locals `cycle`/`tick`/`seed` today.
@@ -1054,3 +1053,19 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   check clean, biome clean. Phase-3 carry-forward: a gutter action wiring `fetchConstInventory`
   → `liftConst` → the editor's document-edit actions, then a `pacer.setControl` real-wasm
   round-trip red. No pacer wire surface moved (all studio-side).
+- 2026-07-17 — **08 knob-lift Phase 3 done — plan 08 COMPLETE (pngine `c43164b`, its own repo).**
+  The WGSL editor's `⛭ lift` chip, wired end to end. **Design: the house pure/edge split** —
+  the logic is a tested pure controller (`lib/knobs/lift-controller.ts`: `planKnobLifts(inventory)`
+  → affordance marks; `liftToActions(…)` → the Phase-2 lift shaped as `SOURCE_CHANGED` +
+  `SET_SCORE`, or `{ refused }`), and the CodeMirror widget + Svelte wiring is the thin shell
+  (not DOM-tested — the studio has no jsdom/component harness, so `sjon-shader-links`'s convention
+  holds: test the planner, not the DOM). The lift dispatches the two edits through the REAL
+  `reduce`, so it lands on AppState like a hand-edit. **Live loop proven** by a real-`pacer.wasm`
+  round-trip: the lifted `(control …)` holds its authored `:value`, and `setControl` replaces it
+  on the next `eval` (Eval.zig: "a document control always writes; setControl replaces until
+  clearControl"). **Cross-plan fact:** no control-pin slider UI exists in the studio (the plan's
+  "control-pin UI *if one exists*" hedge held) — so Phase 3 ships the affordance + the proven
+  `setControl` capability, NOT an interactive slider; that + vec/int lifts + non-`@group(0)`
+  groups are the v2 asks. Gate: editor `npm test` 1704/1704 (+4), tsc + svelte-check 0 errors,
+  biome clean. No pacer wire surface moved (all studio-side). Wave-4 remaining: 11 P3–P5, then
+  the 1.0 review.
