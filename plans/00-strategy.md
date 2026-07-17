@@ -128,23 +128,32 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 CLOSED — studio refresh, then Wave 4 · 08 knob-lift.** 03 pattern-tracks
-is DONE (P1–P4, 2026-07-17): `:pattern` is the third track source end to end —
-compile dry-run + frame-eval point-sample (`PatternTrack.sampleAt`, 1 MiB fixed
-scratch, omissions in the SHARED `expr_failures` probe), and the `pattern-basic`
-golden pins fastcat + a silence gap + slowcat alternation across a bar wrap + a
-per-cycle `rand01` — **wasm parity green** (SJON's pattern engine is byte-identical
-native vs wasm32). wasm shipped delta 0 B at P4 (the eval path was already compiled;
-P4 is a native-only golden + doc/runner edits).
-**First task next session = the end-of-wave STUDIO REFRESH** (standing checklist):
-rebuild `zig build wasm`, sync the copies the studio/editor load, run the editor's
-real-wasm tests — pattern scores can't load in the studio until it carries the new
-wasm. Decide then whether a template should demo `:pattern`.
-THEN open `plans/08-knob-lift.md` and run Wave 4 · 08 knob-lift (the wgslender/studio
-bridge — most cross-repo, least urgent). TWO carried cross-repo follow-ups (NOT Wave 4
-blockers): `euclid` is NOT in SJON's pattern vocabulary yet (SJON-side add), and
-pacer's time env in hap exprs (the SJON outer-`Expr.Env` `queryTree` variant) is a
-DEFERRED slice — hap exprs bind only pattern-locals `cycle`/`tick`/`seed` today.
+→ **Wave 3 CLOSED + studio refresh DONE — next is Wave 4 · 08 knob-lift.** Open
+`plans/08-knob-lift.md` and run it (the wgslender/studio bridge — most cross-repo,
+least urgent). 03 pattern-tracks is DONE (P1–P4, 2026-07-17): `:pattern` is the third
+track source end to end — compile dry-run + frame-eval point-sample
+(`PatternTrack.sampleAt`, 1 MiB fixed scratch, omissions in the SHARED
+`expr_failures` probe), and the `pattern-basic` golden pins fastcat + a silence gap +
+slowcat alternation across a bar wrap + a per-cycle `rand01` — **wasm parity green**
+(SJON's pattern engine is byte-identical native vs wasm32).
+**Wave 3 studio refresh DONE (2026-07-17)** — rebuilt `zig build wasm` (490710 B) +
+synced via `npm run build:wasm-copy`; editor real-wasm suite green (1693/1693,
+typecheck 0). NON-OBVIOUS finding, now a pinned refresh rule: the wasm refreshes
+in-place (the pnpm store hard-links it, `build:wasm-copy` rewrites the same inode)
+but the **JS glue does NOT** — an Edit gives the source a new inode and breaks the
+hard-link, so the studio's `node_modules/pacer/src/index.js` had a STALE
+`TRACK_SOURCES = ['keys','expr','trigger']` and mislabeled pattern tracks as `keys`.
+Fixed with `pnpm install --prefer-offline` in `studio/` (re-links the `file:` dep,
+lockfile untouched). **Every future refresh that touches the npm surface must re-link
+the glue, not just the wasm.** Template-demo decision: NO pattern lane on the
+demoscene (needs a spare uniform + shader read + buffer surgery for no visual win);
+the right-sized proof is `pattern-source.test.js` (pngine `c23de08`) — a real-wasm
+smoke that pins `source === 'pattern'` + the fastcat/gap/wrap writes through the
+production glue, and guards against the glue re-staling. TWO carried cross-repo
+follow-ups (NOT Wave 4 blockers): `euclid` is NOT in SJON's pattern vocabulary yet
+(SJON-side add), and pacer's time env in hap exprs (the SJON outer-`Expr.Env`
+`queryTree` variant) is a DEFERRED slice — hap exprs bind only pattern-locals
+`cycle`/`tick`/`seed` today.
 Context from plan 10 (CLOSED
 2026-07-16, all phases, smoke audible — pngine `7b54680` `0f3c2a6` `712ab92`
 `3d83e82` `b31a896`): registry 1 is live end to end; the demoscene ships a
@@ -948,3 +957,31 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   29/29, verify green (corpus 16/16, node parity 49). No JS/TS touched.
   **Cross-plan:** `:pattern` is now a shipped score feature end to end — the studio
   can't load a pattern score until the end-of-wave refresh carries the new wasm.
+- 2026-07-17 — **Wave 3 studio refresh DONE — Wave 3 fully CLOSED.** Rebuilt
+  `pacer.wasm` (490710 B) and synced via `npm run build:wasm-copy`; the studio symlink
+  chain (`studio/public` → `editor/public` → `pacer/npm/pacer/pacer.wasm`) now serves
+  the fresh bytes. Editor real-wasm suite green on them (1693/1693, tsc 0 errors). No
+  pacer commit (wasm gitignored); triple-pin unbumped (0.1.0 stands — accumulate-then-
+  bump-at-publish; next publish 0.1.0 → 0.2.0 covers `:emit`, `Meta.scenes`, and
+  `source: 'trigger'`/`'pattern'`). **Durable refresh rule discovered: the wasm and the
+  JS glue refresh by DIFFERENT mechanisms.** The pnpm `file:` dep hard-links pacer's
+  files into the store; `build:wasm-copy` rewrites `pacer.wasm` IN-PLACE (same inode),
+  so the hard-link sees fresh wasm for free — but an Edit to a JS source writes a NEW
+  inode, breaking that file's hard-link, so the store keeps the stale copy. Here the
+  studio's `node_modules/pacer/src/index.js` still had the pre-03
+  `TRACK_SOURCES = ['keys','expr','trigger']` and silently mislabeled pattern tracks as
+  `keys` (`TRACK_SOURCES[3] ?? 'keys'`), which would send the timeline hunting for
+  keyframes a pattern track never has. Fixed with `pnpm install --prefer-offline` in
+  `studio/` (re-links the `file:` dep; `studio/pnpm-lock.yaml` untouched, no network).
+  **Rule for every future refresh: when the npm surface changed, RE-LINK the glue
+  (`pnpm install` in `studio/`), don't trust the in-place wasm copy to carry JS
+  changes.** Template-demo decision: NO `:pattern` lane on the demoscene — it would need
+  a spare uniform field + a shader read + buffer plumbing (the same surgery the
+  benchmark #1 residue flagged) for zero visual gain. The right-sized proof is a
+  real-wasm regression test, `pattern-source.test.js` (pngine `c23de08`): loads a
+  fastcat + silence-gap + slowcat-across-a-bar-wrap `:pattern` score through the
+  production glue (buildRegistries → `Pacer.load` → meta → eval → `toUniforms`), asserts
+  `source === 'pattern'` (the guard that fails loudly if the glue re-stales) and the
+  stepped writes incl. the omitted silence slot and the wrap alternation — the studio
+  side of the corpus `pattern-basic` case. Staged ONLY that new file (the user's
+  concurrent pngine work left untouched).
