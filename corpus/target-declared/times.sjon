@@ -1,0 +1,7 @@
+; No (target …) forms: the host registry is EMPTY. The score's own
+; (target …) declarations supply the whole join, proving compose-mode
+; standalone compilation. Eval at t = 0.0, 0.5, 1.0 s (120 bpm → beats
+; 0, 1, 2).
+(times "0000000000000000")
+(times "3FE0000000000000")
+(times "3FF0000000000000")

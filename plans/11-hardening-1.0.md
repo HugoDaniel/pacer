@@ -197,3 +197,62 @@ Gate: `zig build verify`.
     updates the `Easing.Op` wire row; `Easing.zig` `Op`/`OpRec` comments drop "future
     wire". **Studio refresh deferred** to the Wave-4 close (07 already ships; nothing
     consumes `easePrograms` yet, so the studio wasm can stay as-is until P4–P5 land).
+
+- **Phase 4 — compose-mode `(target …)` declarations (done, 2026-07-18).** A score
+  now declares its own animatable targets with `(target :name X :arity N :registry R)`,
+  so it compiles, corpus-tests, and lints STANDALONE (no host registry); declared
+  targets **merge** with whatever registries a host does hand over.
+  - **RED first** — five `Compile.zig` tests referencing the not-yet-existing
+    `CompileResult.targets` field + `.target_decl_invalid` variant (a compile-error
+    RED, exactly as P3 began): a standalone score compiling against `&.{}`; the
+    host-merge (host-authoritative on a name match); an arity disagreement →
+    `target_arity_mismatch`; a duplicate declaration → `target_decl_invalid`; a
+    missing `:name`/`:arity` → `target_decl_invalid`.
+  - **Merge model (frozen; the user chose "host wins, flag arity only").** New
+    `Builder.buildTargetJoin` runs FIRST in `build()` (before transport/controls/
+    tracks/triggers, so every `resolveTarget` sees declarations). Host registries
+    keep indices `0..host_len`; a declared name the host does NOT provide is appended
+    in document order under its `:arity`/`:registry` (its join index becoming its
+    `target_id`). Rules: a duplicate declared `:name` → `target_decl_invalid`; a name
+    the host also provides is host-authoritative — its arity must equal the host's
+    (else `target_arity_mismatch`) and the declared `:registry` is IGNORED; missing
+    `:name`/`:arity`, or overrunning `MAX_TARGETS`(1024, mirrors `Abi.MAX_TARGETS`,
+    keeps every id inside `u16`) → `target_decl_invalid`.
+  - **Wire (append-only, minimal).** ONE new `Compile.Code` variant
+    `target_decl_invalid` = **30** (rides in `'PACD'`; never renumber). **`'PACT'`
+    and `'PACM'` UNCHANGED** — declared targets never touch the inbound blob (they
+    come from the doc) and their NAMES never serialize (house rule: names come from
+    source, like scene names). `CompileResult.targets` (the merged join, compile-
+    arena-backed, declared names duped) is a NATIVE-only view, NOT on the wire — it
+    equals the host list verbatim when a score has no declarations, so nothing shifts.
+  - **Corpus.** The runner now accepts an EMPTY host registry (`times.sjon` with no
+    `(target …)`) and resolves write/meta target names through `result.targets`
+    instead of the host-only `harness.targets` — byte-stable for the 16 existing
+    goldens (merged == host when there are no declarations). New case
+    `target-declared` (empty host; the score declares `glow`/`tint`/`level` across
+    registries 0 and 1, via keys, vec keys, and an `:expr`). **Hand-verified:** glow
+    out-cubic at u=0.25 → 0.546875 (`3F0C0000`), tint lane split, `level = (* 0.5
+    beat)` → 0 / 0.5 / 1.0 over beats 0/1/2. The JS parity renderer mirrors the merged
+    join (`mergedTargetNames` walks the doc in ONE left-to-right tokenizing scan —
+    alternation `#|…|#` block comment / `;` line comment / `"…"` string / a real
+    `(target …)` — so a declaration inside a comment or string is consumed as that
+    token, never a phantom, matching the native parse-forest walk; an adversarial
+    review caught the naive `;`-only strip, and the golden now embeds a
+    block-commented decoy `(target :name halo …)` between the real declarations as the
+    regression gate).
+  - **npm.** `#target(targetId)` now TOLERATES an id past the flat host list — a
+    declared-only target the host never registered — returning `name: null` rather
+    than throwing (a standalone/partially-hosted score no longer crashes the decode);
+    `MetaTrack.name`/`WriteEntry.name` became `string | null`, and `route.js`
+    `toUniforms` skips a null-name entry (a by-name uniforms map can't key it — the
+    host routes it by `registry`). The `registries` load option is now OPTIONAL
+    (default `[]`). Two new `driver.test.js` tests over the real wasm: a standalone
+    score loaded with registries OMITTED (declared-only ids, `name: null`, wire-borne
+    registry/ncomp), and a host-merge (host name resolves, declared-only extra appends
+    past the host ids). No triple-pin bump (accumulate-till-publish).
+  - **Gate green:** `zig build verify` (native corpus **17/17** byte-identical, wasm
+    parity **17/17** + `driver` **55** incl. +2) + `audit-diagnostics` **30/30** + npm
+    lint/typecheck clean + fuzz (no panic — `fuzzCompile` feeds arbitrary source, so
+    the new declaration path is fuzzed). Docs: `schema/pacer.sjon` header drops the
+    last omission; `CLAUDE.md` Roadmap records the merge model. **Only the 1.0 review
+    remains in Wave 4.**

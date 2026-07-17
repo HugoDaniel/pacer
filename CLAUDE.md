@@ -148,9 +148,16 @@ validation works on wasm32-freestanding with no filesystem.
 
 ## Roadmap
 
-Deliberate omissions landing with later build-order steps (see the header of
-`schema/pacer.sjon`): `(scene …)` / cue lists, and compose-mode `(target …)`
-declarations.
+All roadmapped score forms have landed — `(scene …)` windows and compose-mode
+`(target …)` declarations closed the last omissions (the `schema/pacer.sjon`
+header notes none remaining). Compose-mode targets **merge** with the host
+registries at compile: host indices are preserved, a declared name the host
+also provides is host-authoritative (arity must agree, else
+`target_arity_mismatch`), and a declared-only name is appended to the join under
+its `:registry` — so a score compiles, corpus-tests, and lints with no host at
+all. Declared names never cross the wire (`'PACT'`/`'PACM'` unchanged); a
+consumer reads them from source, and `CompileResult.targets` surfaces the merged
+join natively. What a 1.0 tag needs beyond this is the last open Wave-4 item.
 
 ## Code style
 

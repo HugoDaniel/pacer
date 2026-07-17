@@ -35,7 +35,9 @@ export {};
  * object and its `value` are reused frame to frame — copy `value` if you
  * must retain it past the next `eval`.
  * @typedef {object} WriteEntry
- * @property {string} name Target name, from the joined host registry.
+ * @property {string | null} name Target name from the joined host registry, or
+ *   null for a compose-mode declared-only target this host never registered
+ *   (route it by `registry`; the score source holds the declared name).
  * @property {number} targetId Flat index into the joined registry list.
  * @property {number} registry Bus index (the registries-array position).
  * @property {number} ncomp Active lanes: 1 (scalar) … 4 (vec4).
@@ -95,7 +97,8 @@ export {};
  * A track in score metadata.
  * @typedef {object} MetaTrack
  * @property {number} targetId
- * @property {string} name
+ * @property {string | null} name Target name from the joined host registry, or
+ *   null for a compose-mode declared-only target this host never registered.
  * @property {number} registry
  * @property {number} ncomp
  * @property {'keys' | 'expr' | 'trigger' | 'pattern'} source Value source: keyframes, an expression, an event schedule, or a pattern.

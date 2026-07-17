@@ -21,6 +21,10 @@ export function toUniforms(entries, registry = 0) {
   const uniforms = {};
   for (const e of entries) {
     if (e.registry !== registry) continue;
+    // A compose-mode declared-only target has no host name (null), so it
+    // can't key a by-name uniforms map — the host routes it by registry
+    // through routeWrites instead. Skip it here.
+    if (e.name === null) continue;
     uniforms[e.name] = laneValue(e);
   }
   return uniforms;

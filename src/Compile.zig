@@ -60,6 +60,15 @@ pub const Error = error{OutOfMemory};
 /// Maximum `(chain …)` nesting depth before flattening gives up.
 pub const MAX_CHAIN_DEPTH = 4;
 
+/// Ceiling on the merged target join (host registries + compose-mode
+/// `(target …)` declarations). Mirrors `Abi.MAX_TARGETS`; kept local to
+/// avoid a circular import. A declaration past it is `target_decl_invalid`
+/// — the cap also keeps every join index inside a `u16` `target_id`.
+pub const MAX_TARGETS = 1024;
+comptime {
+    std.debug.assert(MAX_TARGETS <= std.math.maxInt(u16));
+}
+
 // ---------------------------------------------------------------------------
 // Stage 1 — validate
 // ---------------------------------------------------------------------------
@@ -168,6 +177,7 @@ pub const Code = enum(u16) {
     trigger_invalid,
     pattern_eval_failed,
     pattern_result_invalid,
+    target_decl_invalid,
 };
 
 /// One pacer load diagnostic. `span` indexes the combined text (same
@@ -193,6 +203,19 @@ pub const CompileResult = struct {
     arena: std.heap.ArenaAllocator,
     diagnostics: []const Diagnostic,
     table: ?TrackTable,
+    /// The merged target join this score compiled against: the caller's
+    /// host registries (indices preserved) followed by any compose-mode
+    /// `(target …)` declaration the host did not already provide (appended
+    /// in document order). Names are arena-backed. NOT a wire surface —
+    /// the `'PACT'`/`'PACM'` blobs never carry declared names (a consumer
+    /// reads them from source, like scene names); this is a native-side
+    /// view so the corpus runner and tests can name declared-only targets.
+    /// Equals the host list verbatim when the score has no declarations.
+    /// NATIVE-ONLY: host-provided names alias the caller's target memory
+    /// (the reusable `targets_buffer` under wasm, overwritten by the next
+    /// `drv_load`), so a wasm export must NOT read this — declared names
+    /// are arena-owned, but host names are not.
+    targets: []const Target,
     /// Schema for expr-track evaluation: the CORE plugin prepended to
     /// the document's user plugins (`HostResult.schema` is user-only by
     /// design — core funcs like `sin`/`tau` would not resolve through
@@ -258,6 +281,7 @@ pub fn compile(gpa: Allocator, source: [:0]const u8, targets: []const Target) Er
         .forest = v.result.data_forest,
         .schema = eval_schema,
         .targets = targets,
+        .merged_targets = targets,
         .diags = .empty,
     };
 
@@ -271,6 +295,7 @@ pub fn compile(gpa: Allocator, source: [:0]const u8, targets: []const Target) Er
         .arena = arena,
         .diagnostics = builder.diags.items,
         .table = table,
+        .targets = builder.merged_targets,
         .eval_schema = eval_schema,
     };
 }
@@ -285,7 +310,14 @@ const Builder = struct {
     /// Core-prepended eval schema (`CompileResult.eval_schema`) —
     /// resolves the expr-func vocabulary for the expr-track dry-run.
     schema: sjon.Schema.Schema,
+    /// Active join for `resolveTarget`: the host list until `buildTargetJoin`
+    /// merges the compose-mode `(target …)` declarations, then the merged
+    /// list (host indices preserved, declared-only names appended).
     targets: []const Target,
+    /// The merged join, surfaced on `CompileResult.targets`. Defaults to
+    /// the host list so it is sound even when `build()` never runs (SJON
+    /// validation errors) or fails before the join.
+    merged_targets: []const Target,
     diags: std.ArrayList(Diagnostic),
 
     /// Program table under construction. `[0]` is the shared linear
@@ -320,6 +352,12 @@ const Builder = struct {
         const before_diags = self.diags.items.len;
         self.programs[0] = Easing.primitive(.{ .code = .linear }) catch unreachable;
         self.programs_len = 1;
+
+        // Merge compose-mode (target …) declarations into the join FIRST,
+        // so every downstream resolveTarget (emit lanes, controls, tracks,
+        // triggers) sees them. A declaration defect emits here and nulls
+        // the table via the diag gate below.
+        try self.buildTargetJoin();
 
         const transport = try self.buildTransport(ta) orelse {
             table_arena.deinit();
@@ -1193,6 +1231,76 @@ const Builder = struct {
         return @intCast(self.programs_len - 1);
     }
 
+    /// Merge the compose-mode `(target …)` declarations into the join,
+    /// replacing `self.targets`. The host registries keep their indices
+    /// (`0..host.len`); a declared name the host does NOT provide is
+    /// appended in document order under its `:arity`/`:registry`, so a
+    /// score compiles, corpus-tests, and lints with no host at all. Rules
+    /// (host-authoritative on a name match, per the plan):
+    ///   - a duplicate declared `:name` (twice in the score) →
+    ///     `target_decl_invalid` (independent of the host);
+    ///   - a name the host also provides: its arity must equal the host's,
+    ///     else `target_arity_mismatch`; the declared `:registry` is ignored
+    ///     (host wins) and the declaration is otherwise a no-op;
+    ///   - a declared-only name: appended, its join index becoming its id.
+    /// Missing `:name`/`:arity`, or overrunning `MAX_TARGETS`, is
+    /// `target_decl_invalid`. Any diagnostic nulls the table via the diag
+    /// gate. The merged slice is compile-arena-backed and surfaced on
+    /// `CompileResult.targets`.
+    fn buildTargetJoin(self: *Builder) Error!void {
+        const tree = self.tree;
+        const host_len = self.targets.len;
+        var merged: std.ArrayList(Target) = .empty;
+        try merged.appendSlice(self.arena, self.targets);
+        // Declared names seen so far — catches a duplicate declaration
+        // whether or not the host also provides the name.
+        var declared: std.ArrayList([]const u8) = .empty;
+
+        for (self.forest) |idx| {
+            if (!isForm(tree, idx, "target")) continue;
+            const children = tree.formHeader(idx).children;
+            const name_node = kvNode(tree, children, "name");
+            const arity_node = kvNode(tree, children, "arity");
+            if (name_node == null or arity_node == null) {
+                try self.emit(.target_decl_invalid, tree.spanOf(idx), "target declaration requires :name and :arity", .{});
+                continue;
+            }
+            const name = tree.symbolText(name_node.?);
+            // :arity / :registry are manifest-bounded integers (1..4 / 0..255).
+            const arity: u8 = @intFromFloat(readNumber(tree, arity_node.?).?);
+            var registry: u8 = 0;
+            if (kvNode(tree, children, "registry")) |rn| registry = @intFromFloat(readNumber(tree, rn).?);
+
+            // A name declared twice in the score is a defect regardless of
+            // whether the host also provides it.
+            if (containsName(declared.items, name)) {
+                try self.emit(.target_decl_invalid, tree.spanOf(name_node.?), "duplicate target declaration `{s}`", .{name});
+                continue;
+            }
+            declared.append(self.arena, name) catch return error.OutOfMemory;
+
+            if (indexOfTarget(merged.items[0..host_len], name)) |i| {
+                // Host provides it: host-authoritative; only arity must agree.
+                if (merged.items[i].ncomp != arity) {
+                    try self.emit(.target_arity_mismatch, tree.spanOf(arity_node.?), "declared arity {d} for `{s}` disagrees with the host's {d}", .{ arity, name, merged.items[i].ncomp });
+                }
+                continue;
+            }
+            if (merged.items.len == MAX_TARGETS) {
+                try self.emit(.target_decl_invalid, tree.spanOf(idx), "more than {d} targets after declarations", .{MAX_TARGETS});
+                break;
+            }
+            merged.append(self.arena, .{
+                .name = self.arena.dupe(u8, name) catch return error.OutOfMemory,
+                .ncomp = arity,
+                .registry = registry,
+            }) catch return error.OutOfMemory;
+        }
+
+        self.targets = merged.items;
+        self.merged_targets = merged.items;
+    }
+
     fn resolveTarget(self: *Builder, name: []const u8) ?struct { id: u16, ncomp: u8, registry: u8 } {
         for (self.targets, 0..) |tg, i| {
             if (std.mem.eql(u8, tg.name, name)) {
@@ -1220,6 +1328,23 @@ fn sortKeysWithSpans(keys: []TrackTable.Key, spans: []Ast.Span) void {
         keys[j] = k;
         spans[j] = s;
     }
+}
+
+/// Index of the first target named `name`, or null. Linear like
+/// `resolveTarget`; join sizes are small (host tens, cap 1024).
+fn indexOfTarget(targets: []const Target, name: []const u8) ?usize {
+    for (targets, 0..) |tg, i| {
+        if (std.mem.eql(u8, tg.name, name)) return i;
+    }
+    return null;
+}
+
+/// True when `names` already holds `name` — the duplicate-declaration test.
+fn containsName(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
 }
 
 /// True when `idx` is a form whose head text-matches `head`. The data
@@ -1470,6 +1595,91 @@ test "compile diagnostics: unknown target, arity, duplicates, loop, empty" {
     try t.expect(r.findDiag(.target_arity_mismatch) != null);
     try t.expect(r.findDiag(.duplicate_key_at) != null);
     try t.expect(r.findDiag(.track_empty) != null);
+}
+
+// ---- compose-mode (target …) declarations ----
+
+test "compose-mode: a standalone score compiles against an empty host registry" {
+    var r = try compile(t.allocator,
+        \\(target :name glow :arity 1 :registry 0)
+        \\(target :name tint :arity 3 :registry 0)
+        \\(transport :bpm 120)
+        \\(track :target glow
+        \\  (key :at 0b :value 0.2)
+        \\  (key :at 4b :value 0.8))
+        \\(track :target tint
+        \\  (key :at 0b :value [1 0 0])
+        \\  (key :at 4b :value [0 0 1]))
+    , &.{});
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    // The declarations ARE the join now: glow=id0 arity1, tint=id1 arity3.
+    try t.expectEqual(@as(usize, 2), r.targets.len);
+    try t.expectEqualStrings("glow", r.targets[0].name);
+    try t.expectEqual(@as(u8, 1), r.targets[0].ncomp);
+    try t.expectEqualStrings("tint", r.targets[1].name);
+    try t.expectEqual(@as(u8, 3), r.targets[1].ncomp);
+    const table = r.table.?;
+    try t.expectEqual(@as(u16, 0), table.tracks[0].target_id);
+    try t.expectEqual(@as(u16, 1), table.tracks[1].target_id);
+    try t.expectEqual(@as(u8, 3), table.tracks[1].ncomp);
+}
+
+test "compose-mode: declared targets merge with the host registry (host authoritative on a name match)" {
+    // Host: circle-radius(1,reg0), tint(3,reg0), cutoff(1,reg1). The score
+    // restates circle-radius (consistent), tries to move tint to reg 5
+    // (host wins — ignored), and declares a decl-only glow at reg 2.
+    var r = try compile(t.allocator,
+        \\(target :name circle-radius :arity 1 :registry 0)
+        \\(target :name tint :arity 3 :registry 5)
+        \\(target :name glow :arity 1 :registry 2)
+        \\(transport :bpm 120)
+        \\(track :target glow (key :at 0b :value 0.5))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    // Host ids 0..2 preserved; glow appends at id 3 with its declared registry.
+    try t.expectEqual(@as(usize, 4), r.targets.len);
+    try t.expectEqualStrings("tint", r.targets[1].name);
+    try t.expectEqual(@as(u8, 0), r.targets[1].registry); // host wins; :registry 5 ignored
+    try t.expectEqualStrings("glow", r.targets[3].name);
+    try t.expectEqual(@as(u8, 2), r.targets[3].registry);
+    try t.expectEqual(@as(u16, 3), r.table.?.tracks[0].target_id);
+}
+
+test "compose-mode: a declared arity disagreeing with the host is target_arity_mismatch" {
+    var r = try compile(t.allocator,
+        \\(target :name circle-radius :arity 3)
+        \\(transport :bpm 120)
+        \\(track :target circle-radius (key :at 0b :value [1 1 1]))
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.target_arity_mismatch) != null);
+}
+
+test "compose-mode: a duplicate target declaration is target_decl_invalid" {
+    var r = try compile(t.allocator,
+        \\(target :name glow :arity 1)
+        \\(target :name glow :arity 1)
+        \\(transport :bpm 120)
+        \\(track :target glow (key :at 0b :value 1))
+    , &.{});
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.target_decl_invalid) != null);
+}
+
+test "compose-mode: a target declaration missing :name or :arity is target_decl_invalid" {
+    var r = try compile(t.allocator,
+        \\(target :registry 0)
+        \\(transport :bpm 120)
+    , &.{});
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.target_decl_invalid) != null);
 }
 
 test "compile diagnostics: transport missing / seq nesting / weights" {

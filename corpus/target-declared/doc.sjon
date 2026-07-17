@@ -1,0 +1,24 @@
+; Compose-mode standalone score: it DECLARES its own targets with
+; (target …), so it compiles against an EMPTY host registry (times.sjon
+; lists none). The declared join IS the target space — declared-only
+; writes carry ids 0.. in declaration order, across registries and value
+; sources (keys, vec keys, expr). This pins that a score with no host is
+; byte-stable native == wasm.
+(target :name glow :arity 1 :registry 0)
+#| disabled while iterating — a decoy declaration the corpus/wasm parity
+   renderers must BOTH ignore (a phantom would shift tint/level's ids):
+   (target :name halo :arity 1 :registry 0) |#
+(target :name tint :arity 4 :registry 0)
+(target :name level :arity 1 :registry 1)
+
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(track :target glow
+  (key :at 0b :value 0.2)
+  (key :at 4b :value 0.8 :ease out-cubic))
+
+(track :target tint
+  (key :at 0b :value [1 0 0 1])
+  (key :at 4b :value [0 0 1 1]))
+
+(track :target level :expr (* 0.5 beat))

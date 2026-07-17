@@ -123,30 +123,40 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 3 | 10 audio bus · ALL phases ✓ (pitch ride audible, smoke green 2026-07-16) | ☑ |
 | 3 | 03 pattern tracks · ALL phases ✓ (`:pattern` third source; `pattern-basic` golden + wasm parity green 2026-07-17) | ☑ |
 | 4 | 08 knob lift · ALL phases ✓ (⛭ lift chip + live-loop round-trip, pngine `c43164b` 2026-07-17) | ☑ |
-| 4 | 11 P3 · `'EASE'` meta section ✓ (2026-07-17); P4–P5 next | ◐ |
+| 4 | 11 P4 · compose-mode `(target …)` ✓ (2026-07-18); P5 next | ◐ |
 | 4 | 1.0 review | ☐ |
 
 ## What's next
 
-→ **Wave 4 · 11 Phase 3 COMPLETE (2026-07-17); next is Wave 4 · 11 Phase 4** (compose-mode
-`(target …)` declarations — standalone scores), then **11 Phase 5** (diagnostic goldens),
-then the **1.0 review** (the last Wave-4 item).
-Phase 3 landed the `'EASE'` meta section: the deduped easing program table (`programs[0]` =
-linear) + a per-key `ease_ref` array, serialized as fixed extern records after `'SCEN'`
-(append-only, no `META_VERSION` bump, omitted when only linear → linear-only blobs stay
-byte-stable). npm `Pacer#meta` gained `easePrograms` + `MetaKey.easeRef`; both `renderMeta`s
-(native + JS parity) render `(mease …)` / `(measerefs …)`; the three ease goldens
-(`keys-basic`, `ease-composed`, `ease-primitives`) now pin it, 13 linear-only goldens
-byte-identical. `META_CAP` 192→320 KiB for the worst-case section. Gate: `zig build verify`
-(corpus 16/16 native+wasm, npm 52 incl. +3) + audit 29/29. Full detail in 11's Progress log +
-the Decision-log entry below. **Deferred (not blockers):** the studio refresh (copy new wasm +
-re-link glue) waits for the Wave-4 close — nothing consumes `easePrograms` yet (07 still
-samples; dropping that is the "if it's a win" optimization); the npm triple-pin stays 0.1.0
-(accumulate-till-publish).
+→ **Wave 4 · 11 Phase 4 COMPLETE (2026-07-18); next is Wave 4 · 11 Phase 5** (diagnostic
+goldens — pin the untested-by-golden `Compile.Code` variants + spans), then the **1.0 review**
+(the last Wave-4 item — the ONLY board box left after 11 Phase 5).
+Phase 4 landed compose-mode `(target …)` declarations: a score declares its own animatable
+targets so it compiles, corpus-tests, and lints STANDALONE (no host registry). New
+`Builder.buildTargetJoin` **merges** declarations with the host list (runs first in `build()`
+so every `resolveTarget` sees them) — host indices preserved, a name the host also provides is
+host-authoritative (arity must agree, else `target_arity_mismatch`; declared `:registry`
+ignored), a declared-only name is appended under its `:registry`. ONE new `Compile.Code` variant
+`target_decl_invalid` = 30 (duplicate/missing-key/cap; rides in `'PACD'`). **`'PACT'`/`'PACM'`
+UNCHANGED** — declared names never serialize (a consumer reads them from source, like scene
+names); `CompileResult.targets` surfaces the merged join NATIVELY (not on the wire). New corpus
+case `target-declared` (empty host registry, declared `glow`/`tint`/`level` across registries 0/1
+via keys/vec-keys/expr); the runner accepts a 0-target `times.sjon` and names via `result.targets`
+(16 existing goldens byte-identical). npm: `#target` tolerates declared-only ids (`name: null`,
+no throw), `MetaTrack.name`/`WriteEntry.name` → `string | null`, `route.js` `toUniforms` skips
+null-name entries, `registries` load option OPTIONAL (default `[]`). Gate: `zig build verify`
+(corpus 17/17 native+wasm, npm 55 incl. +2) + audit 30/30 + fuzz clean. Full detail in 11's
+Progress log + the Decision-log entry below. **Deferred (not blockers):** the studio refresh
+(copy new wasm + re-link glue) STILL waits for the Wave-4 close — nothing consumes `easePrograms`
+or compose-mode standalone in the studio yet; the npm triple-pin stays 0.1.0
+(accumulate-till-publish; next publish 0.1.0 → 0.2.0 covers `:emit`, scenes, triggers,
+`easePrograms`/`easeRef`, and now `string|null` names + optional `registries`).
 
-Open `plans/11-*.md` next and run **11 Phase 4** (compose-mode `(target …)`) under the same
-TDD + compaction discipline — the first Wave-4 item that adds a diagnostic code
-(`target_decl_invalid`) + touches `'PACT'`-adjacent join logic and the schema.
+Open `plans/11-*.md` next and run **11 Phase 5** (diagnostic goldens) under the same TDD +
+compaction discipline — a `diag-compile` case (or several) pinning the codes with no golden yet
+(`target_arity_mismatch`, `track_source_conflict`, ease-cap/weights/params families, `control_*`,
+and now `target_decl_invalid`) so their numbers + spans are frozen forever. No new wire surface —
+corpus/test coverage only.
 TWO carried cross-repo follow-ups (NOT blockers): `euclid` is NOT in SJON's
 pattern vocabulary yet (SJON-side add), and pacer's time env in hap exprs (the SJON
 outer-`Expr.Env` `queryTree` variant) is a DEFERRED slice — hap exprs bind only
@@ -1120,3 +1130,31 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   (corpus 16/16 native+wasm, npm 52) + audit 29/29 (no new codes). Detail in 11's Progress
   log. Wave-4 remaining: 11 P4 (compose-mode `(target …)`, adds `target_decl_invalid`),
   11 P5 (diagnostic goldens), then the 1.0 review.
+- 2026-07-18 — **11 Phase 4 done — compose-mode `(target …)` declarations.** A score
+  declares its own animatable targets so it compiles/corpus-tests/lints STANDALONE (no
+  host). Durable cross-plan facts. (1) **One new wire-stable `Compile.Code` variant —
+  `target_decl_invalid` = 30** (in `'PACD'`; never renumber): a duplicate declared `:name`,
+  a declaration missing `:name`/`:arity`, or a join overrunning `MAX_TARGETS`(1024). An
+  arity disagreement with the host reuses the existing `target_arity_mismatch`. (2) **The
+  merge model is frozen** (the user chose "host wins, flag arity only"): declarations MERGE
+  with the caller's registries — host indices `0..host_len` preserved, a name the host also
+  provides is host-authoritative (arity must equal the host's; the declared `:registry` is
+  ignored), a declared-only name is appended in document order under its `:registry` (its
+  join index becoming its `target_id`). `Builder.buildTargetJoin` runs FIRST in `build()`,
+  so `:emit`/control/track/trigger joins all see declarations. (3) **`'PACT'` and `'PACM'`
+  did NOT move** — declared targets never touch the inbound blob (they come from the doc)
+  and their NAMES never serialize (house rule, like scene names: a consumer reads them from
+  source). The new native `CompileResult.targets` (the merged join, compile-arena-backed,
+  declared names duped) is the native-side view — it equals the host list verbatim with no
+  declarations, so the 16 existing goldens stayed byte-identical. Any later plan that wants
+  declared names in the editor reads them from source or adds a `'PACM'` section (a fresh
+  4-CC, append-only) — do NOT grow `'PACT'`. (4) **npm now tolerates declared-only ids:**
+  `#target` returns `name: null` (no throw) past the flat host list, `MetaTrack.name` /
+  `WriteEntry.name` are `string | null`, `route.js` `toUniforms` skips a null-name entry
+  (a by-name uniforms map can't key it — route it by `registry`), and the `registries` load
+  option is OPTIONAL (default `[]`). (5) **Corpus runner** accepts a 0-target `times.sjon`
+  and names via `result.targets`; new case `target-declared` (empty host; `glow`/`tint`/
+  `level` across registries 0/1 via keys/vec/expr); the JS parity renderer regex-parses
+  `(target :name …)` from the doc to mirror the merged join. Gate: `zig build verify`
+  (corpus 17/17 native+wasm, npm 55 incl. +2) + audit 30/30 + fuzz clean. Detail in 11's
+  Progress log. **Wave-4 remaining: 11 P5 (diagnostic goldens), then the 1.0 review.**

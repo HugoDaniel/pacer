@@ -8,8 +8,8 @@
 ; `@embedFile`'d via the `pacer_schema` build import — the pngine
 ; precedent (`pngine/schema/pngine.sjon`).
 ;
-; Deliberate omissions, landing with later build-order steps:
-; compose-mode `(target …)` declarations.
+; All score forms are now present: the compose-mode `(target …)`
+; declaration form (below) closed the last roadmapped omission.
 (plugin :name pacer :version "0.1.0"
 
   ; ---- numeric / time value kinds ----
@@ -78,6 +78,23 @@
   (value-kind :name target-name
     :description "Target resolved at load() against the host registries (visual uniforms, audio params)."
     :underlying symbol)
+
+  ; ---- compose-mode target declarations ----
+  ; A (target …) names an animatable property so a score compiles,
+  ; corpus-tests, and lints standalone (no host). At load the declarations
+  ; MERGE with the host registries; :name/:arity are schema-optional so a
+  ; missing one is a pacer target_decl_invalid (with a span), not a bare
+  ; SJON error — the scene/trigger discipline.
+  (value-kind :name target-arity
+    :description "Component count a declared target expects: integer 1..4."
+    :underlying number
+    :numeric (numeric-bounds :min 1 :max 4 :integer true)
+    :unit (unit-shape :reject true))
+  (value-kind :name registry-index
+    :description "Host registry a declared-only target routes to: 0 = visual uniforms, 1 = audio params, …"
+    :underlying number
+    :numeric (numeric-bounds :min 0 :max 255 :integer true)
+    :unit (unit-shape :reject true))
 
   ; ---- scenes ----
   (value-kind :name scene-name
@@ -193,6 +210,15 @@
   ; =====================================================================
   ; Top-level forms
   ; =====================================================================
+
+  (form :name target
+    :description "Compose-mode target declaration: names an animatable property so the score compiles, is corpus-tested, and lints standalone without a host. At load, declared targets MERGE with the host registries — a name the host also provides is host-authoritative (its arity must agree, else target_arity_mismatch; the declared :registry is ignored), and a declared-only name is appended to the join under its :registry. :name and :arity are schema-optional so a missing one — or a duplicate :name — surfaces as target_decl_invalid (with a span)."
+    (key :name name :type target-name :optional true
+      :description "Target identifier, joined by name against the host registries.")
+    (key :name arity :type target-arity :optional true
+      :description "Component count (1..4); must match the host's if the host also provides this name.")
+    (key :name registry :type registry-index :optional true
+      :description "Registry index for a declared-only target; defaults to 0. Ignored for a name the host already provides (host-authoritative)."))
 
   (form :name transport
     :description "Global clock: tempo, meter, duration, end behavior. One per score."

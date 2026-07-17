@@ -388,10 +388,13 @@ fn parseHarness(
         }
     }
 
-    if (targets.items.len == 0 or targets.items.len > Abi.MAX_TARGETS) {
-        try out.print("corpus: {s}: times.sjon: need 1..{d} targets\n", .{ name, Abi.MAX_TARGETS });
+    if (targets.items.len > Abi.MAX_TARGETS) {
+        try out.print("corpus: {s}: times.sjon: at most {d} targets\n", .{ name, Abi.MAX_TARGETS });
         return null;
     }
+    // Zero host targets is legal: a compose-mode score declares its own
+    // via (target …) and compiles standalone; the join then comes wholly
+    // from the score (rendered via result.targets, not this host list).
     if (steps.items.len == 0) {
         try out.print("corpus: {s}: times.sjon: no script forms (need at least one (times …) or directive)\n", .{name});
         return null;
@@ -486,7 +489,7 @@ fn renderCase(
 
     // The meta block reflects the DOCUMENT — render it before any
     // set-bpm/set-control directive mutates evaluator/transport state.
-    try renderMeta(a, w, result, harness, doc);
+    try renderMeta(a, w, result, doc);
 
     var ev = try Eval.Evaluator.init(gpaOf(result), result);
     defer ev.deinit();
@@ -506,9 +509,9 @@ fn renderCase(
             }
             w.print("(eval :t \"{X:0>16}\"", .{bits}) catch return error.OutOfMemory;
             for (entries) |e| {
-                std.debug.assert(e.target_id < harness.targets.len);
+                std.debug.assert(e.target_id < result.targets.len);
                 w.print("\n  (write :target {s} :id {d} :registry {d} :ncomp {d} :value [", .{
-                    harness.targets[e.target_id].name, e.target_id, e.flags, e.ncomp,
+                    result.targets[e.target_id].name, e.target_id, e.flags, e.ncomp,
                 }) catch return error.OutOfMemory;
                 for (e.value, 0..) |lane, c| {
                     const sep = if (c == 0) "" else " ";
@@ -557,10 +560,11 @@ fn renderCase(
 /// `Abi.encodeMeta`, then decode field by field so the packed layout
 /// itself sits under the golden. Floats are hex bit patterns; ticks,
 /// spans and counts decimal. Track target names resolve through the
-/// harness flat list (the same join the wasm host uses); scene names
-/// slice from `doc` (the `'SCEN'` records carry only a user-coord span,
-/// like tracks — the editor has the source).
-fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult, harness: Harness, doc: []const u8) !void {
+/// merged join (`result.targets` — host registries plus compose-mode
+/// declarations, so a standalone score's declared-only targets still
+/// name); scene names slice from `doc` (the `'SCEN'` records carry only a
+/// user-coord span, like tracks — the editor has the source).
+fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult, doc: []const u8) !void {
     const blob = try a.alloc(u8, Abi.metaEncodedLen(result));
     _ = Abi.encodeMeta(result, blob) catch return error.OutOfMemory;
 
@@ -586,7 +590,7 @@ fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult,
         const key_start = std.mem.readInt(u32, rec[8..12], .little);
         const key_len = std.mem.readInt(u32, rec[12..16], .little);
         w.print("\n  (mtrack :id {d} :target {s} :registry {d} :ncomp {d} :source {s} :span [{d} {d}]", .{
-            target_id,                        harness.targets[target_id].name,
+            target_id,                        result.targets[target_id].name,
             rec[2],                           rec[3],
             switch (source) {
                 0 => "keys",
@@ -618,7 +622,7 @@ fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult,
         const id = blob[coff + Abi.META_CONTROL_LEN ..][0..id_len];
         w.print("\n  (mcontrol :index {d} :id {s} :target {s} :registry {d} :ncomp {d} :type {s} :value [", .{
             i, id,
-            if (target_id == Abi.META_NO_TARGET) "none" else harness.targets[target_id].name,
+            if (target_id == Abi.META_NO_TARGET) "none" else result.targets[target_id].name,
             rec[2], rec[3], controlTypeName(rec[4]),
         }) catch return error.OutOfMemory;
         try renderLanes(w, rec[8..24]);

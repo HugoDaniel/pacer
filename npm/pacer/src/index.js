@@ -131,13 +131,15 @@ export class Pacer {
    *
    * @param {BufferSource | WebAssembly.Module} wasmSource
    * @param {string} docText - the SJON score
-   * @param {{ registries: Registries }} opts
+   * @param {{ registries?: Registries }} [opts]
    *   `registries[0]` is conventionally the visual bus (pngine uniform
    *   names), `registries[1]` the audio bus; the index rides into each
-   *   write entry's `registry` field for routing.
+   *   write entry's `registry` field for routing. Optional (defaults to
+   *   `[]`): a compose-mode score declares its own targets with
+   *   `(target …)` and loads standalone against no registries at all.
    * @returns {Promise<Pacer>} loaded driver; check `.ok` / `.diagnostics`.
    */
-  static async load(wasmSource, docText, { registries }) {
+  static async load(wasmSource, docText, { registries = [] } = {}) {
     const instance =
       wasmSource instanceof WebAssembly.Module
         ? await WebAssembly.instantiate(wasmSource, IMPORTS)
@@ -510,23 +512,22 @@ export class Pacer {
   }
 
   /**
-   * Resolve a wasm-emitted `target_id` to its registry entry. The id is
-   * always in range — the wasm only ever emits ids from the 'PACT' table
-   * this driver handed it — but the type system can't see that closed
-   * loop, so the lookup asserts the invariant at the seam rather than
-   * leak `undefined` (or paper over it with `!`) into every call site.
+   * Resolve a wasm-emitted `target_id` to its name. An id in
+   * `0..#flat.length` is a host-registered target, so its name is known.
+   * An id PAST the flat list is a compose-mode declared-only target: the
+   * score declared it with `(target …)` but this host never registered it,
+   * so the host has no name for it (declared names ride in the score
+   * source, not on the wire). Such a write is the host's to ignore or
+   * route by `registry`; we surface `name: null` rather than throw, so a
+   * standalone or partially-hosted score doesn't crash the decode. The
+   * `registry`/`ncomp` for these come from the write/track record itself,
+   * never from this lookup.
    *
    * @param {number} targetId
-   * @returns {import('./types.js').FlatTarget}
+   * @returns {{ name: string | null, ncomp: number, registry: number }}
    */
   #target(targetId) {
-    const entry = this.#flat[targetId];
-    if (entry === undefined) {
-      throw new Error(
-        `pacer: target_id ${targetId} not in the registry table (corrupt wasm output)`,
-      );
-    }
-    return entry;
+    return this.#flat[targetId] ?? { name: null, ncomp: 0, registry: 0 };
   }
 
   /**

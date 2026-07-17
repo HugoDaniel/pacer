@@ -550,3 +550,63 @@ test('applyParams: registry filter and scalar/vector arity', () => {
     ['pan', [0.25, 0.75]],
   ]);
 });
+
+test('compose-mode: a standalone score loads with no registries', async () => {
+  const score = [
+    '(target :name glow :arity 1 :registry 0)',
+    '(target :name hue :arity 3 :registry 1)',
+    '(transport :bpm 120)',
+    '(track :target glow (key :at 0b :value 0.25) (key :at 4b :value 1))',
+    '(track :target hue (key :at 0b :value [1 0 0]) (key :at 4b :value [0 0 1]))',
+  ].join('\n');
+  // registries omitted entirely — the score declares its own targets.
+  const driver = await Pacer.load(wasmModule, score);
+  assert.equal(driver.ok, true);
+
+  // Declared-only targets: ids in declaration order; the host has no name
+  // for them, but registry/ncomp ride from the declaration.
+  const tracks = driver.meta.tracks;
+  assert.equal(tracks[0].targetId, 0);
+  assert.equal(tracks[0].name, null);
+  assert.equal(tracks[0].registry, 0);
+  assert.equal(tracks[0].ncomp, 1);
+  assert.equal(tracks[1].targetId, 1);
+  assert.equal(tracks[1].registry, 1);
+  assert.equal(tracks[1].ncomp, 3);
+
+  // Writes carry the declared-only ids with name null and wire-borne
+  // registry/ncomp — the host routes such a write by registry, not name.
+  const writes = driver.eval(0.0);
+  const glow = writes.find((w) => w.targetId === 0);
+  assert.equal(glow.name, null);
+  assert.equal(glow.registry, 0);
+  assert.equal(glow.value[0], 0.25);
+  const hue = writes.find((w) => w.targetId === 1);
+  assert.equal(hue.name, null);
+  assert.equal(hue.registry, 1);
+  assert.equal(hue.ncomp, 3);
+  assert.deepEqual([...hue.value], [1, 0, 0, 0]);
+});
+
+test('compose-mode: declarations merge with host registries (host wins)', async () => {
+  const score = [
+    '(target :name radius :arity 1 :registry 0)', // matches host — consistent
+    '(target :name spark :arity 1 :registry 0)', // declared-only extra
+    '(transport :bpm 120)',
+    '(track :target radius (key :at 0b :value 0.5))',
+    '(track :target spark (key :at 0b :value 0.9))',
+  ].join('\n');
+  const driver = await Pacer.load(wasmModule, score, {
+    registries: [[{ name: 'radius' }, { name: 'tint', ncomp: 3 }]],
+  });
+  assert.equal(driver.ok, true);
+
+  const writes = driver.eval(0.0);
+  // The host-provided name resolves; the declared-only extra appends past
+  // the host ids (0 radius, 1 tint) at id 2 with a null host name.
+  const radius = writes.find((w) => w.targetId === 0);
+  assert.equal(radius.name, 'radius');
+  const spark = writes.find((w) => w.name === null);
+  assert.equal(spark.targetId, 2);
+  assert.equal(spark.value[0], Math.fround(0.9));
+});

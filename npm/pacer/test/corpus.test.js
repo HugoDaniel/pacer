@@ -89,7 +89,10 @@ function parseHarness(src) {
       throw new Error(`harness: unknown form (${head} …)`);
     }
   }
-  if (flat.length === 0 || steps.length === 0) throw new Error('harness: empty targets or script');
+  // An empty target list is legal: a compose-mode score declares its own
+  // targets with (target …) and compiles standalone (the join then comes
+  // wholly from the score — see parseDeclaredTargets).
+  if (steps.length === 0) throw new Error('harness: empty script');
 
   // Regroup the flat list for Pacer.load; non-decreasing registry
   // indices (enforced by the native runner) keep flatMap's order equal
@@ -114,6 +117,34 @@ function harnessLanes(body) {
   const lanes = [...body.matchAll(/"([0-9A-Fa-f]{8})"/g)].map((x) => Number.parseInt(x[1], 16));
   if (lanes.length !== 4) throw new Error('harness: :value needs four 8-hex lanes');
   return lanes;
+}
+
+/**
+ * The merged target-name join a `target_id` indexes: the host registries'
+ * flat names, then any compose-mode `(target :name X …)` the score
+ * declares that the host did NOT already provide — in document order.
+ * Declared names ride in the score source (never on the wire), so the
+ * native runner reads them from `result.targets` and this walk mirrors it
+ * from the same source, keeping the two golden renderings byte-equal.
+ * For a fully-hosted score (no declarations) this is just the flat names,
+ * so every existing golden is untouched.
+ */
+function mergedTargetNames(doc, flat) {
+  const names = flat.map((t) => t.name);
+  // ONE left-to-right scan so a `(target …)` inside a comment or string is
+  // consumed as that token, never mistaken for a declaration — mirroring
+  // the SJON lexer the native side parses with. Alternation order encodes
+  // lexer precedence: `#| … |#` block comment (non-nesting in SJON v0.1),
+  // `; …` line comment, `"…"` string, then a REAL `(target …)` (the only
+  // alternative with a capture group). matchAll advances past each match,
+  // so a comment/string starting first swallows any `(target …)` within it.
+  const token = /#\|[\s\S]*?\|#|;[^\n]*|"(?:[^"\\]|\\.)*"|\(target\b([^)]*)\)/g;
+  for (const m of doc.matchAll(token)) {
+    if (m[1] === undefined) continue; // a comment or string — not a declaration
+    const nm = m[1].match(/:name\s+([^\s):]+)/);
+    if (nm && !names.includes(nm[1])) names.push(nm[1]);
+  }
+  return names;
 }
 
 /** Uppercase fixed-width hex — Zig's `{X:0>w}`; accepts number or BigInt. */
@@ -154,7 +185,7 @@ function escapeMessage(msg) {
 }
 
 /** Render one eval's raw 'PACW' bytes as canonical `(write …)` lines. */
-function renderWrites(bytes, flat) {
+function renderWrites(bytes, names) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const count = dv.getUint32(8, true);
   let out = '';
@@ -163,7 +194,7 @@ function renderWrites(bytes, flat) {
     const targetId = dv.getUint16(off, true);
     const lanes = [];
     for (let c = 0; c < 4; c++) lanes.push(`"${hex(dv.getUint32(off + 4 + c * 4, true), 8)}"`);
-    out += `\n  (write :target ${flat[targetId].name} :id ${targetId}`;
+    out += `\n  (write :target ${names[targetId]} :id ${targetId}`;
     out += ` :registry ${dv.getUint8(off + 2)} :ncomp ${dv.getUint8(off + 3)}`;
     out += ` :value [${lanes.join(' ')}])`;
   }
@@ -175,12 +206,12 @@ function renderWrites(bytes, flat) {
  * the native runner renders the same text from the encoded 'PACM' blob,
  * so byte-parity gates both the encoder and this decoder.
  */
-function renderMeta(meta) {
+function renderMeta(meta, names) {
   const t = meta.transport;
   let out = `(meta :bpm "${hex(f64Bits(t.bpm), 16)}" :beats-per-bar ${t.beatsPerBar}`;
   if (t.dur !== null) out += ` :dur ${t.dur} :end ${t.end}`;
   for (const tr of meta.tracks) {
-    out += `\n  (mtrack :id ${tr.targetId} :target ${tr.name} :registry ${tr.registry}`;
+    out += `\n  (mtrack :id ${tr.targetId} :target ${names[tr.targetId]} :registry ${tr.registry}`;
     out += ` :ncomp ${tr.ncomp} :source ${tr.source} :span [${tr.span.start} ${tr.span.end}]`;
     for (const k of tr.keys) {
       out += `\n    (mkey :at ${k.at} :value [${laneHex(k.value)}] :span [${k.span.start} ${k.span.end}])`;
@@ -189,7 +220,8 @@ function renderMeta(meta) {
   }
   for (const c of meta.controls) {
     const rail = (r) => (r ? `[${laneHex(r)}]` : 'none');
-    out += `\n  (mcontrol :index ${c.index} :id ${c.id} :target ${c.name ?? 'none'}`;
+    const targetName = c.targetId === null ? 'none' : names[c.targetId];
+    out += `\n  (mcontrol :index ${c.index} :id ${c.id} :target ${targetName}`;
     out += ` :registry ${c.registry} :ncomp ${c.ncomp} :type ${c.type} :value [${laneHex(c.value)}]`;
     out += ` :min ${rail(c.min)} :max ${rail(c.max)} :value-span [${c.valueSpan.start} ${c.valueSpan.end}])`;
   }
@@ -232,8 +264,13 @@ async function renderCase(doc, harness) {
   }
   if (!driver.ok) return out;
 
+  // The join a target_id names: host flat names + compose-mode declared
+  // names (from the score source), mirroring the native runner's
+  // result.targets. For a fully-hosted score this is just the flat names.
+  const names = mergedTargetNames(doc, harness.flat);
+
   // Meta reflects the document — render before any set-bpm nudge.
-  out += renderMeta(driver.meta);
+  out += renderMeta(driver.meta, names);
 
   for (const step of harness.steps) {
     if (step.kind === 'eval') {
@@ -242,7 +279,7 @@ async function renderCase(doc, harness) {
       out +=
         bytes === null
           ? `${head} :out-of-range true)\n`
-          : `${head}${renderWrites(bytes, harness.flat)})\n`;
+          : `${head}${renderWrites(bytes, names)})\n`;
     } else if (step.kind === 'set-control') {
       const ok = driver.setControl(step.index, step.bits.map(f32FromBits));
       const value = step.bits.map((b) => `"${hex(b, 8)}"`).join(' ');
