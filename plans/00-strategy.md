@@ -128,28 +128,30 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 4 · 08 knob-lift — Phase 1 DONE (2026-07-17); next is Phase 2 (the transform).**
-Phase 1 shipped the studio thin client `lib/knobs/inventory.ts` (pngine `35c6cb7`, in
-`~/Dev/pngine`, its own repo + gate): `fetchConstInventory(lsp, wgsl)` opens a throwaway
-virtual WGSL doc under its own URI (never collides with the editor's open regions),
-queries **`wgslender/constInventory`**, closes it, and returns typed `{ uri, consts:
-[{ name, typ, value, liftable, span: { start, end } }] }`; `liftableF32(inv)` selects the
-v1 lift set (liftable scalar `f32` consts). RED-first against the REAL
-`public/wgslender-lsp.wasm` through the same alloc/send/recv framing the LSP worker uses
-(`lsp-wasm-framing.ts`), wrapped in the minimal `{ request, notify }` port the client
-depends on — so the test exercises the true request wire, not a stub. Design note: the
-client depends on that minimal port (not the full `LspTransport`), so Phase 3 wires it by
-binding the editor's existing transport (`request`/`notify`) — no second worker.
-**Carry-forward for Phase 2** (full detail in `plans/08` Progress log): the transform is
-text→text on both docs — `liftConst(doc, score, moduleName, constName) → {doc, score} |
-{refused}`. Given a liftable f32 const it (1) adds/extends a `knobs` uniform buffer in the
-SJON doc + bind-group entries only on affected pipelines, (2) rewrites the WGSL (struct
-field + binding, delete the `const`, keep use sites valid — the riskiest step), (3)
-appends `(control :id … :target … :value <literal> :min/:max guessed)` to the score. The
-hard gate is calling the LSP diagnostics on the emitted WGSL as the red's assertion.
-Phase 0's const inventory (Phase 1 client) supplies name / value / span / liftability to
-drive the rewrite. Open `plans/08-knob-lift.md` Phase 2 next; the board item stays ☐ until
-all phases land.
+→ **Wave 4 · 08 knob-lift — Phase 2 DONE (2026-07-17); next is Phase 3 (UI + live loop).**
+Phase 2 shipped the pure text→text transform `lib/knobs/lift.ts` (pngine `af61d2d`, in
+`~/Dev/pngine`, its own repo + gate): `liftConst({ doc, score, moduleName, constName,
+inventory }) → LiftOk | LiftRefused` rewrites three surfaces — (1) the pngine doc (adds a
+`(buffer :name knobs …)` form + `(entry … :buffer knobs)` on the `@group(0)` bind groups of
+the affected pipelines ONLY), (2) the module WGSL via `sjon-regions` (prepend `struct Knobs`
++ `@group(0)` binding, delete the `const`, rewrite uses to `knobs.<name>`), (3) the score
+(append a pinned `(control …)` with a guessed :min/:max). Module→pipeline→bind-group is
+resolved with `sjon-read`; the doc inserts use a span-aware form scanner applied right-to-left.
+Refuses non-liftable / non-f32 / reserved-id / duplicate-control with a reason (docs
+untouched); an `extend` path appends to an existing `Knobs` struct + buffer without dupes.
+**Design note:** the transform is PURE — the caller (Phase 3 UI, or the test) resolves the
+inventory via Phase 1's `fetchConstInventory` and passes it in; the LSP is used only to
+*validate* the emitted WGSL, not as a dependency. RED-first against the REAL
+`public/wgslender-lsp.wasm`: pull-model `textDocument/diagnostic` on the lifted module,
+`severity === 1` errors ⇒ failed lift — that IS the hard gate (4/4 green; editor suite
+1700/1700, tsc + svelte-check clean, biome clean).
+**Carry-forward for Phase 3** (full detail in `plans/08` Progress log): the WGSL-editor gutter
+action on a liftable const calls `fetchConstInventory` → `liftConst`, dispatches the returned
+`{ doc, score }` through the editor's normal document-edit actions, and surfaces `{ refused }`
+as a non-blocking notice; the new control then round-trips through `pacer.setControl` to a
+changed uniform next frame (the real-wasm integration red). v1 targets `@group(0)` + f32
+scalars only. Open `plans/08-knob-lift.md` Phase 3 next; the board item stays ☐ until it lands
+(Phase 3 is the last).
 TWO carried cross-repo follow-ups (NOT knob-lift blockers): `euclid` is NOT in SJON's
 pattern vocabulary yet (SJON-side add), and pacer's time env in hap exprs (the SJON
 outer-`Expr.Env` `queryTree` variant) is a DEFERRED slice — hap exprs bind only
@@ -1033,3 +1035,22 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   `liftConst(doc, score, moduleName, constName) → {doc, score} | {refused}`, text→text on
   both docs, LSP diagnostics on the emitted WGSL as the red's hard gate. No pacer wire
   surface moved (all studio-side).
+- 2026-07-17 — **08 knob-lift Phase 2 done (pngine `af61d2d`, its own repo).** The pure
+  text→text transform `lib/knobs/lift.ts`: `liftConst({ doc, score, moduleName, constName,
+  inventory }) → LiftOk | LiftRefused` rewrites the pngine doc (add `knobs` buffer + a
+  bind-group entry on the affected pipelines' `@group(0)` groups ONLY), the module WGSL
+  (`sjon-regions` splice: prepend `struct Knobs` + binding, delete the `const`, rewrite uses
+  to `knobs.<name>`), and the score (append a pinned `(control …)`). **Design decision: the
+  transform is PURE — the inventory is passed IN, not fetched.** The plan called it "a pure,
+  golden-testable function"; keeping Phase 1's `fetchConstInventory` in the caller (UI/test)
+  makes `liftConst` deterministic text→text with no async/IO, and the LSP is used only to
+  *validate the output* (the gate), never as a logic dependency. Module→pipeline→bind-group
+  uses `sjon-read`; doc inserts use a span-aware form scanner applied right-to-left; an
+  `extend` path appends to an existing `Knobs` struct/buffer without dupes (the offset-
+  bookkeeping case). Liftability (Phase 0) is the correctness underwriter — a liftable const
+  never feeds a const-context, so rewriting its uses to a uniform read is always valid. RED-
+  first: pull-model `textDocument/diagnostic` on the emitted WGSL, `severity === 1` ⇒ failed
+  lift (the hard gate). Gate: editor tests green (4/4 new, 1700/1700 suite), tsc + svelte-
+  check clean, biome clean. Phase-3 carry-forward: a gutter action wiring `fetchConstInventory`
+  → `liftConst` → the editor's document-edit actions, then a `pacer.setControl` real-wasm
+  round-trip red. No pacer wire surface moved (all studio-side).

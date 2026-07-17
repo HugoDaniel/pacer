@@ -175,3 +175,61 @@ Consume Phase 1's `fetchConstInventory` to get the chosen const's `value`/`span`
 refuse when `!liftable` with a clear reason. The RED calls the LSP diagnostics on the
 emitted WGSL as the assertion that step (2) — struct field + binding, delete the `const`,
 keep every use site valid — survives wgslender validation. See Phase 2 section above.
+
+### Phase 2 — the transform (`liftConst`) — DONE 2026-07-17
+
+**Deliverable — `studio/editor/src/lib/knobs/lift.ts`** (pngine `af61d2d`, its own repo
++ gate). `liftConst({ doc, score, moduleName, constName, inventory }) → LiftOk | LiftRefused`
+— a PURE text→text transform over three surfaces:
+
+1. **the pngine doc** — adds a `(buffer :name knobs :size N :usage [uniform copy-dst])`
+   form (after the last buffer form; N rounds one f32-per-field up to a 16-byte multiple),
+   and inserts `(entry :binding K :buffer knobs)` into the `@group(0)` bind groups of every
+   pipeline that uses the module and ONLY those (`(layout auto)` derives each group's layout
+   from its shader, so an unaffected group must keep its exact binding set). Module→pipeline→
+   bind-group is resolved with `sjon-read.ts` (`read`/`fields`/`isForm`); the text inserts are
+   placed with a span-aware top-level-form scanner (mirrors `sjon-regions`' private paren
+   walk) and applied right-to-left so earlier offsets stay valid.
+2. **the module WGSL** — via `sjon-regions.ts` (`extractSjonShaderRegions`/
+   `replaceSjonShaderRegion`, which splice one module body byte-for-byte). Prepends
+   `struct Knobs { <name>: f32, };` + `@group(0) @binding(K) var<uniform> knobs: Knobs;`
+   (K = next free binding in group 0), deletes the whole `const` line, and rewrites each
+   whole-word use to `knobs.<name>` (a `\b…\b` replace — comment hits are harmless, WGSL has
+   no string literals).
+3. **the pacer score** — appends `(control :id <name> :type slider :target <name>
+   :min <lo> :max <hi> :value <literal>)`, the widget range guessed from the value
+   ([0,1] for a unit value, else 0..2×).
+
+**Refusals** (both documents untouched, `{ refused: <reason> }`): const absent, `!liftable`
+(the array-size / const-context case — Phase 0's analysis is the source of truth), non-f32
+(v1 scope), `:id` collides with a reserved time name (`t tick beat bar cycle phase bpm dur`),
+or the score already pins that control id. **Extend path:** when the module already declares
+`struct Knobs`, the field is appended to it (no second struct/binding), the existing knobs
+buffer's `:size` grows only if the field count crosses a 16-byte boundary, and no duplicate
+bind-group entry is added — so lifting a second const into an already-lifted doc is a clean
+superset (the "offset bookkeeping" case).
+
+**Why pure (inventory passed in, not fetched):** the plan calls the transform "a pure,
+golden-testable function". Keeping the LSP fetch OUT of `liftConst` (the caller — Phase 3's
+UI, or the test — resolves the inventory and hands it in) makes the transform deterministic
+text→text with no async/IO; the LSP is used only to *validate the output*, which is the gate,
+not a dependency of the logic. `LiftResult` is a `LiftOk | LiftRefused` union with `?: never`
+witnesses so a consumer can branch on `res.refused` without a type guard.
+
+**RED→GREEN (TDD):** wrote `lift.test.js` first (RED: `ERR_MODULE_NOT_FOUND` for `./lift.ts`).
+It drives the real `public/wgslender-lsp.wasm` twice — Phase 1's `fetchConstInventory` for the
+const spans, then pull-model `textDocument/diagnostic` on the *emitted* module WGSL, filtered
+to `severity === 1` (errors) — that diagnostic assertion IS the hard gate. Four cases: the
+fixture validates clean pre-lift (isolates fixture bugs from transform bugs); a full lift
+(valid WGSL + knobs buffer + `bgC1` gains the entry while the unrelated `bg2` does not + the
+control appended); refusal of an array-size const; and the extend path (lift a second const
+into the first lift's output → one struct with both fields, one binding, one buffer, one
+entry, both controls). **Gate: editor `npm test` green (4/4 new; 1700/1700 suite), `tsc` +
+`svelte-check` clean (0 errors), biome clean.**
+
+**Carry-forward for Phase 3** (UI + live loop): the gutter action on a liftable const calls
+`fetchConstInventory` (Phase 1) then `liftConst` (this phase), and dispatches the returned
+`{ doc, score }` through the editor's normal document-edit actions; surface `{ refused }` as a
+non-blocking notice. The new control then round-trips through `pacer.setControl` to a changed
+uniform next frame (the real-wasm integration red). `liftConst` targets `@group(0)` and f32
+scalars only — vec/int lifts and non-zero groups are the first v2 asks.
