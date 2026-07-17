@@ -128,32 +128,42 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 ## What's next
 
-→ **Wave 3 CLOSED + studio refresh DONE — next is Wave 4 · 08 knob-lift.** Open
-`plans/08-knob-lift.md` and run it (the wgslender/studio bridge — most cross-repo,
-least urgent). 03 pattern-tracks is DONE (P1–P4, 2026-07-17): `:pattern` is the third
-track source end to end — compile dry-run + frame-eval point-sample
-(`PatternTrack.sampleAt`, 1 MiB fixed scratch, omissions in the SHARED
-`expr_failures` probe), and the `pattern-basic` golden pins fastcat + a silence gap +
-slowcat alternation across a bar wrap + a per-cycle `rand01` — **wasm parity green**
-(SJON's pattern engine is byte-identical native vs wasm32).
-**Wave 3 studio refresh DONE (2026-07-17)** — rebuilt `zig build wasm` (490710 B) +
-synced via `npm run build:wasm-copy`; editor real-wasm suite green (1693/1693,
-typecheck 0). NON-OBVIOUS finding, now a pinned refresh rule: the wasm refreshes
-in-place (the pnpm store hard-links it, `build:wasm-copy` rewrites the same inode)
-but the **JS glue does NOT** — an Edit gives the source a new inode and breaks the
-hard-link, so the studio's `node_modules/pacer/src/index.js` had a STALE
-`TRACK_SOURCES = ['keys','expr','trigger']` and mislabeled pattern tracks as `keys`.
-Fixed with `pnpm install --prefer-offline` in `studio/` (re-links the `file:` dep,
-lockfile untouched). **Every future refresh that touches the npm surface must re-link
-the glue, not just the wasm.** Template-demo decision: NO pattern lane on the
-demoscene (needs a spare uniform + shader read + buffer surgery for no visual win);
-the right-sized proof is `pattern-source.test.js` (pngine `c23de08`) — a real-wasm
-smoke that pins `source === 'pattern'` + the fastcat/gap/wrap writes through the
-production glue, and guards against the glue re-staling. TWO carried cross-repo
-follow-ups (NOT Wave 4 blockers): `euclid` is NOT in SJON's pattern vocabulary yet
-(SJON-side add), and pacer's time env in hap exprs (the SJON outer-`Expr.Env`
-`queryTree` variant) is a DEFERRED slice — hap exprs bind only pattern-locals
-`cycle`/`tick`/`seed` today.
+→ **Wave 4 · 08 knob-lift — Phase 0 DONE (2026-07-17); next is Phase 1 (studio
+access).** Phase 0 shipped the wgslender side: `Reflect.constInventory` + a dedicated
+**`wgslender/constInventory`** WASM LSP request (wgslender `8c6a49e`, in `~/Dev/wgslender`,
+its own repo + gate). Module-scope `const`s surface with name / scalar type / initializer
+text / decl-span + a `liftable` flag — `false` when the const is referenced from a
+const-required position (array element count, `@workgroup_size`, `const_assert`, a
+symbol-bearing attribute arg, an `override` initializer, or transitively another
+const-required const). **Exposure decision:** a dedicated request, NOT an extension of
+`wgslender/reflect` — reflect's JSON is cross-checked vs the reference `wgsl_reflect`
+library and consumed by npm, so a knob-lift `liftable` flag there is a layering leak +
+wire churn; the dedicated request keeps the gate at `zig build test`, isolated.
+**Carry-forward for Phase 1** (full detail in `plans/08` Progress log): request
+`wgslender/constInventory`, params `{ textDocument: { uri } }`, result `{ uri, consts:
+[{ name, typ, value, liftable, span: { start, end } }] }` (`span` = byte range into the
+source; `value`/`typ` verbatim source text, `typ` empty when the annotation was omitted).
+The studio's `lib/knobs/inventory.ts` sends this through the wgslender LSP worker and
+filters to `typ == "f32" && liftable` for the v1 lift. Function bodies are unscanned in
+v1 — Phase 2's transform re-validates the emitted WGSL (the hard gate). Open
+`plans/08-knob-lift.md` Phase 1 next; the board item stays ☐ until all phases land.
+TWO carried cross-repo follow-ups (NOT knob-lift blockers): `euclid` is NOT in SJON's
+pattern vocabulary yet (SJON-side add), and pacer's time env in hap exprs (the SJON
+outer-`Expr.Env` `queryTree` variant) is a DEFERRED slice — hap exprs bind only
+pattern-locals `cycle`/`tick`/`seed` today.
+
+Prior context — **Wave 3 CLOSED + studio refresh DONE (2026-07-17).** 03 pattern-tracks
+(P1–P4): `:pattern` the third track source end to end (`PatternTrack.sampleAt`, 1 MiB
+scratch, omissions in the shared `expr_failures` probe); `pattern-basic` golden pins
+fastcat + silence gap + slowcat across a bar wrap + per-cycle `rand01`, wasm parity
+green. Studio refresh rebuilt `zig build wasm` (490710 B) + synced via `npm run
+build:wasm-copy`, editor suite green (1693/1693). PINNED refresh rule: the wasm refreshes
+in-place (pnpm store hard-links it, `build:wasm-copy` rewrites the same inode) but the
+**JS glue does NOT** — an Edit gives the source a new inode and breaks the hard-link, so
+the studio glue kept a STALE `TRACK_SOURCES` and mislabeled pattern tracks as `keys`;
+fixed with `pnpm install --prefer-offline` in `studio/`. **Every refresh touching the npm
+surface must re-link the glue, not just the wasm.** Template-demo decision: NO pattern
+lane on the demoscene; the proof/guard is `pattern-source.test.js` (pngine `c23de08`).
 Context from plan 10 (CLOSED
 2026-07-16, all phases, smoke audible — pngine `7b54680` `0f3c2a6` `712ab92`
 `3d83e82` `b31a896`): registry 1 is live end to end; the demoscene ships a
@@ -985,3 +995,23 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   stepped writes incl. the omitted silence slot and the wrap alternation — the studio
   side of the corpus `pattern-basic` case. Staged ONLY that new file (the user's
   concurrent pngine work left untouched).
+- 2026-07-17 — **08 knob-lift Phase 0 done (wgslender `8c6a49e`, its own repo).** Built
+  the wgslender side of the bridge: `Reflect.constInventory(arena, module) → []ConstInfo`
+  (name / scalar type / initializer text / decl-span + a `liftable` flag) exposed as a
+  new **`wgslender/constInventory`** WASM-LSP request via `Handler.runConstInventory` +
+  `appendConstInventoryResult`. **Exposure decision (carry-forward for every later 08
+  phase): a dedicated request, NOT an extension of `wgslender/reflect`** — reflect's JSON
+  is cross-checked against the reference `wgsl_reflect` library and consumed by npm, so a
+  knob-lift-specific `liftable` flag there is a layering leak plus wire/npm churn; the
+  dedicated request keeps the gate at `zig build test`, isolated (native `NativeServer`
+  not wired — the studio runs the wasm LSP, which doesn't route `wgslender/reflect`
+  either). **Liftability** = a two-step name scan: (1) collect names in const-required
+  positions (array element counts across all type annotations, `@workgroup_size`,
+  `const_assert`, symbol-bearing attribute args, `override` initializers), (2) fixpoint
+  backward through const→const initializer refs; `liftable = name ∉ set`. Name-based is
+  exact because every scanned position is module-scope. **Function bodies are unscanned in
+  v1** — the Phase-2 transform re-validates the emitted WGSL (the hard gate), so under-
+  refusal there is caught downstream. Phase-1 carry-forward: request
+  `wgslender/constInventory`, params `{ textDocument: { uri } }`, result `{ uri, consts:
+  [{ name, typ, value, liftable, span: { start, end } }] }`; the studio filters
+  `typ == "f32" && liftable` for v1. No pacer wire surface moved (all wgslender-side).

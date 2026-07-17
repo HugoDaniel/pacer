@@ -77,3 +77,60 @@ Green: gutter affordance ("lift to knob"), wired end to end.
 Gate: editor tests + manual smoke (tune a lifted knob while playing).
 
 ## Progress log
+
+### Phase 0 — API spike (const inventory + exposure) — DONE 2026-07-17
+
+**Exposure decision: a dedicated `wgslender/constInventory` WASM LSP request**, NOT
+an extension of the existing `wgslender/reflect`. Reflect's JSON is cross-checked
+against the reference `wgsl_reflect` library (`tests/cross_check_wgsl_reflect.mjs`)
+and consumed by npm; bolting a knob-lift-specific `liftable` flag onto it would be a
+layering leak plus wire churn (npm reflect types/goldens). A dedicated request keeps
+the const inventory isolated — the gate stays `zig build test`, no reflect-wire or npm
+churn — and gives the studio a purpose-named request. (Native `NativeServer` is NOT
+wired: it doesn't handle `wgslender/reflect` either; the studio runs the **wasm** LSP.)
+
+**Core — `Reflect.constInventory(arena, module) → []ConstInfo`** (`src/Reflect.zig`),
+mirroring the override-collection pass. `ConstInfo { name, typ, value, decl_span,
+liftable }`: name/scalar-type/initializer-text/full-decl-span verbatim from source
+(same span/renderExprText fallback the override pass uses), plus the liftability call.
+**Liftability is two-step:** (1) scan every const-required position — array element
+counts across *all* type annotations (var/let/const/alias/struct-member/fn-param/
+return, recursing composite + `call` template types), `@workgroup_size` args,
+`const_assert` exprs, symbol-bearing attribute args (filtered by
+`Ast.attributeArgsResolveSymbols`, so `@builtin`/`@interpolate`/`@diagnostic` keyword
+args are skipped), and `override` initializers — collecting referenced **names**; (2)
+fixpoint propagating const-required-ness *backward* through const→const initializer
+refs (a const feeding a const-required const is itself const-required). `liftable =
+name ∉ const-required set`. Name-based (not `SymbolIndex`) is exact here because every
+scanned position is module-scope — no shadowing. **Function bodies are not scanned in
+v1** (integer const-contexts there — e.g. a body-local `array<f32,N>(…)` constructor —
+are rare, and Phase 2's transform re-validates the emitted WGSL via wgslender
+diagnostics, which is the hard gate). Note: for the v1 f32-only lift the array-size /
+workgroup_size detectors mostly matter for correctly reporting *integer* consts
+non-liftable; an f32 const goes non-liftable only via `const_assert` or a
+const-required chain.
+
+**Exposure wiring:** `Handler.runConstInventory` (reuses the cached analysis module,
+mirrors `runReflect`) → `ConstInventoryCommandResult { uri, consts }` →
+`wire.workspace_commands.appendConstInventoryResult` renders
+`{"uri","consts":[{name,typ,value,liftable,span:{start,end}}]}` straight from the
+slice (no pre-rendered JSON to embed, unlike reflect). Method `wgslender/constInventory`
+added to the `lsp/wasm.zig` dispatch table + a `handleConstInventory` adapter in
+`lsp/wasm/workspace_commands.zig`; `Handler` re-exports `runConstInventory` +
+`ConstInventoryCommandResult`.
+
+**RED→GREEN (TDD):** wrote `tests/const_inventory_test.zig` first (RED: symbol absent) —
+3 core tests: `array<f32, GRID_N>` → GRID_N non-liftable + TUN_SPEED liftable with
+`typ`/`value`/`decl_span`; `@workgroup_size`+`const_assert` pin two non-liftable, a lone
+f32 liftable; a `BASE → N → array size` chain proves backward transitivity. Then
+`tests/const_inventory_lsp_test.zig` (2 handler round-trip tests: happy path +
+`DocumentNotFound`) and the `appendConstInventoryResult` serializer test in
+`lsp/wire/workspace_commands.zig`. **Gate: `zig build test` green; `zig build lsp-wasm`
++ `zig build lsp` compile.**
+
+**Carry-forward for Phase 1** (studio access): request **`wgslender/constInventory`**,
+params `{ textDocument: { uri } }`, result `{ uri, consts: [{ name, typ, value,
+liftable, span: { start, end } }] }` (`span` is a byte range into the document source;
+`value`/`typ` are verbatim source text, `typ` empty when the const omitted its
+annotation). The studio's `lib/knobs/inventory.ts` sends this through the wgslender LSP
+worker and filters to `typ == "f32" && liftable` for the v1 lift.
