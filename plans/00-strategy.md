@@ -124,18 +124,23 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 3 | 03 pattern tracks · ALL phases ✓ (`:pattern` third source; `pattern-basic` golden + wasm parity green 2026-07-17) | ☑ |
 | 4 | 08 knob lift · ALL phases ✓ (⛭ lift chip + live-loop round-trip, pngine `c43164b` 2026-07-17) | ☑ |
 | 4 | 11 hardening · P1–P5 ✓ (P5 diagnostic goldens 2026-07-18) → plan 11 DONE | ☑ |
-| 4 | 1.0 review | ☐ |
+| 4 | 1.0 review · DONE 2026-07-18 (audit clean, 0.2.0 cut, studio refreshed) | ☑ |
 
 ## What's next
 
-→ **Wave 4 · plan 11 COMPLETE (all five phases; P5 diagnostic goldens 2026-07-18). The
-ONLY remaining Wave-4 board box is the 1.0 / version review** — and it is the last item in
-the whole rollout. Do that next: audit the wire-stable surfaces (the four `'PAC*'` blobs +
-their TLV sections, `Compile.Code`, `Easing.Op`, the `drv_*` exports) now that four waves of
-goldens have hardened them, decide what a 1.0 tag needs beyond this, and settle the npm
-triple-pin bump + first publish (0.1.0 → 0.2.0) that has been accumulating since Wave 0.
-Also fold in the **deferred studio refresh** (below) at the same time — the Wave-4 close is
-its trigger.
+→ **THE ROLLOUT IS COMPLETE — every board box is ticked (1.0 review closed 2026-07-18).**
+The review audited all wire-stable surfaces (four `'PAC*'` blobs byte-exact vs the JS glue,
+18 `drv_*` exports in lockstep, `Compile.Code` fully documented + comptime-ordinal-pinned,
+`Easing.Op` mirrored), fixed three TDD-red behavioral edges (`drv_evalTicks` tick-ceiling
+gate; JS zero-length-diag guard; JS registry-u8 validation), ran a byte-neutral mastery
+pass (fmt restored, `evalTicks` split, asserts/docs, build.zig hardening), bumped the
+triple-pin to **0.2.0**, and refreshed the studio (editor 1704/1704 on the fresh wasm).
+Full detail in 11's progress log. **What a 1.0 tag still needs** (decided list, in 11's
+log): eval-time + target-join fuzz harnesses, the post-1.0 wire policy statement, a
+repo-root LICENSE decision, and the actual 0.2.0 publish to the Gitea registry
+(`npm publish` in `npm/pacer` — the user's action, `prepublishOnly` runs the whole gate).
+Carried cross-repo follow-ups (unchanged, non-blocking): SJON-side `euclid`; the
+outer-`Expr.Env` `queryTree` time-env slice for hap exprs.
 
 Phase 5 landed diagnostic goldens: four `diag-*` corpus cases (`diag-controls`, `diag-ease`,
 `diag-track-source`, `diag-target-decl`) that FREEZE 11 previously-golden-untested `Compile.Code`
@@ -1179,3 +1184,19 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   `zig build verify` (corpus **21/21** native+wasm, npm **59** incl. +4) + audit 30/30. **Only
   the 1.0 / version review remains in Wave 4 — the last item in the whole rollout.** Fold the
   deferred studio refresh + the npm triple-pin bump (0.1.0 → 0.2.0) into it.
+- 2026-07-18 — **1.0 review done → WAVE 4 CLOSED, THE WHOLE ROLLOUT COMPLETE.** Surfaces
+  audited clean (four `'PAC*'` blobs byte-exact native==wasm==JS, 18 `drv_*` exports in
+  lockstep, `Compile.Code` 30/30 documented + comptime pins at ordinals 0/29, `Easing.Op`
+  mirrored exactly). Durable facts: (1) `drv_evalTicks` now GATES the 2^53 tick ceiling
+  (returns 0) — the header always contracted it, the code now enforces it; extreme i64
+  ticks were UB via trigger `@divFloor`. (2) The npm glue validates `registry ≤ 255` at
+  'PACT' encode and tolerates an empty diag zone (OOM status reports correctly). (3) The
+  triple-pin is **0.2.0** (lockstep test green); `drv_abiVersion` + all blob `VERSION`s
+  stay 1 — post-1.0 policy decision recorded: any bump there is a breaking change. (4)
+  Style ruling: the constellation's enforced bar is `zig fmt --check` (now clean), NOT a
+  100-column limit (SJON precedent). (5) SJON `Span` allows zero-width parts — never
+  assert strict `begin < end` on hap timing. (6) `zig build verify` now runs the corpus
+  through its own argless run step — `verify -- --update` can no longer mutate goldens
+  mid-gate. 1.0-tag remainder (in 11's log): two fuzz harnesses, wire policy statement,
+  root LICENSE, the 0.2.0 `npm publish` (user's action). Gate at close: verify green
+  (corpus 21/21 both halves, npm 62), audit 30/30, fuzz green, editor 1704/1704.

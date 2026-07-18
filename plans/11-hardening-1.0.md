@@ -300,3 +300,59 @@ Gate: `zig build verify`.
     parity **21/21** + npm **59** incl. +4 for the new cases) + `audit-diagnostics`
     **30/30** (no new codes — data-only phase). No npm lint/typecheck (no JS/TS change).
     **Wave 4's 11-plan work is complete; only the 1.0 review remains on the board.**
+
+- **1.0 / version review (done, 2026-07-18) → WAVE 4 CLOSED, rollout complete.** The last
+  board item: a full audit of the wire-stable surfaces + a mastery-guideline pass over the
+  whole tree (`~/llm/mastery/zig/**` as the standard), the npm triple-pin bump, and the
+  deferred studio refresh.
+  - **Surface audit (4 parallel deep reads: Compile / Eval+track-sources / runner+fuzz+build /
+    npm glue):** all four `'PAC*'` blobs verified byte-exact against the JS glue — every
+    constant, offset, and enum order (`EASE_OPS` = `Easing.Op`, `CONTROL_TYPES`,
+    `TRACK_SOURCES`), TLV skip-by-length on both sides; all 18 `drv_*` exports in exact
+    lockstep with `PacerExports`, every one exercised. No missing/orphan/mismatched entry.
+    Verdict: **1.0-ready in substance on every module; no high-severity finding.**
+  - **Behavioral fixes (TDD, 3 reds first in `driver.test.js`, 62 npm tests total now):**
+    (1) `drv_evalTicks` now GATES `|tick| > MAX_TICK` → 0 — the header contracted this but
+    the code never enforced it (extreme i64 + a trigger track could overflow `@divFloor`,
+    UB in ReleaseSmall); `evalTicks` docs+asserts the precondition. (2) JS `#readDiags`
+    guards a zero-length diag zone so a wasm OOM reports `load failed with status 3`, not
+    a bare RangeError. (3) JS `encodeTargets` rejects `registry > 255` (u8 wire wrap →
+    mislabeled buses).
+  - **Mastery pass (byte-neutral, corpus 21/21 unchanged):** `zig fmt` restored on
+    Compile/corpus_runner (was failing `--check`); `evalTicks` split (156 → ~95 lines,
+    `.expr`/`.pattern` arms → asserted `Evaluator` methods); all 30 `Compile.Code`
+    variants documented + comptime ordinal pins (0 and 29); host-contract asserts on
+    `compile` (`targets.len ≤ MAX_TARGETS`) + size precondition documented; ExprTrack
+    comptime ties (`reserved_names.len == MAX_BINDINGS`); `Abi.diagsEncodedLen` shared
+    with the runner (no silent golden truncation); runner `controlTypeName` →
+    `unreachable` (encoder-invariant discipline); build.zig: verify gets its own corpus
+    run step (`verify -- --update` can no longer regen goldens mid-parity-walk),
+    `setCwd` on the audit script, comptime zig-version check. Doc drifts fixed:
+    wasm_entry zone diagram (192→320 KiB), `TrackTable.keys` stale field name,
+    CLAUDE.md's error-set claim (8 sets, three-way split), stale Phase-1/3 comments.
+  - **Guideline deviations DECIDED (constellation consistency wins):** no 100-column
+    hard limit (SJON, the style authority, has 1355 such lines and is fmt-clean — the
+    enforced bar is `zig fmt --check`); SCREAMING cap names stay. One agent
+    recommendation REJECTED on verification: asserting `part.begin < part.end` in
+    `sampleAt` — SJON's Span invariant is `begin <= end` and zero-width parts are
+    legitimate engine output (asserted `<=` instead).
+  - **Triple-pin bumped 0.1.0 → 0.2.0** (`package.json` via `npm version` + lockfile,
+    `build.zig.zon`, `src/root.zig`) — lockstep test green. First publish covers `:emit`,
+    scenes, triggers, `easePrograms`/`easeRef`, patterns, compose-mode targets, the
+    evalTicks gate. `drv_abiVersion` and blob VERSIONs stay 1 (append-only growth only).
+  - **Studio refresh done:** `zig build wasm` (495353 B) + `build:wasm-copy` (hard-link
+    intact), `pnpm install --prefer-offline` in `studio/editor` (+3, glue at 0.2.0),
+    `sync:wasm` (symlinks live-follow), editor suite **1704/1704** green. pngine tree
+    untouched (no lockfile churn; wasm assets are symlinks).
+  - **What a 1.0 tag still needs (the review's decided list):** (1) fuzz the two seams
+    under the determinism claim — Smith-drawn eval times (±ceiling, loop wrap, NaN/inf
+    seconds) and fuzzed target joins (arity conflicts, compose-mode merge); (2) a stated
+    post-1.0 wire policy (any `VERSION`/`drv_abiVersion` bump = major); (3) a repo-root
+    LICENSE decision (only `npm/pacer` carries CC0 today); (4) the actual 0.2.0 publish
+    to the Gitea registry (`npm publish` — full gate wired via `prepublishOnly`).
+    Post-1.0 nice-to-haves (recorded, non-blocking): `emitValue` comptime name→index
+    map, `buildTrackForm` split, local-abbreviation renames, `evalTicks` fractional-
+    number JSDoc.
+  - **Gate green (final):** `zig build verify` (corpus 21/21 native + wasm parity, npm
+    **62** incl. +3) + `audit-diagnostics` 30/30 + `zig build fuzz` + biome + tsc, at
+    version 0.2.0.
