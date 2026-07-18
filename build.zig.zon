@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0x507a7d3fd872437b,
     .name = .pacer,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         // SJON: schema-driven S-expression format + validator + Expr +

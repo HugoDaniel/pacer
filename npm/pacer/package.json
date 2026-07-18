@@ -1,6 +1,6 @@
 {
   "name": "pacer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "JS glue for pacer.wasm — deterministic animation driver conducted by an SJON score",
   "keywords": [
