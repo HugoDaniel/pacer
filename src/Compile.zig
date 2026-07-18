@@ -84,6 +84,8 @@ pub const Validated = struct {
     prefix_len: usize,
     gpa: Allocator,
 
+    /// Free the combined text and the SJON result (the one place the
+    /// caller's GPA is retained — to free `combined`, SJON-style).
     pub fn deinit(self: *Validated) void {
         self.result.deinit();
         self.gpa.free(self.combined);
@@ -107,7 +109,10 @@ pub const Validated = struct {
 
 /// Validate a pacer score. Always returns a `Validated` on success of
 /// the machinery itself — check `.hasErrors()` / `.result.diagnostics`
-/// for the score's actual verdict. O(manifest + source).
+/// for the score's actual verdict. O(manifest + source). Host contract
+/// (asserted, not diagnosed): `source` plus the prepended manifest must
+/// fit `sjon.Binary.MAX_FILE_SIZE` — the wasm host gates this via
+/// `drv_docCap`; a native host sizes its own input.
 pub fn validate(gpa: Allocator, source: [:0]const u8) Error!Validated {
     std.debug.assert(source.len + manifest_src.len + 2 <= sjon.Binary.MAX_FILE_SIZE);
     const combined = std.fmt.allocPrintSentinel(gpa, "{s}\n\n{s}", .{ manifest_src, source }, 0) catch
@@ -139,46 +144,86 @@ pub fn findCode(v: *const Validated, code: Ast.Diagnostic.Code) ?sjon.Host.HostD
 /// `registry` is the ordered-registry index (0 = visual, 1 = audio, …)
 /// and rides into `Writes.Entry.flags` for JS-side routing.
 pub const Target = struct {
+    /// Borrowed from the caller for the duration of `compile` (the wasm
+    /// path aliases the 'PACT' blob; the table stores ids, not names).
     name: []const u8,
     ncomp: u8,
     registry: u8 = 0,
 };
 
 /// Pacer load-diagnostic codes. Wire-stable from day one: append-only,
-/// never reorder, never rename (they will cross the WASM boundary and
-/// land in the driver corpus).
+/// never reorder, never rename (they cross the WASM boundary in 'PACD'
+/// and the golden corpus pins them as `@intFromEnum` ordinals).
 pub const Code = enum(u16) {
+    /// `:target` names no target in the merged host+declared join.
     unknown_target,
+    /// A value's component count disagrees with its target's arity.
     target_arity_mismatch,
+    /// Two keys of one track land on the same grid tick.
     duplicate_key_at,
+    /// More than `TrackTable.MAX_TRACKS` tracks.
     track_cap_exceeded,
+    /// More than `TrackTable.MAX_KEYS` keys across all tracks.
     key_cap_exceeded,
+    /// More than `TrackTable.MAX_EASE_PROGRAMS` distinct programs.
     ease_cap_exceeded,
+    /// A `(seq …)` with more than `Easing.MAX_STAGES` stages.
     ease_stages_exceeded,
+    /// A flattened `(chain …)` with more than `Easing.MAX_OPS` ops.
     ease_ops_exceeded,
+    /// Non-positive `:t`, a cancelled `Σ:v`, or a collapsed boundary.
     ease_weights_invalid,
+    /// A primitive parameter outside its domain (bezier x, spring z, …).
     ease_params_invalid,
+    /// An ease form nested beyond the flat seq/chain model.
     ease_nesting_unsupported,
+    /// A position overflows the portable tick grid (2^53 ceiling).
     tick_overflow,
+    /// The score has no `(transport …)` form.
     transport_missing,
+    /// More than one `(transport …)` form.
     transport_duplicate,
+    /// A malformed transport field (bad `:emit` name, non-positive `:dur`, …).
     transport_invalid,
+    /// `:end loop` without a `:dur` to wrap on.
     loop_requires_dur,
+    /// A track with no value source at all (no keys, `:expr`, `:pattern`).
     track_empty,
+    /// A track with more than one source (keys / `:expr` / `:pattern`).
     track_source_conflict,
+    /// The `:expr` t=0 dry-run raised (unknown binding, div by zero, …).
     expr_eval_failed,
+    /// The `:expr` dry-run value violates the shape/finiteness contract.
     expr_result_invalid,
+    /// Two `(control …)` pins share an `:id`.
     control_duplicate_id,
+    /// More than `TrackTable.MAX_CONTROLS` controls.
     control_cap_exceeded,
+    /// A malformed control (reserved `:id`, `:min`/`:max` arity, …).
     control_invalid,
+    /// A malformed `(scene …)` (missing `:name`/`:at`/`:dur`, …).
     scene_invalid,
+    /// Two scenes share a `:name`.
     scene_duplicate_name,
+    /// More than `TrackTable.MAX_SCENES` scenes.
     scene_cap_exceeded,
+    /// A malformed `(trigger …)` schedule (no events, unsorted `:at`, …).
     trigger_invalid,
+    /// The `:pattern` cycle dry-run query raised.
     pattern_eval_failed,
+    /// A pattern payload violates the numeric result contract.
     pattern_result_invalid,
+    /// A malformed compose-mode `(target …)` declaration (missing
+    /// name/arity, duplicate name, arity conflict with the host, cap).
     target_decl_invalid,
 };
+
+comptime {
+    // The corpus prints codes as ordinals; pin both ends so an
+    // accidental insertion breaks the build, not the goldens.
+    std.debug.assert(@intFromEnum(Code.unknown_target) == 0);
+    std.debug.assert(@intFromEnum(Code.target_decl_invalid) == 29);
+}
 
 /// One pacer load diagnostic. `span` indexes the combined text (same
 /// coordinate space as SJON's own diagnostics — map through
@@ -186,6 +231,7 @@ pub const Code = enum(u16) {
 pub const Diagnostic = struct {
     code: Code,
     span: Ast.Span,
+    /// Compile-arena-backed; lives exactly as long as the result.
     message: []const u8,
 };
 
@@ -224,6 +270,8 @@ pub const CompileResult = struct {
     /// survives the by-value move of this struct.
     eval_schema: sjon.Schema.Schema,
 
+    /// Tear down everything the compile owns (table, arena, validated
+    /// tree). Any `Eval.Evaluator` borrowing this result goes first.
     pub fn deinit(self: *CompileResult) void {
         if (self.table) |*tb| tb.deinit();
         self.arena.deinit();
@@ -231,6 +279,8 @@ pub const CompileResult = struct {
         self.* = undefined;
     }
 
+    /// True when the score compiled clean — `table` is live and the
+    /// diagnostics (both sources) are empty.
     pub fn ok(self: *const CompileResult) bool {
         return self.table != null;
     }
@@ -259,8 +309,15 @@ pub const CompileResult = struct {
 };
 
 /// Compile a score against the host registries. The frame path needs
-/// nothing else afterwards — `CompileResult.table` is self-contained.
+/// nothing beyond the returned result — but the result is borrowed
+/// WHOLE: expr/pattern tracks re-read its tree + schema every frame, so
+/// only keyframe-only scores could live off `table` alone (see
+/// `CompileResult`). Host contract, asserted not diagnosed:
+/// `source.len` within `sjon.Binary.MAX_FILE_SIZE` less the manifest
+/// (the wasm host gates via `drv_docCap`), and `targets.len` within
+/// `MAX_TARGETS` (the 'PACT' decoder gates).
 pub fn compile(gpa: Allocator, source: [:0]const u8, targets: []const Target) Error!CompileResult {
+    std.debug.assert(targets.len <= MAX_TARGETS);
     var v = try validate(gpa, source);
     errdefer v.deinit();
 
@@ -350,6 +407,7 @@ const Builder = struct {
         const ta = table_arena.allocator();
 
         const before_diags = self.diags.items.len;
+        // Linear has no params to validate — this cannot fail.
         self.programs[0] = Easing.primitive(.{ .code = .linear }) catch unreachable;
         self.programs_len = 1;
 
@@ -1217,8 +1275,11 @@ const Builder = struct {
         };
     }
 
-    /// Dedup-append into the program table.
+    /// Dedup-append into the program table. The returned ref always
+    /// indexes a live program (cap overflow degrades to 0 = linear).
     fn intern(self: *Builder, prog: Easing.Program, node: NodeIndex) Error!u16 {
+        std.debug.assert(self.programs_len >= 1); // programs[0] = linear, seeded
+        std.debug.assert(self.programs_len <= TrackTable.MAX_EASE_PROGRAMS);
         for (self.programs[0..self.programs_len], 0..) |p, i| {
             if (std.meta.eql(p, prog)) return @intCast(i);
         }
@@ -1286,7 +1347,7 @@ const Builder = struct {
                 }
                 continue;
             }
-            if (merged.items.len == MAX_TARGETS) {
+            if (merged.items.len >= MAX_TARGETS) {
                 try self.emit(.target_decl_invalid, tree.spanOf(idx), "more than {d} targets after declarations", .{MAX_TARGETS});
                 break;
             }
@@ -1309,7 +1370,6 @@ const Builder = struct {
         }
         return null;
     }
-
 };
 
 /// Sort a track's keys (and their parallel source spans) by tick.
@@ -1851,8 +1911,8 @@ test "compile patterns: a scened pattern dry-runs at its scene start" {
 
 test "pattern diagnostic codes are wire-stable appendices" {
     // Pinned wire values — Code is append-only and crosses in 'PACD'.
-    // Emission: both codes ride the Phase 2 dry-run (tests above);
-    // Phase 3 adds the frame path.
+    // Both codes ride the load-time dry-run (tests above); the frame
+    // path surfaces the same failures as counted omissions.
     try t.expectEqual(@as(u16, 27), @intFromEnum(Code.pattern_eval_failed));
     try t.expectEqual(@as(u16, 28), @intFromEnum(Code.pattern_result_invalid));
 }
@@ -2251,8 +2311,8 @@ test "compile diagnostics: 65 scenes → scene_cap_exceeded" {
 }
 
 test "compile accepts a valid scene: no diagnostics" {
-    // Phase 1 is validation-only: the scene's nested (track …) is not yet
-    // walked into the table, so a well-formed scene simply compiles clean.
+    // A well-formed scene compiles clean; its nested (track …) rows are
+    // pinned by the table-shape tests below.
     var r = try compile(t.allocator,
         \\(transport :bpm 120)
         \\(scene :name drop :at 160b :dur 60b
@@ -2398,8 +2458,8 @@ test "compile trigger diagnostics carry a user span" {
 }
 
 test "compile accepts valid triggers: periodic + explicit list" {
-    // Phase 1 is validation-only: a well-formed trigger emits no
-    // diagnostic and (not yet a table row) simply compiles clean.
+    // A well-formed trigger emits no diagnostic; its table row and
+    // lanes are pinned by the trigger-shape and Eval tests.
     var r = try compile(t.allocator,
         \\(transport :bpm 120 :meter [4 4])
         \\(trigger :target circle-radius :every 2b :offset 1b)

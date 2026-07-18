@@ -198,7 +198,8 @@ pub const Control = struct {
 arena: std.heap.ArenaAllocator,
 transport: Transport,
 tracks: []const Track,
-/// All tracks' keys, contiguous; `Track.keys_start/len` slice into it.
+/// All tracks' keys, contiguous; a key-sourced track's `Source.keys`
+/// run slices into it.
 keys: []const Key,
 /// Deduped easing programs; index 0 is always linear.
 programs: []const Easing.Program,

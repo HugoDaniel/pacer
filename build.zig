@@ -1,4 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+comptime {
+    // `.minimum_zig_version` only gates package-manager consumers; this
+    // gives a direct `zig build` on an older toolchain a clear message.
+    const required = std.SemanticVersion.parse("0.16.0") catch unreachable;
+    if (builtin.zig_version.order(required) == .lt)
+        @compileError("pacer requires zig >= 0.16.0 (build.zig.zon minimum_zig_version)");
+}
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -111,9 +120,16 @@ pub fn build(b: *std.Build) void {
     const node_test = b.addSystemCommand(&.{ "node", "--test" });
     node_test.setCwd(b.path("npm/pacer"));
     node_test.step.dependOn(&install_wasm.step);
+    // Verify runs the corpus through its OWN run step, without `b.args`:
+    // `zig build verify -- --update` must never regenerate goldens while
+    // the parallel node --test step is reading them (regen is the
+    // `corpus` verb's business alone).
+    const run_corpus_verify = b.addRunArtifact(corpus_runner);
+    run_corpus_verify.addDirectoryArg(b.path("corpus"));
+    run_corpus_verify.has_side_effects = true;
     const verify_step = b.step("verify", "test + native corpus + node/wasm corpus parity");
     verify_step.dependOn(&run_tests.step);
-    verify_step.dependOn(&run_corpus.step);
+    verify_step.dependOn(&run_corpus_verify.step);
     verify_step.dependOn(&node_test.step);
 
     // `zig build fuzz` — never-panic harnesses over the byte-eating and
@@ -145,5 +161,8 @@ pub fn build(b: *std.Build) void {
     // message-only assertion when a code is renamed.
     const audit_diagnostics_step = b.step("audit-diagnostics", "Audit Compile.Code test coverage");
     const audit_diagnostics = b.addSystemCommand(&.{"tools/audit_diagnostic_coverage.sh"});
+    // A Run step with no cwd inherits the build-runner's — pin it so the
+    // relative argv[0] survives `--build-file` from elsewhere.
+    audit_diagnostics.setCwd(b.path("."));
     audit_diagnostics_step.dependOn(&audit_diagnostics.step);
 }

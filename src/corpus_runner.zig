@@ -212,7 +212,10 @@ fn readCaseFile(
     name: []const u8,
     file: []const u8,
 ) ?[:0]u8 {
-    const path = std.fs.path.join(a, &.{ root, name, file }) catch return null;
+    const path = std.fs.path.join(a, &.{ root, name, file }) catch |err| {
+        out.print("corpus: {s}: cannot join path for {s}: {s}\n", .{ name, file, @errorName(err) }) catch {};
+        return null;
+    };
     return Io.Dir.cwd().readFileAllocOptions(io, path, a, .limited(MAX_FILE_BYTES), .of(u8), 0) catch |err| {
         out.print("corpus: {s}: cannot read {s}: {s}\n", .{ name, file, @errorName(err) }) catch {};
         return null;
@@ -566,7 +569,9 @@ fn renderCase(
 /// user-coord span, like tracks — the editor has the source).
 fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult, doc: []const u8) !void {
     const blob = try a.alloc(u8, Abi.metaEncodedLen(result));
-    _ = Abi.encodeMeta(result, blob) catch return error.OutOfMemory;
+    // Sized exactly by `metaEncodedLen` — BufferTooSmall here would be
+    // an encoder accounting bug, not a resource condition.
+    _ = Abi.encodeMeta(result, blob) catch unreachable;
 
     const bpm_bits = std.mem.readInt(u64, blob[8..16], .little);
     const dur = std.mem.readInt(i64, blob[16..24], .little);
@@ -590,8 +595,8 @@ fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult,
         const key_start = std.mem.readInt(u32, rec[8..12], .little);
         const key_len = std.mem.readInt(u32, rec[12..16], .little);
         w.print("\n  (mtrack :id {d} :target {s} :registry {d} :ncomp {d} :source {s} :span [{d} {d}]", .{
-            target_id,                        result.targets[target_id].name,
-            rec[2],                           rec[3],
+            target_id,                                  result.targets[target_id].name,
+            rec[2],                                     rec[3],
             switch (source) {
                 0 => "keys",
                 1 => "expr",
@@ -621,9 +626,9 @@ fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult,
         const id_len = std.mem.readInt(u16, rec[6..8], .little);
         const id = blob[coff + Abi.META_CONTROL_LEN ..][0..id_len];
         w.print("\n  (mcontrol :index {d} :id {s} :target {s} :registry {d} :ncomp {d} :type {s} :value [", .{
-            i, id,
-            if (target_id == Abi.META_NO_TARGET) "none" else result.targets[target_id].name,
-            rec[2], rec[3], controlTypeName(rec[4]),
+            i,                                                                               id,
+            if (target_id == Abi.META_NO_TARGET) "none" else result.targets[target_id].name, rec[2],
+            rec[3],                                                                          controlTypeName(rec[4]),
         }) catch return error.OutOfMemory;
         try renderLanes(w, rec[8..24]);
         w.writeAll("] :min ") catch return error.OutOfMemory;
@@ -666,6 +671,9 @@ fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult,
         }
         soff = body + plen;
     }
+    // The TLV walk's own termination claim: frames account for exactly
+    // the rest of the blob.
+    std.debug.assert(soff == blob.len);
     w.writeAll(")\n") catch return error.OutOfMemory;
 }
 
@@ -743,7 +751,9 @@ fn controlTypeName(t: u8) []const u8 {
         0 => "slider",
         1 => "xy",
         2 => "color",
-        else => "slider",
+        // Our own in-process encoder's output — a new ControlType must
+        // land here before it can reach a golden (like track sources).
+        else => unreachable,
     };
 }
 
@@ -763,11 +773,11 @@ fn renderDiags(
     w: *Io.Writer,
     result: *const Compile.CompileResult,
 ) !bool {
-    var cap: usize = Abi.DIAGS_HEADER_LEN;
-    for (result.validated.result.diagnostics) |d| cap += Abi.DIAG_RECORD_LEN + d.message.len;
-    for (result.diagnostics) |d| cap += Abi.DIAG_RECORD_LEN + d.message.len;
-    const blob_buf = try a.alloc(u8, cap);
+    // Sized by the encoder's own accounting, so `encodeDiags` can never
+    // silently drop a record from the golden.
+    const blob_buf = try a.alloc(u8, Abi.diagsEncodedLen(result));
     const blob = Abi.encodeDiags(result, blob_buf);
+    std.debug.assert(blob.len == blob_buf.len);
 
     const count = std.mem.readInt(u32, blob[8..12], .little);
     var pos: usize = Abi.DIAGS_HEADER_LEN;

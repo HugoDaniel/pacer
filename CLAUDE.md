@@ -33,10 +33,14 @@ It mirrors SJON's (see SJON `src/root.zig`).
 
 Every module exports an explicit `pub const Error = error{ … }`. Compile /
 validate FAILURES are not errors — they are `Diagnostic`s on a successfully
-returned result (collection over abort, the SJON discipline). `Compile.Error`,
-`Abi.Error`, `Writes.Error`, and `Easing.Error` are the only unions; the only
-runtime errors are resource exhaustion (`OutOfMemory`, `BufferTooSmall`). Never
-assert on user input — those return diagnostics with spans.
+returned result (collection over abort, the SJON discipline). Runtime errors
+split three ways: resource exhaustion (`Compile.Error`'s `OutOfMemory`,
+`Abi`/`Writes`' `BufferTooSmall`), host-clock guards (`TimeMap.Error`'s
+`TickOverflow`/`NonFiniteTime`, re-exported as `Eval.Error` — `drv_eval` maps
+them to an empty frame), and build-input domains (`Easing.Error`,
+`ExprTrack.Error`, `PatternTrack.Error` — diagnostics at compile, counted
+omissions at eval). Never assert on user input — those return diagnostics with
+spans.
 
 ## Wire-stable surfaces — append-only
 

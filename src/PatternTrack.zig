@@ -122,6 +122,9 @@ pub fn sampleAt(haps: []const PatternQuery.Hap, t: Tick) ?PatternQuery.PatValue 
     var best_onset: Tick = undefined;
     for (haps) |h| {
         const part = h.timing.part;
+        // Engine Span invariant (begin ≤ end), re-asserted at the read;
+        // zero-width parts are legitimate and never active at any t.
+        std.debug.assert(part.begin <= part.end);
         if (t < part.begin or t >= part.end) continue; // not active at t
         const onset = if (h.timing.whole) |w| w.begin else part.begin;
         // `>=` keeps the LAST hap among equal onsets — the top stack layer.

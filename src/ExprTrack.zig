@@ -92,6 +92,14 @@ const BASE_BINDINGS = 7;
 /// meaning independent of scope-resolution order.
 pub const reserved_names = [_][]const u8{ "t", "tick", "beat", "bar", "cycle", "phase", "bpm", "dur", "scene-beat", "scene-phase" };
 
+comptime {
+    // The three encodings of `bindTime`'s output are hand-synchronized;
+    // tie them so adding a binding without growing the caps is a build
+    // break, not a Debug-only bounds trip inside `bindTime`.
+    std.debug.assert(reserved_names.len == MAX_BINDINGS);
+    std.debug.assert(BASE_BINDINGS < MAX_BINDINGS);
+}
+
 /// One control's binding for an evaluation: the document `:value` at
 /// the compile dry-run, the live-overridden effective value on the
 /// frame path. Values are f32 (the boundary quantum — `drv_setControl`

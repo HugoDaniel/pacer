@@ -69,6 +69,7 @@ const ExprTrack = @import("ExprTrack.zig");
 const PatternTrack = @import("PatternTrack.zig");
 const Compile = @import("Compile.zig");
 
+/// The shared grid position type (`i64`), re-exported for call sites.
 pub const Tick = sjon.Pattern.Tick;
 
 /// Time conversion failures (host clock out of range). The tick-domain
@@ -105,8 +106,10 @@ pub const Evaluator = struct {
     table: *const TrackTable,
     tree: *const sjon.Ast.Tree,
     schema: sjon.Schema.Schema,
-    /// Per-track index of the last segment hit (`keys[i] ≤ t < keys[i+1]`).
-    /// Indexed by track position; expr tracks never read theirs.
+    /// Per-track resume cursor, indexed by track position: the last
+    /// segment hit for a keyframe track (`keys[i] ≤ t < keys[i+1]`), the
+    /// last event index for a trigger `:at` track (see `evalTrigger`).
+    /// Expr, pattern, and periodic-trigger tracks never read theirs.
     seg_cache: []u32,
     /// Reused output buffer, one entry per track.
     entries: []Writes.Entry,
@@ -133,6 +136,11 @@ pub const Evaluator = struct {
     /// claim never reads it.
     expr_failures: u64 = 0,
 
+    /// Build the evaluator over a SUCCESSFUL compile. Borrows `result`
+    /// whole (table + tree + schema) — `result` must already sit in its
+    /// final memory location, never be reassigned while the evaluator
+    /// lives, and outlive it (see the struct doc). All allocation
+    /// happens here; the frame path never touches the gpa.
     pub fn init(gpa: std.mem.Allocator, result: *const Compile.CompileResult) error{OutOfMemory}!Evaluator {
         std.debug.assert(result.table != null); // compile succeeded
         const table = &result.table.?;
@@ -227,6 +235,7 @@ pub const Evaluator = struct {
         return index;
     }
 
+    /// Tear down BEFORE the borrowed `CompileResult` (borrow-whole rule).
     pub fn deinit(self: *Evaluator) void {
         self.arena.deinit();
         self.* = undefined;
@@ -242,8 +251,13 @@ pub const Evaluator = struct {
 
     /// Tick-domain twin (tests, corpus, `drv_evalTicks`). Total: an
     /// expr-track runtime failure omits that write (see module header),
-    /// it never errors out of the frame.
+    /// it never errors out of the frame. Precondition: |t_raw| ≤
+    /// `Pattern.MAX_TICK` — `tickFromSeconds` guarantees it and
+    /// `drv_evalTicks` gates it; the trigger/window integer math relies
+    /// on the headroom.
     pub fn evalTicks(self: *Evaluator, t_raw: Tick) []const Writes.Entry {
+        std.debug.assert(t_raw <= sjon.Pattern.MAX_TICK);
+        std.debug.assert(t_raw >= -sjon.Pattern.MAX_TICK);
         const table = self.table;
         var t = t_raw;
         if (table.transport.dur) |dur| {
@@ -296,30 +310,10 @@ pub const Evaluator = struct {
                     n += 1;
                 },
                 .expr => |node| {
-                    // Reset scratch per track: each expression gets the
-                    // whole fixed zone; nothing survives the call.
-                    var fba = std.heap.FixedBufferAllocator.init(self.scratch);
-                    const value = ExprTrack.evalAt(
-                        fba.allocator(),
-                        self.tree,
-                        self.schema,
-                        &table.transport,
-                        self.ctl_bindings,
-                        node,
-                        t,
-                        scene,
-                        track.ncomp,
-                    ) catch {
-                        self.expr_failures += 1;
-                        continue;
-                    };
-                    self.entries[n] = .{
-                        .target_id = track.target_id,
-                        .flags = track.registry,
-                        .ncomp = track.ncomp,
-                        .value = value,
-                    };
-                    n += 1;
+                    if (self.evalExprTrack(track, node, t, scene)) |entry| {
+                        self.entries[n] = entry;
+                        n += 1;
+                    }
                 },
                 .trigger => |*sched| {
                     // Resolve the lanes for the current event; before the
@@ -332,42 +326,9 @@ pub const Evaluator = struct {
                     }
                 },
                 .pattern => |node| {
-                    // Query this tick's enclosing cycle through the shared
-                    // module — fronted by the fixed scratch, so the frame path
-                    // never touches the gpa — then point-sample the active hap
-                    // (`PatternTrack.sampleAt`). `expr_failures` counts only
-                    // frames whose write is actually OMITTED by a failure: a
-                    // query refusal, an uncoercible selected value, or an empty
-                    // sample in a cycle the engine dropped a hap in (the active
-                    // hap was likely the one that failed). A plain silence gap
-                    // is uncounted; when a sibling hap still lands, the write is
-                    // produced and nothing is counted even if another hap
-                    // dropped. `result.dropped` is a cycle-level count, so the
-                    // probe is coarse — a real gap in a cycle that also dropped
-                    // elsewhere is counted too — but it never miscounts a frame
-                    // that wrote.
-                    var fba = std.heap.FixedBufferAllocator.init(self.scratch);
-                    var result = PatternTrack.queryCycle(fba.allocator(), self.tree, self.schema, node, t) catch {
-                        self.expr_failures += 1;
-                        continue;
-                    };
-                    defer result.deinit();
-                    if (PatternTrack.sampleAt(result.haps, t)) |pv| {
-                        const value = PatternTrack.coerce(pv) orelse {
-                            self.expr_failures += 1; // selected hap violates the numeric contract
-                            continue;
-                        };
-                        self.entries[n] = .{
-                            .target_id = track.target_id,
-                            .flags = track.registry,
-                            .ncomp = track.ncomp,
-                            .value = value,
-                        };
+                    if (self.evalPatternTrack(track, node, t)) |entry| {
+                        self.entries[n] = entry;
                         n += 1;
-                    } else if (result.dropped > 0) {
-                        // No active hap AND the engine dropped one this cycle:
-                        // the sample is a failure-induced hole, not silence.
-                        self.expr_failures += 1;
                     }
                 },
             }
@@ -398,6 +359,93 @@ pub const Evaluator = struct {
         }
         std.debug.assert(n <= self.entries.len);
         return self.entries[0..n];
+    }
+
+    /// One `.expr` track at wrapped tick `t`, or null when the write is
+    /// OMITTED by a runtime failure (counted in `expr_failures`).
+    fn evalExprTrack(
+        self: *Evaluator,
+        track: *const TrackTable.Track,
+        node: sjon.Ast.NodeIndex,
+        t: Tick,
+        scene: ?TrackTable.Scene,
+    ) ?Writes.Entry {
+        std.debug.assert(track.ncomp >= 1);
+        std.debug.assert(track.ncomp <= 4);
+        // Reset scratch per track: each expression gets the
+        // whole fixed zone; nothing survives the call.
+        var fba = std.heap.FixedBufferAllocator.init(self.scratch);
+        const value = ExprTrack.evalAt(
+            fba.allocator(),
+            self.tree,
+            self.schema,
+            &self.table.transport,
+            self.ctl_bindings,
+            node,
+            t,
+            scene,
+            track.ncomp,
+        ) catch {
+            self.expr_failures += 1;
+            return null;
+        };
+        return .{
+            .target_id = track.target_id,
+            .flags = track.registry,
+            .ncomp = track.ncomp,
+            .value = value,
+        };
+    }
+
+    /// One `.pattern` track at wrapped tick `t`, or null when there is no
+    /// write this frame — silence, or a failure-induced hole (counted).
+    ///
+    /// Query this tick's enclosing cycle through the shared
+    /// module — fronted by the fixed scratch, so the frame path
+    /// never touches the gpa — then point-sample the active hap
+    /// (`PatternTrack.sampleAt`). `expr_failures` counts only
+    /// frames whose write is actually OMITTED by a failure: a
+    /// query refusal, an uncoercible selected value, or an empty
+    /// sample in a cycle the engine dropped a hap in (the active
+    /// hap was likely the one that failed). A plain silence gap
+    /// is uncounted; when a sibling hap still lands, the write is
+    /// produced and nothing is counted even if another hap
+    /// dropped. `result.dropped` is a cycle-level count, so the
+    /// probe is coarse — a real gap in a cycle that also dropped
+    /// elsewhere is counted too — but it never miscounts a frame
+    /// that wrote.
+    fn evalPatternTrack(
+        self: *Evaluator,
+        track: *const TrackTable.Track,
+        node: sjon.Ast.NodeIndex,
+        t: Tick,
+    ) ?Writes.Entry {
+        std.debug.assert(track.ncomp >= 1);
+        std.debug.assert(track.ncomp <= 4);
+        var fba = std.heap.FixedBufferAllocator.init(self.scratch);
+        var result = PatternTrack.queryCycle(fba.allocator(), self.tree, self.schema, node, t) catch {
+            self.expr_failures += 1;
+            return null;
+        };
+        defer result.deinit();
+        if (PatternTrack.sampleAt(result.haps, t)) |pv| {
+            const value = PatternTrack.coerce(pv) orelse {
+                self.expr_failures += 1; // selected hap violates the numeric contract
+                return null;
+            };
+            return .{
+                .target_id = track.target_id,
+                .flags = track.registry,
+                .ncomp = track.ncomp,
+                .value = value,
+            };
+        }
+        if (result.dropped > 0) {
+            // No active hap AND the engine dropped one this cycle:
+            // the sample is a failure-induced hole, not silence.
+            self.expr_failures += 1;
+        }
+        return null;
     }
 };
 
@@ -454,7 +502,8 @@ fn evalKeyTrack(table: *const TrackTable, track: *const TrackTable.Track, t: Tic
 ///   [0] phase       — `(t − event)/span` ∈ [0,1); a periodic schedule
 ///       always has a next event (span = `every`), the last explicit `:at`
 ///       event holds 1.0;
-///   [1] count       — 0-based event index as f32;
+///   [1] count       — 0-based event index as f32 (exact to 2^24, then
+///       f32-rounded — deterministically);
 ///   [2] gate        — 1.0 exactly on the event tick, else 0.0 (structural);
 ///   [3] beats-since — `(t − event)/ppb` (= `map.beatOf`).
 /// Each derives from an i64 tick delta through ONE f64 division (the eval
@@ -488,6 +537,10 @@ fn evalTrigger(
             if (i >= ticks.len or ticks[i] > t) i = 0;
             while (i + 1 < ticks.len and ticks[i + 1] <= t) : (i += 1) {}
             cache.* = @intCast(i);
+            // Cursor postcondition — relies on compile's strictly
+            // ascending `:at` invariant, re-asserted at the read.
+            std.debug.assert(ticks[i] <= t);
+            if (i + 1 < ticks.len) std.debug.assert(t < ticks[i + 1]);
             event_tick = ticks[i];
             count = @intCast(i);
             span = if (i + 1 < ticks.len) ticks[i + 1] - event_tick else 0;

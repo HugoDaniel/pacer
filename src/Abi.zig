@@ -232,6 +232,16 @@ pub fn encodeDiags(result: *const Compile.CompileResult, dest: []u8) []u8 {
     return dest[0..pos];
 }
 
+/// Exact encoded size of every diagnostic on a result. `encodeDiags`
+/// into a buffer at least this large never drops a record — the corpus
+/// runner sizes with this; `wasm_entry` accepts truncation instead.
+pub fn diagsEncodedLen(result: *const Compile.CompileResult) usize {
+    var len: usize = DIAGS_HEADER_LEN;
+    for (result.validated.result.diagnostics) |d| len += DIAG_RECORD_LEN + d.message.len;
+    for (result.diagnostics) |d| len += DIAG_RECORD_LEN + d.message.len;
+    return len;
+}
+
 /// Map a combined-text span to user coordinates; manifest-region spans
 /// clamp to 0..0 (no user coordinate exists for them).
 fn userSpan(v: *const Compile.Validated, span: Ast.Span) Ast.Span {
