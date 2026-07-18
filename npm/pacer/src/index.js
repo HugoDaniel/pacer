@@ -2,7 +2,7 @@
 //
 // The driver is a pure function of time: write a score + the target
 // registries in, call `eval(seconds)` per frame, read packed writes
-// back. This file mirrors the three wire formats pinned on the Zig
+// back. This file mirrors the four wire formats pinned on the Zig
 // side (src/Abi.zig, src/Writes.zig) byte for byte:
 //
 //   'PACT' (in)  — flattened target-registry join list
@@ -554,6 +554,9 @@ export class Pacer {
         entries.push(entry);
       }
       entry.targetId = dv.getUint16(off, true);
+      // The 'PACW' flags byte is exactly the registry index today
+      // (Writes.Entry reserves it for future bit-packing — any packing
+      // bumps PACW_VERSION and this read together).
       entry.registry = dv.getUint8(off + 2);
       entry.ncomp = dv.getUint8(off + 3);
       entry.name = this.#target(entry.targetId).name;
@@ -569,6 +572,10 @@ export class Pacer {
   #readDiags() {
     const e = this.#exports;
     const len = e.drv_diagLen();
+    // An empty zone means no load ever wrote it (a bad-call or OOM
+    // status) — a written zone always carries at least the 12-byte
+    // header. Let the caller report the status instead of tripping here.
+    if (len === 0) return [];
     const dv = new DataView(e.memory.buffer, e.drv_diagPtr(), len);
     if (dv.getUint32(0, true) !== PACD_MAGIC || dv.getUint32(4, true) !== PACD_VERSION) {
       throw new Error('pacer: corrupt diagnostics buffer');
@@ -625,6 +632,11 @@ function encodeTargets(flat) {
       throw new Error(
         `pacer: target ${target.name} name is ${name.length} UTF-8 bytes (need 1..65535)`,
       );
+    }
+    // The registry index rides a u8; a 257th registry would wrap into
+    // bus 0 and mislabel every write it emits.
+    if (target.registry > 255) {
+      throw new Error(`pacer: target ${target.name} sits in registry ${target.registry} (max 255)`);
     }
     blob[pos] = target.ncomp;
     blob[pos + 1] = target.registry;

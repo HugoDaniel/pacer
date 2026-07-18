@@ -610,3 +610,48 @@ test('compose-mode: declarations merge with host registries (host wins)', async 
   assert.equal(spark.targetId, 2);
   assert.equal(spark.value[0], Math.fround(0.9));
 });
+
+test('a non-diagnostic load status surfaces as the status error, not a decode throw', () => {
+  // Stub the ABI the way wasm_entry.zig behaves on OOM (status 3): the
+  // diag zone was zeroed before the compile arena gave out, so
+  // drv_diagLen() is 0. The glue must report the status, not trip over
+  // the empty 'PACD' zone with a bare RangeError.
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const stub = {
+    exports: {
+      memory,
+      drv_abiVersion: () => 1,
+      drv_docPtr: () => 0,
+      drv_docCap: () => 1024,
+      drv_targetsPtr: () => 2048,
+      drv_targetsCap: () => 1024,
+      drv_diagPtr: () => 4096,
+      drv_diagLen: () => 0,
+      drv_load: () => 3,
+    },
+  };
+  const instance = /** @type {WebAssembly.Instance} */ (/** @type {unknown} */ (stub));
+  assert.throws(
+    () => new Pacer(instance, []).reload('(transport :bpm 120)'),
+    /load failed with status 3/,
+  );
+});
+
+test('a registry index past the wire u8 is rejected, not silently wrapped', async () => {
+  // 'PACT' carries the registry as a u8; a 257th registry would wrap to
+  // bus 0 and mislabel every write it emits.
+  const registries = Array.from({ length: 257 }, () => /** @type {{ name: string }[]} */ ([]));
+  registries[256] = [{ name: 'ghost' }];
+  await assert.rejects(Pacer.load(wasmModule, '(transport :bpm 120)', { registries }), /registry/);
+});
+
+test('evalTicks past the tick ceiling returns null, mirroring the seconds path', async () => {
+  // wasm_entry.zig's contract: drv_eval AND drv_evalTicks return 0 when
+  // the clock is out of range (beyond the 2^53 portable tick ceiling).
+  const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
+  assert.notEqual(driver.evalTicks(0n), null);
+  assert.equal(driver.evalTicks(1n << 60n), null);
+  assert.equal(driver.evalTicks(-(1n << 60n)), null);
+  // In-range eval still works after the rejected calls.
+  assert.equal(driver.evalTicks(0n)?.[0]?.value[0], Math.fround(0.2));
+});

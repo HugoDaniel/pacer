@@ -17,7 +17,7 @@
 //! doc      256 KiB  ← host writes score text       (drv_docPtr/drv_docCap)
 //! targets   64 KiB  ← host writes 'PACT' blob      (drv_targetsPtr/drv_targetsCap)
 //! diags     64 KiB  → driver writes 'PACD' blob    (drv_diagPtr/drv_diagLen)
-//! meta     192 KiB  → driver writes 'PACM' blob    (drv_metaPtr/drv_metaLen)
+//! meta     320 KiB  → driver writes 'PACM' blob    (drv_metaPtr/drv_metaLen)
 //! writes   ~8 KiB   → driver writes 'PACW' buffer  (drv_writesPtr)
 //! heap              ← compile arena + evaluator (std.heap.wasm_allocator)
 //! ```
@@ -238,15 +238,19 @@ export fn drv_registerControl(target_id: u32, registry: u32, ncomp: u32) u32 {
 export fn drv_eval(time_s: f64) u32 {
     const ev = if (evaluator) |*e| e else return 0;
     const entries = ev.evalSeconds(time_s) catch return 0;
-    const out = Writes.encode(entries, &writes_buffer) catch unreachable; // WRITES_CAP covers MAX_TRACKS
+    const out = Writes.encode(entries, &writes_buffer) catch unreachable; // WRITES_CAP is full-house sized
     return @intCast(out.len);
 }
 
-/// Tick-domain twin (tests, corpus): total once loaded.
+/// Tick-domain twin (tests, corpus): total once loaded and in range.
 export fn drv_evalTicks(tick: i64) u32 {
     const ev = if (evaluator) |*e| e else return 0;
+    // The header's contract: out-of-range clocks return 0, mirroring the
+    // seconds path. Gating here also upholds `evalTicks`'s precondition
+    // (|t| ≤ MAX_TICK keeps its trigger/window integer math in i64).
+    if (tick > sjon.Pattern.MAX_TICK or tick < -sjon.Pattern.MAX_TICK) return 0;
     const entries = ev.evalTicks(tick);
-    const out = Writes.encode(entries, &writes_buffer) catch unreachable;
+    const out = Writes.encode(entries, &writes_buffer) catch unreachable; // WRITES_CAP is full-house sized
     return @intCast(out.len);
 }
 
