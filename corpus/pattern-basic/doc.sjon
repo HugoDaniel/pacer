@@ -4,8 +4,7 @@
 ; vs wasm32. No :dur/:end loop: the clock advances freely so the
 ; pattern's own cycle math (tick mod PPC) drives the bar wrap; a
 ; transport loop would pin every frame to cycle 0 and erase the
-; alternation / rand-across-cycles signal. (euclid is not yet in SJON's
-; pattern vocabulary — deferred; see plan 03.)
+; alternation / rand-across-cycles signal.
 (transport :bpm 120 :meter [4 4])
 
 ; fastcat: four quarter-bar slots, the third silent. The silent slot
@@ -21,3 +20,9 @@
 ; reason parity matters here — SJON's deterministic rand kernel must
 ; yield the identical float on wasm32, and distinct floats per cycle.
 (track :target noise :pattern (pure (rand01 seed cycle)))
+
+; euclid: E(3,8) = x..x..x. (the tresillo) — 0.8 in onset slots 0/3/6,
+; gaps elsewhere. Pins SJON's Bjorklund desugar through pacer's lane:
+; the existing times hit an onset (0.00), a rest (0.50 — slot 2), the
+; second onset (0.75 — slot 3), and the bar wrap back onto slot 0.
+(track :target pulse :pattern (euclid 3 8 0.8))

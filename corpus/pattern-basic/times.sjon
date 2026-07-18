@@ -6,6 +6,7 @@
 (target grid  :registry 0)
 (target alt   :registry 0)
 (target noise :registry 0)
+(target pulse :registry 0)
 (times
   "0000000000000000" ; 0.00 s — cycle 0 slot 0: grid 0.1, alt 0.25, noise r(0)
   "3FE0000000000000" ; 0.50 s — cycle 0 slot 1 onset: grid 0.2
