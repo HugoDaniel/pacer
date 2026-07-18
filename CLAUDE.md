@@ -165,7 +165,9 @@ also provides is host-authoritative (arity must agree, else
 its `:registry` — so a score compiles, corpus-tests, and lints with no host at
 all. Declared names never cross the wire (`'PACT'`/`'PACM'` unchanged); a
 consumer reads them from source, and `CompileResult.targets` surfaces the merged
-join natively. What a 1.0 tag needs beyond this is the last open Wave-4 item.
+join natively. Wave 4 is closed (hardening P1–P5, the 1.0 review, and the
+tag prereqs — see `plans/00-strategy.md`); what remains before 1.0 are release
+calls, not open plan items: publishing 0.2.0 and cutting the tag itself.
 
 ## Code style
 

@@ -16,6 +16,17 @@ flat `TrackTable` → per-frame evaluator → packed `'PACW'` write buffer. Visu
 targets route by name into pngine uniforms (registry 0), audio targets into an
 engine's param registry (registry 1).
 
+The score language (all of it validated with spans by the embedded schema):
+keyframe tracks with composable easing (`seq`/`chain` combinators, springs,
+bezier, steps), `:expr` tracks evaluated each frame against a bound time env
+(`t`/`beat`/`bar`/`phase`/…), `:pattern` tracks driven by SJON's pattern
+engine (1 cycle = 1 bar on the shared grid), `(trigger …)` event lanes
+(phase/count/gate/beats-since), `(scene …)` windows with scene-local time,
+`(control …)` pins that write every frame and feed expressions
+(live-overridable from the host), `(transport :emit …)` built-in clock lanes,
+and compose-mode `(target …)` declarations so a score compiles with no host
+registries at all.
+
 ## Layout
 
 | Path | What |

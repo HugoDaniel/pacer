@@ -1,5 +1,7 @@
-; pacer score schema — transport / track / key / scene / trigger plus the
-; easing combinator forms.
+; pacer score schema — the transport / target / track / key / scene /
+; trigger / control forms plus the easing combinators. The `:expr` and
+; `:pattern` value sources ride as track keys, `:emit` clock lanes as a
+; transport key.
 ;
 ; Single source of truth for what a pacer score may contain. The compiler
 ; (`src/Compile.zig`) prepends this manifest to the user source and runs
