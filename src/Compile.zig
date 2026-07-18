@@ -734,7 +734,7 @@ const Builder = struct {
                 try self.emit(.track_source_conflict, tree.spanOf(node), "track `{s}` has both (key …) children and :pattern — exactly one value source", .{target_name});
                 return true;
             }
-            if (try self.dryRunPattern(node, target.ncomp, scene_win)) {
+            if (try self.dryRunPattern(transport, node, target.ncomp, scene_win)) {
                 tracks.append(ta, .{
                     .target_id = target.id,
                     .registry = target.registry,
@@ -1050,14 +1050,18 @@ const Builder = struct {
     /// semantics cannot drift. A top-level track dry-runs cycle 0; a
     /// scened track the cycle containing its scene start (the first
     /// window the frame path will ever query for it — a `(slowcat …)`
-    /// arm the scene never opens on is not spuriously rejected). The
-    /// sweep is stricter than the expr dry-run's single point: EVERY hap
-    /// in the queried cycle must satisfy the result contract, so a
-    /// symbol payload half a bar in fails at load, not silently at eval.
-    /// Content of LATER cycles is by nature beyond the dry-run (the
-    /// expr-at-t=0 limitation); the frame path omits those writes.
+    /// arm the scene never opens on is not spuriously rejected). Pacer's
+    /// env rides under the pattern-locals exactly as at frame time —
+    /// control ids bound with their document `:value`s, the time names
+    /// at the dry-run tick — so a hap expr reading `beat` or a control
+    /// passes the engine's static leaf check. The sweep is stricter than
+    /// the expr dry-run's single point: EVERY hap in the queried cycle
+    /// must satisfy the result contract, so a symbol payload half a bar
+    /// in fails at load, not silently at eval. Content of LATER cycles
+    /// is by nature beyond the dry-run (the expr-at-t=0 limitation); the
+    /// frame path omits those writes.
     /// True = the track is sound; false = a diagnostic was emitted.
-    fn dryRunPattern(self: *Builder, pattern_node: NodeIndex, ncomp: u8, scene: ?TrackTable.Scene) Error!bool {
+    fn dryRunPattern(self: *Builder, transport: *const TrackTable.Transport, pattern_node: NodeIndex, ncomp: u8, scene: ?TrackTable.Scene) Error!bool {
         // `PatValue` has no vector variant: a pattern can only ever
         // drive a scalar target this slice — reject the statically
         // impossible pairing regardless of the pattern's content.
@@ -1066,7 +1070,9 @@ const Builder = struct {
             return false;
         }
         const dry_tick: TrackTable.Tick = if (scene) |s| s.start_tick else 0;
-        var result = PatternTrack.queryCycle(self.gpa, self.tree, self.schema, pattern_node, dry_tick) catch |err| switch (err) {
+        var env_storage: ExprTrack.EnvStorage = undefined;
+        const env = ExprTrack.buildEnv(&env_storage, transport, self.ctl_bindings[0..self.ctl_count], dry_tick, scene);
+        var result = PatternTrack.queryCycle(self.gpa, self.tree, self.schema, pattern_node, dry_tick, env) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // The engine's deterministic ceilings (depth / hap / byte
             // budgets, tick overflow) — same outcome on every host.
@@ -1907,6 +1913,46 @@ test "compile patterns: a scened pattern dry-runs at its scene start" {
     defer scened.deinit();
     try t.expect(!scened.ok());
     try t.expect(scened.findDiag(.pattern_result_invalid) != null);
+}
+
+test "compile patterns: hap exprs read pacer's time env under the pattern-local shadows" {
+    // `beat` is a pacer time binding, not a pattern-local: before the env
+    // threading (SJON `queryTreeWithEnv`) this failed the engine's static
+    // leaf check at load (UnknownBinding → pattern_eval_failed). The dry-run
+    // now chains pacer's env under the `cycle`/`tick`/`seed` shadows — the
+    // frozen env-merge design — so the document is sound.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target circle-radius :pattern (pure (* beat 2)))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+}
+
+test "compile patterns: hap exprs read document control values" {
+    // Controls bind in the env's parent scope exactly as for `:expr`
+    // tracks — the dry-run binds the document `:value`.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(control :id sway :value 0.5)
+        \\(track :target circle-radius :pattern (pure (* sway 2)))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+}
+
+test "compile patterns: an unbound name in a hap expr still fails at load" {
+    // The env is additive, not a blanket resolver — a genuinely unknown
+    // name keeps its honest load failure.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius :pattern (pure (* nope 2)))
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.pattern_eval_failed) != null);
 }
 
 test "pattern diagnostic codes are wire-stable appendices" {

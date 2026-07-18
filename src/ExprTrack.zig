@@ -117,6 +117,40 @@ pub const ControlBinding = struct {
     }
 };
 
+/// Backing storage for one evaluation env. The built `Expr.Env` holds
+/// slices and a parent pointer into these arrays, so the caller owns the
+/// storage and must keep it in place (not moved, not reused) for as long
+/// as the env is read — a stack local spanning the evaluation call.
+pub const EnvStorage = struct {
+    ctl_vals: [TrackTable.MAX_CONTROLS][4]Expr.Value,
+    ctl_buf: [TrackTable.MAX_CONTROLS]Expr.Env.Binding,
+    time_buf: [MAX_BINDINGS]Expr.Env.Binding,
+    ctl_env: Expr.Env,
+    env: Expr.Env,
+};
+
+/// Build the evaluation env for `tick` in `storage` and return it. The
+/// single definition of pacer's expression scope — `:expr` tracks and
+/// `:pattern` hap value exprs (via SJON's `queryTreeWithEnv`, where the
+/// pattern-locals `cycle`/`tick`/`seed` shadow it) read the same names.
+/// Controls bind in a parent scope; the time env is the child, so time
+/// names win structurally (and compile rejects collisions).
+pub fn buildEnv(
+    storage: *EnvStorage,
+    transport: *const TrackTable.Transport,
+    controls: []const ControlBinding,
+    tick: Tick,
+    scene: ?TrackTable.Scene,
+) *const Expr.Env {
+    std.debug.assert(controls.len <= TrackTable.MAX_CONTROLS);
+    for (controls, 0..) |c, i| {
+        storage.ctl_buf[i] = .{ .name = c.name, .value = bindControl(c, &storage.ctl_vals[i]) };
+    }
+    storage.ctl_env = .{ .bindings = storage.ctl_buf[0..controls.len] };
+    storage.env = .{ .parent = &storage.ctl_env, .bindings = bindTime(transport, tick, scene, &storage.time_buf) };
+    return &storage.env;
+}
+
 /// Evaluate an expr node at a tick. `tree` must be the tree `node`
 /// belongs to and `schema` the aggregate it validated under — both live
 /// on the `Compile.CompileResult`, which outlives every caller. Cost:
@@ -134,18 +168,9 @@ pub fn evalAt(
     ncomp: u8,
 ) Error![4]f32 {
     std.debug.assert(ncomp >= 1 and ncomp <= 4);
-    std.debug.assert(controls.len <= TrackTable.MAX_CONTROLS);
-    // Controls bind in a parent scope; the time env is the child, so
-    // time names win structurally (and compile rejects collisions).
-    var ctl_vals: [TrackTable.MAX_CONTROLS][4]Expr.Value = undefined;
-    var ctl_buf: [TrackTable.MAX_CONTROLS]Expr.Env.Binding = undefined;
-    for (controls, 0..) |c, i| {
-        ctl_buf[i] = .{ .name = c.name, .value = bindControl(c, &ctl_vals[i]) };
-    }
-    const ctl_env: Expr.Env = .{ .bindings = ctl_buf[0..controls.len] };
-    var buf: [MAX_BINDINGS]Expr.Env.Binding = undefined;
-    const env: Expr.Env = .{ .parent = &ctl_env, .bindings = bindTime(transport, tick, scene, &buf) };
-    var result = try Expr.eval(gpa, tree, node, &env, schema);
+    var storage: EnvStorage = undefined;
+    const env = buildEnv(&storage, transport, controls, tick, scene);
+    var result = try Expr.eval(gpa, tree, node, env, schema);
     defer result.deinit();
     return coerce(result.value, ncomp) orelse error.ResultShape;
 }

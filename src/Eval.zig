@@ -326,7 +326,7 @@ pub const Evaluator = struct {
                     }
                 },
                 .pattern => |node| {
-                    if (self.evalPatternTrack(track, node, t)) |entry| {
+                    if (self.evalPatternTrack(track, node, t, scene)) |entry| {
                         self.entries[n] = entry;
                         n += 1;
                     }
@@ -403,7 +403,12 @@ pub const Evaluator = struct {
     /// Query this tick's enclosing cycle through the shared
     /// module — fronted by the fixed scratch, so the frame path
     /// never touches the gpa — then point-sample the active hap
-    /// (`PatternTrack.sampleAt`). `expr_failures` counts only
+    /// (`PatternTrack.sampleAt`). Hap value exprs see pacer's env
+    /// at THIS tick (time names + live control values, scene-locals
+    /// when scened — `ExprTrack.buildEnv`, the same scope `:expr`
+    /// tracks read) under the engine's pattern-local shadows, so a
+    /// `(pure (* beat 2))` hap tracks the clock within its span.
+    /// `expr_failures` counts only
     /// frames whose write is actually OMITTED by a failure: a
     /// query refusal, an uncoercible selected value, or an empty
     /// sample in a cycle the engine dropped a hap in (the active
@@ -419,11 +424,14 @@ pub const Evaluator = struct {
         track: *const TrackTable.Track,
         node: sjon.Ast.NodeIndex,
         t: Tick,
+        scene: ?TrackTable.Scene,
     ) ?Writes.Entry {
         std.debug.assert(track.ncomp >= 1);
         std.debug.assert(track.ncomp <= 4);
         var fba = std.heap.FixedBufferAllocator.init(self.scratch);
-        var result = PatternTrack.queryCycle(fba.allocator(), self.tree, self.schema, node, t) catch {
+        var env_storage: ExprTrack.EnvStorage = undefined;
+        const env = ExprTrack.buildEnv(&env_storage, &self.table.transport, self.ctl_bindings, t, scene);
+        var result = PatternTrack.queryCycle(fba.allocator(), self.tree, self.schema, node, t, env) catch {
             self.expr_failures += 1;
             return null;
         };
@@ -1489,4 +1497,80 @@ test "pattern frame: a hap-dense expr pattern fits the fixed frame scratch (no g
         try t_.expect(std.math.isFinite(w[0].value[0]));
     }
     try t_.expectEqual(@as(u64, 0), ev.expr_failures);
+}
+
+test "pattern frame: hap exprs read pacer's time env — beat tracks the clock" {
+    // `(pure (* beat 2))` re-evaluates each frame with pacer's env chained
+    // under the pattern-locals, so the hap's value follows the transport
+    // clock inside its own span — including across the bar wrap, where the
+    // pattern cycle advances AND `beat` keeps counting absolutely.
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target radius :pattern (pure (* beat 2)))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    try t_.expectEqual(@as(f32, 0), ev.evalTicks(0)[0].value[0]);
+    try t_.expectEqual(@as(f32, 2), ev.evalTicks(try map.tickFromBeats(1))[0].value[0]);
+    try t_.expectEqual(@as(f32, 5), ev.evalTicks(try map.tickFromBeats(2.5))[0].value[0]);
+    // Beat 5 sits in bar/cycle 1: the env crosses the wrap with the clock.
+    try t_.expectEqual(@as(f32, 10), ev.evalTicks(try map.tickFromBeats(5))[0].value[0]);
+    try t_.expectEqual(@as(u64, 0), ev.expr_failures);
+}
+
+test "pattern frame: the pattern-local tick shadows pacer's frame tick" {
+    // Both envs bind `tick`; inside a hap the PATTERN's is authoritative
+    // (the frozen shadow rule): the leaf sees the hap's cycle-onset tick,
+    // not the frame tick. Mid-cycle the frame tick is nonzero yet the value
+    // stays the onset — 0 in cycle 0, PPC in cycle 1 (exact in f32).
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target radius :pattern (pure (+ tick 0)))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const PPC = sjon.Pattern.PPC;
+
+    try t_.expectEqual(@as(f32, 0), ev.evalTicks(@divExact(PPC, 2))[0].value[0]);
+    try t_.expectEqual(@as(f32, PPC), ev.evalTicks(PPC + @divExact(PPC, 2))[0].value[0]);
+}
+
+test "pattern frame: hap exprs read live control overrides" {
+    // Same contract as `:expr` tracks: the env binds the EFFECTIVE control
+    // value — document `:value` idle, the live override while set.
+    var r = try compileScore(
+        \\(transport :bpm 120)
+        \\(control :id sway :value 0.5)
+        \\(track :target radius :pattern (pure (* sway 2)))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    try t_.expectEqual(@as(f32, 1), ev.evalTicks(0)[0].value[0]);
+    try t_.expect(ev.setControl(0, .{ 0.25, 0, 0, 0 }));
+    try t_.expectEqual(@as(f32, 0.5), ev.evalTicks(0)[0].value[0]);
+    try t_.expect(ev.clearControl(0));
+    try t_.expectEqual(@as(f32, 1), ev.evalTicks(0)[0].value[0]);
+}
+
+test "pattern frame: a scened pattern's hap exprs bind scene-beat" {
+    // The scene-local names ride the same env as `:expr` tracks — bound
+    // only inside the window, scene-relative.
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(scene :name drop :at 1bar :dur 1bar
+        \\  (track :target radius :pattern (pure (+ scene-beat 0))))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    try t_.expectEqual(@as(f32, 0), ev.evalTicks(try map.tickFromBeats(4))[0].value[0]);
+    try t_.expectEqual(@as(f32, 1), ev.evalTicks(try map.tickFromBeats(5))[0].value[0]);
 }

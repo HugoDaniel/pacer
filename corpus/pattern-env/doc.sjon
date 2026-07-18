@@ -1,0 +1,22 @@
+; pattern-env: pacer's evaluation env threaded into hap value exprs
+; (SJON queryTreeWithEnv) — the env-merge design plan 03 froze. Three
+; tracks pin the three name sources: a time name (beat) tracked per
+; frame ACROSS the bar wrap, the pattern-local shadow (tick = the hap's
+; cycle onset, never the frame tick), and a document control read
+; through the env's parent scope. No :dur/:end loop — the clock runs
+; free so the wrap at 2.0 s exercises the pattern cycle and the
+; absolute clock together.
+(transport :bpm 120 :meter [4 4])
+
+; beat: re-evaluated each frame under the shadows — the hap spans the
+; whole cycle yet its value follows the clock (beats 0/1/1.5/4/6 → ×2).
+(track :target clock :pattern (pure (* beat 2)))
+
+; tick: BOTH envs bind it; the pattern-local must win — 0 through all
+; of cycle 0 (even at frame ticks well past 0), 720720 in cycle 1.
+(track :target onset :pattern (pure (+ tick 0)))
+
+; env-only control (no :target — writes nothing itself): `sway`
+; resolves through the env's control scope with the document :value.
+(control :id sway :value 0.25)
+(track :target swayx2 :pattern (pure (* sway 2)))

@@ -1,0 +1,14 @@
+; pattern-env times: 120 bpm 4/4 ⇒ 1 beat = 0.5 s, one bar = one cycle
+; = 2.0 s. Two mid-cycle-0 frames pin the shadow (onset stays 0 while
+; beat advances), the 2.0 s wrap flips the onset to 720720 while beat
+; keeps counting, and 3.0 s holds both mid-cycle-1.
+(target clock  :registry 0)
+(target onset  :registry 0)
+(target swayx2 :registry 0)
+(times
+  "0000000000000000" ; 0.00 s — beat 0:   clock 0, onset 0, swayx2 0.5
+  "3FE0000000000000" ; 0.50 s — beat 1:   clock 2, onset 0 (shadowed)
+  "3FE8000000000000" ; 0.75 s — beat 1.5: clock 3, onset 0
+  "4000000000000000" ; 2.00 s — beat 4 WRAP: clock 8, onset 720720
+  "4008000000000000" ; 3.00 s — beat 6:   clock 12, onset 720720
+)

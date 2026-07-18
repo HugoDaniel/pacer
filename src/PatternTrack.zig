@@ -88,8 +88,13 @@ pub fn cycleWindowOf(tick: Tick) Error!Pattern.Span {
 /// Query the enclosing cycle of `tick`. `tree` must be the tree `node`
 /// belongs to and `schema` the core-carrying aggregate it validated
 /// under (both live on the `Compile.CompileResult`) — the schema backs
-/// `(pure <form>)` expr leaves. The returned `Result` owns an arena —
-/// deinit it. Collection over abort: malformed combinators surface as
+/// `(pure <form>)` expr leaves. `outer_env` is pacer's evaluation scope
+/// (`ExprTrack.buildEnv` at this same tick — time names + controls),
+/// chained UNDER the engine's pattern-locals: inside a hap expr,
+/// `cycle`/`tick`/`seed` are the pattern's own (the frozen shadow rule)
+/// and every other name resolves to pacer's env. Caller-owned; must
+/// outlive the call. The returned `Result` owns an arena — deinit it.
+/// Collection over abort: malformed combinators surface as
 /// `result.diagnostics` (the node degrades to silence), and per-hap expr
 /// failures as `result.dropped` — not as errors.
 pub fn queryCycle(
@@ -98,9 +103,10 @@ pub fn queryCycle(
     schema: sjon.Schema.Schema,
     node: Ast.NodeIndex,
     tick: Tick,
+    outer_env: ?*const sjon.Expr.Env,
 ) Error!PatternQuery.Result {
     const window = try cycleWindowOf(tick);
-    return PatternQuery.queryTree(gpa, tree, node, schema, window, SEED);
+    return PatternQuery.queryTreeWithEnv(gpa, tree, node, schema, window, SEED, outer_env);
 }
 
 /// Point-sample the queried cycle at tick `t`: the hap whose PART span
@@ -184,7 +190,7 @@ test "queryCycle: the window is the tick's enclosing cycle (slowcat alternation)
     var tree = try sjon.parse(gpa, "(slowcat 0.1 0.2)");
     defer tree.deinit();
 
-    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], Pattern.PPC + 1);
+    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], Pattern.PPC + 1, null);
     defer result.deinit();
     try t_.expectEqual(@as(usize, 0), result.diagnostics.len);
     try t_.expectEqual(@as(usize, 1), result.haps.len);
@@ -198,7 +204,7 @@ test "sampleAt: fastcat slots land structurally, the boundary picks the later sl
     const gpa = t_.allocator;
     var tree = try sjon.parse(gpa, "[0.1 0.2 0.3 0.4]");
     defer tree.deinit();
-    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], 0);
+    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], 0, null);
     defer result.deinit();
 
     const q = @divExact(Pattern.PPC, 4);
@@ -214,7 +220,7 @@ test "sampleAt: a silence slot has no active hap → null" {
     const gpa = t_.allocator;
     var tree = try sjon.parse(gpa, "[0.5 (silence)]");
     defer tree.deinit();
-    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], 0);
+    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], 0, null);
     defer result.deinit();
 
     try t_.expect(sampleAt(result.haps, 0).?.eql(.{ .number = 0.5 }));
@@ -228,7 +234,7 @@ test "sampleAt: overlapping stack layers tie on onset → the last (top) layer w
     const gpa = t_.allocator;
     var tree = try sjon.parse(gpa, "(stack 0.1 0.2)");
     defer tree.deinit();
-    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], 0);
+    var result = try queryCycle(gpa, &tree, core_schema, tree.root[0], 0, null);
     defer result.deinit();
     try t_.expectEqual(@as(usize, 2), result.haps.len);
     try t_.expect(sampleAt(result.haps, 0).?.eql(.{ .number = 0.2 }));
