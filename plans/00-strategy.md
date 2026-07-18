@@ -125,22 +125,22 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 4 | 08 knob lift · ALL phases ✓ (⛭ lift chip + live-loop round-trip, pngine `c43164b` 2026-07-17) | ☑ |
 | 4 | 11 hardening · P1–P5 ✓ (P5 diagnostic goldens 2026-07-18) → plan 11 DONE | ☑ |
 | 4 | 1.0 review · DONE 2026-07-18 (audit clean, 0.2.0 cut, studio refreshed) | ☑ |
+| 4 | 1.0-tag prereqs · DONE 2026-07-18 (fuzz ×2, wire policy, root LICENSE) | ☑ |
 
 ## What's next
 
-→ **THE ROLLOUT IS COMPLETE — every board box is ticked (1.0 review closed 2026-07-18).**
-The review audited all wire-stable surfaces (four `'PAC*'` blobs byte-exact vs the JS glue,
-18 `drv_*` exports in lockstep, `Compile.Code` fully documented + comptime-ordinal-pinned,
-`Easing.Op` mirrored), fixed three TDD-red behavioral edges (`drv_evalTicks` tick-ceiling
-gate; JS zero-length-diag guard; JS registry-u8 validation), ran a byte-neutral mastery
-pass (fmt restored, `evalTicks` split, asserts/docs, build.zig hardening), bumped the
-triple-pin to **0.2.0**, and refreshed the studio (editor 1704/1704 on the fresh wasm).
-Full detail in 11's progress log. **What a 1.0 tag still needs** (decided list, in 11's
-log): eval-time + target-join fuzz harnesses, the post-1.0 wire policy statement, a
-repo-root LICENSE decision, and the actual 0.2.0 publish to the Gitea registry
-(`npm publish` in `npm/pacer` — the user's action, `prepublishOnly` runs the whole gate).
-Carried cross-repo follow-ups (unchanged, non-blocking): SJON-side `euclid`; the
-outer-`Expr.Env` `queryTree` time-env slice for hap exprs.
+→ **THE ROLLOUT IS COMPLETE and the 1.0-tag prerequisites are LANDED (2026-07-18).**
+The review audited all wire-stable surfaces clean, fixed three TDD-red behavioral edges,
+bumped the triple-pin to **0.2.0**, and refreshed the studio (editor 1704/1704); the
+follow-up landed the review's decided remainder — the eval-clock purity + target-join
+fuzz harnesses (6 harnesses total now under `zig build fuzz`), the post-1.0 wire policy
+(stated in `Abi.zig`, CLAUDE.md, README), and the repo-root CC0 LICENSE. Full detail in
+11's progress log. **What remains before a 1.0 tag — both the user's calls:** (1) the
+0.2.0 publish to the Gitea registry (`npm publish` in `npm/pacer`; `prepublishOnly` runs
+the whole gate); (2) the 1.0 tag decision itself (a triple-pin bump to 1.0.0 + tag when
+the user judges the surfaces proven in the field). Carried cross-repo follow-ups
+(unchanged, non-blocking): SJON-side `euclid`; the outer-`Expr.Env` `queryTree` time-env
+slice for hap exprs; instrumented `--fuzz` re-check on the next zig toolchain bump.
 
 Phase 5 landed diagnostic goldens: four `diag-*` corpus cases (`diag-controls`, `diag-ease`,
 `diag-track-source`, `diag-target-decl`) that FREEZE 11 previously-golden-untested `Compile.Code`
@@ -1200,3 +1200,20 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   mid-gate. 1.0-tag remainder (in 11's log): two fuzz harnesses, wire policy statement,
   root LICENSE, the 0.2.0 `npm publish` (user's action). Gate at close: verify green
   (corpus 21/21 both halves, npm 62), audit 30/30, fuzz green, editor 1704/1704.
+- 2026-07-18 — **1.0-tag prerequisites landed (fuzz ×2, wire policy, root LICENSE).**
+  Durable facts: (1) The determinism claim is now FUZZED in its strongest form — two
+  evaluators over one result receive the same Smith-drawn clocks in opposite orders and
+  every frame must be byte-identical (purity as order-independence; the resume cursors
+  are thereby pinned as caches, not state). The harness was mutation-verified (a
+  one-tick skew fails the suite) and non-vacuity-guarded. (2) The target join is fuzzed:
+  host prefix VERBATIM, appends only declared symbols, writes always inside the join.
+  (3) `zig build fuzz --fuzz` (instrumented) does not build on zig 0.16 — the `-ffuzz`
+  rebuild fails inside `std/debug.zig` (toolchain, not harness); the corpus invocation
+  is the enforced gate, revisit on a toolchain bump. (4) The post-1.0 wire policy is
+  STATED in `Abi.zig`'s header (convention of record), CLAUDE.md, and a README
+  Versioning section: appending = minor; any blob `VERSION`/`drv_abiVersion` bump or
+  4-CC reuse = breaking (major post-1.0, 0.x minor until then). (5) The repo-root
+  LICENSE (CC0 1.0) exists — the README's declared license, now as a root file.
+  Remaining before a 1.0 tag: ONLY the 0.2.0 `npm publish` (user's action) and the tag
+  decision itself. Gate: verify green (corpus 21/21 both halves, npm 62), audit 30/30,
+  fuzz green (6 harnesses).

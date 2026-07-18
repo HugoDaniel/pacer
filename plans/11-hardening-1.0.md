@@ -356,3 +356,43 @@ Gate: `zig build verify`.
   - **Gate green (final):** `zig build verify` (corpus 21/21 native + wasm parity, npm
     **62** incl. +3) + `audit-diagnostics` 30/30 + `zig build fuzz` + biome + tsc, at
     version 0.2.0.
+
+- **1.0-tag prerequisites (done, 2026-07-18).** The review's decided remainder, landed as
+  one follow-up phase (commits `9ec4e2b` fuzz, `1f8b0b7` policy + LICENSE):
+  - **Fuzz harness 5 — evaluator clocks (the determinism seam):** one fixed score covering
+    every track source, both resume cursors (keyframe segment, trigger `:at`), loop wrap, a
+    scene window, and emit lanes. Two evaluators over the SAME `CompileResult` receive the
+    same Smith-drawn clocks in OPPOSITE orders; every (evaluator, clock) frame must be
+    byte-identical — purity as order-independence, which pins `seg_cache` as a cache, not
+    state. Also: immediate re-eval idempotence; arbitrary f64 seconds (raw bit patterns —
+    NaN/±inf/beyond-ceiling) must yield entries or the SAME `TimeMap` error from both;
+    every produced entry satisfies the wire invariants (arity 1–4, id in join, flags ==
+    registry). Clock lattice seeds the exact boundaries (± tick ceiling, loop edge).
+    Honesty checks: a non-vacuity guard (the beat-1 frame must be non-trivial) and a
+    MUTATION run (skewing the reverse replay by one tick fails exactly this test).
+  - **Fuzz harness 6 — target joins:** fuzzed host registries (0–6 targets; shared tiny
+    symbol space + junk names; arity 1–4; full-u8 registries; duplicates legal) × generated
+    compose-mode scores (0–5 `(target …)` decls with occasional out-of-range arities, 0–2
+    tracks). Invariants: result-or-OOM; merged join preserves the host prefix VERBATIM
+    (names, arities, registries — host ids are the wire contract); appends are exactly
+    declared tuples; on `ok()` an evaluator's every write lands inside the join.
+  - `SpecCursor` promoted to shared harness plumbing (+`u64bits` for tick folds).
+    **Toolchain note:** `zig build fuzz --fuzz` (instrumented) fails to BUILD on zig 0.16 —
+    `-ffuzz` trips a `StackTrace` type mismatch inside `std/debug.zig` (all 6 harnesses
+    affected equally; nothing pacer can fix). The corpus-driven plain invocation is the
+    enforced gate; re-try `--fuzz` on the next toolchain bump.
+  - **Post-1.0 wire policy STATED** (the review's decision, now written where readers look):
+    `Abi.zig` `//!` header (convention of record), CLAUDE.md's wire section, and a new
+    README **Versioning** section. Policy: appending to a wire surface (TLV section,
+    trailing field, enum variant, `drv_*` export) = MINOR release; bumping any blob
+    `VERSION` / `drv_abiVersion`, or reusing a section 4-CC, = BREAKING release (major once
+    1.0 tags; a 0.x minor until then, per SemVer pre-1.0 convention).
+  - **Root LICENSE landed:** the README's License section already declared CC0 1.0 for the
+    repo (linking into `npm/pacer/LICENSE`); the root `LICENSE` file now carries the same
+    CC0 text and the README links to it. Not a new decision — the completion of a declared
+    one.
+  - **Gate green:** `zig build verify` (corpus 21/21 native + wasm parity, npm 62) +
+    `audit-diagnostics` 30/30 + `zig build fuzz` (6 harnesses; mutation-checked). Abi.zig
+    change is header-comment-only — byte-neutral by construction, confirmed by the corpus.
+  - **Before a 1.0 tag (user's calls, nothing left for a work phase):** the 0.2.0
+    `npm publish` to Gitea, then the tag decision itself (triple-pin → 1.0.0 + git tag).
