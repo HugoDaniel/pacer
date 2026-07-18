@@ -139,9 +139,11 @@ fuzz harnesses (6 harnesses total now under `zig build fuzz`), the post-1.0 wire
 0.2.0 publish to the Gitea registry (`npm publish` in `npm/pacer`; `prepublishOnly` runs
 the whole gate); (2) the 1.0 tag decision itself (a triple-pin bump to 1.0.0 + tag when
 the user judges the surfaces proven in the field). Carried cross-repo follow-ups:
-**`euclid` CLOSED 2026-07-18** (SJON `80f0e523` + pacer corpus pin `ee8c014`; see 03's
-progress log); still open, non-blocking: the outer-`Expr.Env` `queryTree` time-env
-slice for hap exprs; instrumented `--fuzz` re-check on the next zig toolchain bump.
+**`euclid` CLOSED 2026-07-18** (SJON `80f0e523` + pacer corpus pin `ee8c014`) and the
+**env-threading slice CLOSED 2026-07-18** (SJON `cbbc8485` `queryTreeWithEnv` + pacer
+`c534a08` + the `pattern-env` golden; see 03's progress log — plan 03 has no open
+items). The ONLY still-open follow-up, non-blocking: the instrumented `--fuzz`
+re-check on the next zig toolchain bump.
 
 Phase 5 landed diagnostic goldens: four `diag-*` corpus cases (`diag-controls`, `diag-ease`,
 `diag-track-source`, `diag-target-decl`) that FREEZE 11 previously-golden-untested `Compile.Code`
@@ -1235,3 +1237,20 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   this same day) — cross-repo phases must re-check `git status` there before staging.
   The remaining carried follow-ups: the outer-`Expr.Env` `queryTree` time-env slice for
   hap exprs (SJON-side), and the instrumented `--fuzz` re-check on a toolchain bump.
+- 2026-07-18 — **Carried follow-up CLOSED: pacer's env reaches hap value exprs** (SJON
+  `cbbc8485` `queryTreeWithEnv`; pacer `c534a08` + the `pattern-env` golden). Durable
+  facts: (1) The frozen env-merge design is LIVE with zero new surface — the outer env
+  rides `Expr.Env`'s existing parent chain (own bindings shadow the parent), so the
+  pattern-locals `cycle`/`tick`/`seed` win inside a hap and everything else (t, beat,
+  bar, phase, bpm, dur, scene-locals, controls) resolves to pacer's scope; no wire
+  change, no new diagnostic, no conformance-format change. (2) `ExprTrack.buildEnv`
+  (+ `EnvStorage`) is now the ONE definition of pacer's expression scope — `:expr`
+  tracks and `:pattern` leaves read identical names; any future binding lands in both
+  by construction. (3) SJON's conformance grammar cannot express an outer env, so the
+  cross-target proof for the env path is pacer's OWN corpus (`pattern-env`, native ==
+  wasm parity) — a precedent for host-side SJON features. (4) A hap value expr is
+  re-evaluated per frame under the shadows: `(pure (* beat 2))` varies WITHIN its
+  hap's span — patterns gate structure, the env supplies motion. Gates: SJON verify
+  full green (4880); pacer verify green (158 tests, corpus 22/22, npm 63), audit
+  30/30. The ONLY remaining carried follow-up anywhere: instrumented `--fuzz` on a
+  toolchain bump.

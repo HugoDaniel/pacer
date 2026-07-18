@@ -387,3 +387,36 @@ Gate: `zig build verify` + npm gate.
   (7406 Zig tests, conformance 272 all hosts, fuzz, audits, biome,
   Rust); pacer `zig build verify` (corpus 21/21 + wasm parity, npm 62).
   The remaining carried follow-up is `queryTreeWithEnv` alone.
+
+- **Follow-up: env threading CLOSED (done, 2026-07-18). Plan 03 has no
+  open items.** SJON `cbbc8485` added `queryTreeWithEnv` — a host outer
+  `Expr.Env` chained as the PARENT of every `(pure <form>)` leaf's env,
+  in the compile-time dry-run and the per-hap eval alike, with the
+  pattern-locals `cycle`/`tick`/`seed` shadowing it (frozen design #2
+  falls out of `Expr.Env`'s existing parent-chain lookup: own bindings
+  first). Existing SJON entry points kept their signatures (all forward
+  through one `queryTreeFull`); the binary path stays env-less (it never
+  emits `pure_expr`); no wire surface, no new diagnostic, no conformance
+  format change (the `query.sjon` grammar cannot express an outer env —
+  the cross-target pin lives in pacer's corpus instead). pacer `c534a08`
+  threads it: `ExprTrack.EnvStorage`/`buildEnv` is now the ONE env
+  definition (`evalAt` refactored onto it) so `:expr` and `:pattern`
+  read identical names — time env + document/live controls +
+  scene-locals; `PatternTrack.queryCycle` takes the env;
+  `Compile.dryRunPattern` binds it at the dry-run tick (document
+  `:value`s), `Eval.evalPatternTrack` at the frame tick (live values,
+  scene passed through) — acceptance and frame semantics still cannot
+  drift. `(pure (* beat 2))` now loads and tracks the clock per frame
+  inside the hap's span; an unbound name keeps its honest load failure.
+  TDD: 3 SJON reds (env reaches leaves / locals shadow decoys / null
+  env unchanged) + 5 pacer reds (beat + control at load, beat across
+  the wrap + live override + scene-beat at frame) + 2 regression pins
+  (tick shadow, unbound name). New `pattern-env` golden pins the three
+  name sources — beat ×2 per frame across the wrap, the tick shadow
+  (onset `492FF500` = 720720.0 exactly in cycle 1, `0` mid-cycle 0
+  while beat advances), an env-only control — native == wasm, which IS
+  the wasm32 proof for SJON's env path. Gates: SJON `zig build verify`
+  full (4880 Zig tests incl. 3 new); pacer `zig build verify` (158
+  tests, corpus 22/22 + parity, npm 63) + audit-diagnostics 30/30.
+  Nothing remains on this plan; the only carried cross-repo item left
+  anywhere is the instrumented `--fuzz` toolchain re-check.
