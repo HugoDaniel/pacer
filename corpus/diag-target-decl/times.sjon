@@ -1,0 +1,4 @@
+; Empty host registry (no (target …)) — the score is standalone, declaring
+; its own targets. Load fails at compile on the malformed declarations; this
+; time is never evaluated.
+(times "0000000000000000")

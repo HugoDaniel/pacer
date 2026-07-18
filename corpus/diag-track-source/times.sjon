@@ -1,0 +1,4 @@
+; Host registry: one scalar target `radius`. Load fails at compile on the
+; source conflict; this time is never evaluated.
+(target radius :registry 0)
+(times "0000000000000000")

@@ -1,0 +1,11 @@
+; diag-target-decl: the compose-mode declaration diagnostic (Phase 4's new
+; code) pinned by a golden. A STANDALONE score (empty host registry) whose
+; own (target …) declarations are malformed two ways — a duplicate :name and
+; a declaration missing both :name and :arity — collects two
+; target_decl_invalid diagnostics in ONE compile, freezing the code number,
+; each span, and message across native == wasm. Load fails; times never run.
+(target :name glow :arity 1 :registry 0)
+(target :name glow :arity 2 :registry 0)   ; duplicate :name → target_decl_invalid
+(target :registry 0)                         ; missing :name and :arity → target_decl_invalid
+(transport :bpm 120)
+(track :target glow (key :at 0b :value 1))

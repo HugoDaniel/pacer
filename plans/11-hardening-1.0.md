@@ -219,7 +219,7 @@ Gate: `zig build verify`.
     `:name`/`:arity`, or overrunning `MAX_TARGETS`(1024, mirrors `Abi.MAX_TARGETS`,
     keeps every id inside `u16`) → `target_decl_invalid`.
   - **Wire (append-only, minimal).** ONE new `Compile.Code` variant
-    `target_decl_invalid` = **30** (rides in `'PACD'`; never renumber). **`'PACT'`
+    `target_decl_invalid` = **29** (rides in `'PACD'`; never renumber). **`'PACT'`
     and `'PACM'` UNCHANGED** — declared targets never touch the inbound blob (they
     come from the doc) and their NAMES never serialize (house rule: names come from
     source, like scene names). `CompileResult.targets` (the merged join, compile-
@@ -256,3 +256,47 @@ Gate: `zig build verify`.
     the new declaration path is fuzzed). Docs: `schema/pacer.sjon` header drops the
     last omission; `CLAUDE.md` Roadmap records the merge model. **Only the 1.0 review
     remains in Wave 4.**
+
+- **Phase 5 — diagnostic goldens (done, 2026-07-18) → plan 11 DONE.** The compile
+  diagnostics that had unit tests but no golden are now frozen — code number + span +
+  message, native == wasm — so the wire-stable `Compile.Code` surface is gated end to
+  end. No new wire surface (corpus/test coverage only); no Zig/JS/TS touched (the JS
+  parity walk already handles failed-load diag cases).
+  - **RED first** — four new `diag-*` case dirs with `doc.sjon` + `times.sjon` but NO
+    `expected.sjon`; `zig build corpus` failed `21 case(s), 4 failed` (`cannot read
+    expected.sjon: FileNotFound` ×4). `-- --update` generated the goldens.
+  - **Cases (11 distinct codes pinned, collection-over-abort demonstrated):**
+    - **`diag-controls`** — six controls trip FIVE diagnostics in ONE compile:
+      `control_duplicate_id`=20 (span on the 2nd `knob`), `control_invalid`=22 ×2
+      (reserved id `beat`; `:min [0 0]` arity 2 ≠ `:value` arity 1),
+      `unknown_target`=0 (`nonexistent`), `target_arity_mismatch`=1 (scalar `:value 5`
+      on ncomp-3 `tint`). A trackless failed-load doc (transport + controls only).
+    - **`diag-ease`** — five tracks, five malformed eases, FIVE diagnostics in one
+      compile: `ease_params_invalid`=9 (bezier x=2 out of [0,1]),
+      `ease_ops_exceeded`=7 (5 chained > cap 4), `ease_stages_exceeded`=6 (9 stages >
+      cap 8, span = the whole `(seq …)`), `ease_nesting_unsupported`=10 (span on the
+      INNER `(seq …)`), `ease_weights_invalid`=8 (`:v 1` + `:v -1` → Σ=0).
+    - **`diag-track-source`** — a track with both `(key …)` and `:expr` →
+      `track_source_conflict`=17 (span on the `:expr` value `(+ beat 0)`).
+    - **`diag-target-decl`** — a STANDALONE score (empty host registry, `times.sjon`
+      with no `(target …)`) whose own declarations are malformed two ways →
+      `target_decl_invalid`=29 ×2 (span on the duplicate `:name glow`; span on the
+      whole `(target :registry 0)` missing both keys). First failed-load golden with an
+      empty host registry — exercises that path in BOTH renderers.
+  - **Review (spans hand-verified against `doc.sjon` bytes):** every span points at the
+    correct, stable token (the offending id / value / ease form / expr), and every code
+    number equals its `Compile.Code` enum ordinal (0/1/6/7/8/9/10/17/20/22/29). Messages
+    verbatim from the emitters. The 17 pre-existing goldens stayed byte-identical
+    (`git status` shows only the four new dirs).
+  - **Scope — count-caps deliberately deferred (not golden-pinned):**
+    `ease_cap_exceeded`(5), `control_cap_exceeded`(21), `track_cap_exceeded`(3),
+    `key_cap_exceeded`(4). Each triggers ONLY on a `MAX+1` generated blob (e.g.
+    `MAX_EASE_PROGRAMS + 2` = 130 distinct-ease keys) whose span points at a giant list
+    and carries no information; they are already pinned BY NAME in `audit-diagnostics`
+    (30/30) + unit tests, and native == wasm parity for their shared `emit()` path is
+    transitively proven by the 11 span-bearing codes that ARE pinned. Pinning them would
+    bloat the corpus with un-hand-checkable blobs for no parity gain.
+  - **Gate green:** `zig build verify` (native corpus **21/21** byte-identical, wasm
+    parity **21/21** + npm **59** incl. +4 for the new cases) + `audit-diagnostics`
+    **30/30** (no new codes — data-only phase). No npm lint/typecheck (no JS/TS change).
+    **Wave 4's 11-plan work is complete; only the 1.0 review remains on the board.**

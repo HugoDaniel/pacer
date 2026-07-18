@@ -1,0 +1,35 @@
+; diag-ease: the easing-spec diagnostics that no golden pinned yet. Five
+; tracks on one target, each with a distinct malformed ease, collect five
+; diagnostics in ONE compile — freezing each code number, span, and message
+; across native == wasm. Load fails, so times are never evaluated.
+(transport :bpm 120)
+
+; ease_params_invalid — bezier x=2 is outside the [0,1] domain.
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 1b :value 1 :ease (cubic-bezier :p [2 0 0.5 1])))
+
+; ease_ops_exceeded — 5 chained ops exceeds the op cap.
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 1b :value 1 :ease (chain linear linear linear linear linear)))
+
+; ease_stages_exceeded — 9 stages exceeds the stage cap.
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 1b :value 1 :ease (seq
+    (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v 1)
+    (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v 1)
+    (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v 1)
+    (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v 1)
+    (stage :ease linear :t 1 :v 1))))
+
+; ease_nesting_unsupported — a seq stage nested inside another seq.
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 1b :value 1 :ease (seq (stage :ease (seq (stage :ease linear :t 1 :v 1)) :t 1 :v 1))))
+
+; ease_weights_invalid — stage weights sum to zero, cannot normalize.
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 1b :value 1 :ease (seq (stage :ease linear :t 1 :v 1) (stage :ease linear :t 1 :v -1))))

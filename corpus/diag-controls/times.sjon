@@ -1,0 +1,5 @@
+; Host registry: only `tint` (ncomp 3) — the arity-mismatch target. The
+; control ids reference no other targets, and `nonexistent` is absent on
+; purpose (→ unknown_target). Load fails at compile; this time is never run.
+(target tint :registry 0 :ncomp 3)
+(times "0000000000000000")

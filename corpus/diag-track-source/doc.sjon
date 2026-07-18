@@ -1,0 +1,8 @@
+; diag-track-source: a track carrying BOTH (key …) children and :expr is a
+; track_source_conflict — a track has exactly one value source (keys XOR
+; expr XOR pattern). Pins the code number, span (on the conflicting track
+; form), and message across native == wasm. Load fails; times never run.
+(transport :bpm 120)
+(track :target radius
+  :expr (+ beat 0)
+  (key :at 0b :value 0.2))

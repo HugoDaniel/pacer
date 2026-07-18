@@ -123,40 +123,40 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 3 | 10 audio bus · ALL phases ✓ (pitch ride audible, smoke green 2026-07-16) | ☑ |
 | 3 | 03 pattern tracks · ALL phases ✓ (`:pattern` third source; `pattern-basic` golden + wasm parity green 2026-07-17) | ☑ |
 | 4 | 08 knob lift · ALL phases ✓ (⛭ lift chip + live-loop round-trip, pngine `c43164b` 2026-07-17) | ☑ |
-| 4 | 11 P4 · compose-mode `(target …)` ✓ (2026-07-18); P5 next | ◐ |
+| 4 | 11 hardening · P1–P5 ✓ (P5 diagnostic goldens 2026-07-18) → plan 11 DONE | ☑ |
 | 4 | 1.0 review | ☐ |
 
 ## What's next
 
-→ **Wave 4 · 11 Phase 4 COMPLETE (2026-07-18); next is Wave 4 · 11 Phase 5** (diagnostic
-goldens — pin the untested-by-golden `Compile.Code` variants + spans), then the **1.0 review**
-(the last Wave-4 item — the ONLY board box left after 11 Phase 5).
-Phase 4 landed compose-mode `(target …)` declarations: a score declares its own animatable
-targets so it compiles, corpus-tests, and lints STANDALONE (no host registry). New
-`Builder.buildTargetJoin` **merges** declarations with the host list (runs first in `build()`
-so every `resolveTarget` sees them) — host indices preserved, a name the host also provides is
-host-authoritative (arity must agree, else `target_arity_mismatch`; declared `:registry`
-ignored), a declared-only name is appended under its `:registry`. ONE new `Compile.Code` variant
-`target_decl_invalid` = 30 (duplicate/missing-key/cap; rides in `'PACD'`). **`'PACT'`/`'PACM'`
-UNCHANGED** — declared names never serialize (a consumer reads them from source, like scene
-names); `CompileResult.targets` surfaces the merged join NATIVELY (not on the wire). New corpus
-case `target-declared` (empty host registry, declared `glow`/`tint`/`level` across registries 0/1
-via keys/vec-keys/expr); the runner accepts a 0-target `times.sjon` and names via `result.targets`
-(16 existing goldens byte-identical). npm: `#target` tolerates declared-only ids (`name: null`,
-no throw), `MetaTrack.name`/`WriteEntry.name` → `string | null`, `route.js` `toUniforms` skips
-null-name entries, `registries` load option OPTIONAL (default `[]`). Gate: `zig build verify`
-(corpus 17/17 native+wasm, npm 55 incl. +2) + audit 30/30 + fuzz clean. Full detail in 11's
-Progress log + the Decision-log entry below. **Deferred (not blockers):** the studio refresh
-(copy new wasm + re-link glue) STILL waits for the Wave-4 close — nothing consumes `easePrograms`
-or compose-mode standalone in the studio yet; the npm triple-pin stays 0.1.0
-(accumulate-till-publish; next publish 0.1.0 → 0.2.0 covers `:emit`, scenes, triggers,
-`easePrograms`/`easeRef`, and now `string|null` names + optional `registries`).
+→ **Wave 4 · plan 11 COMPLETE (all five phases; P5 diagnostic goldens 2026-07-18). The
+ONLY remaining Wave-4 board box is the 1.0 / version review** — and it is the last item in
+the whole rollout. Do that next: audit the wire-stable surfaces (the four `'PAC*'` blobs +
+their TLV sections, `Compile.Code`, `Easing.Op`, the `drv_*` exports) now that four waves of
+goldens have hardened them, decide what a 1.0 tag needs beyond this, and settle the npm
+triple-pin bump + first publish (0.1.0 → 0.2.0) that has been accumulating since Wave 0.
+Also fold in the **deferred studio refresh** (below) at the same time — the Wave-4 close is
+its trigger.
 
-Open `plans/11-*.md` next and run **11 Phase 5** (diagnostic goldens) under the same TDD +
-compaction discipline — a `diag-compile` case (or several) pinning the codes with no golden yet
-(`target_arity_mismatch`, `track_source_conflict`, ease-cap/weights/params families, `control_*`,
-and now `target_decl_invalid`) so their numbers + spans are frozen forever. No new wire surface —
-corpus/test coverage only.
+Phase 5 landed diagnostic goldens: four `diag-*` corpus cases (`diag-controls`, `diag-ease`,
+`diag-track-source`, `diag-target-decl`) that FREEZE 11 previously-golden-untested `Compile.Code`
+variants — `unknown_target`(0), `target_arity_mismatch`(1), `ease_stages_exceeded`(6),
+`ease_ops_exceeded`(7), `ease_weights_invalid`(8), `ease_params_invalid`(9),
+`ease_nesting_unsupported`(10), `track_source_conflict`(17), `control_duplicate_id`(20),
+`control_invalid`(22), `target_decl_invalid`(29) — pinning each code number + span + message
+native == wasm (collection-over-abort: the controls doc trips 5 diags in one compile, the ease
+doc trips 5). The pure count-caps (`ease_cap_exceeded`/`control_cap_exceeded`/`track_cap_exceeded`/
+`key_cap_exceeded`) are deliberately NOT golden-pinned — they trigger only on a MAX+1 generated
+blob with a meaningless span, are already pinned by name in `audit-diagnostics` (30/30) + unit
+tests, and their `emit()` path is transitively proven by the 11 pinned codes. Gate: `zig build
+verify` (corpus 21/21 native+wasm, npm 59 incl. +4) + audit 30/30. No new wire surface, no
+Zig/JS/TS touched (corpus data only). Full detail in 11's Progress log.
+
+**Deferred (fold into the 1.0 review — NOT separate blockers):** the studio refresh (rebuild
+`pacer.wasm`, `build:wasm-copy`, AND re-link the glue via `pnpm install --prefer-offline` in
+`studio/` — an Edit breaks the hard-link so the wasm alone is not enough) STILL waits for the
+Wave-4 close; nothing consumes `easePrograms` or compose-mode standalone in the studio yet. The
+npm triple-pin stays 0.1.0 (accumulate-till-publish; next publish 0.1.0 → 0.2.0 covers `:emit`,
+scenes, triggers, `easePrograms`/`easeRef`, and `string|null` names + optional `registries`).
 TWO carried cross-repo follow-ups (NOT blockers): `euclid` is NOT in SJON's
 pattern vocabulary yet (SJON-side add), and pacer's time env in hap exprs (the SJON
 outer-`Expr.Env` `queryTree` variant) is a DEFERRED slice — hap exprs bind only
@@ -1133,7 +1133,8 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
 - 2026-07-18 — **11 Phase 4 done — compose-mode `(target …)` declarations.** A score
   declares its own animatable targets so it compiles/corpus-tests/lints STANDALONE (no
   host). Durable cross-plan facts. (1) **One new wire-stable `Compile.Code` variant —
-  `target_decl_invalid` = 30** (in `'PACD'`; never renumber): a duplicate declared `:name`,
+  `target_decl_invalid` = 29** (in `'PACD'`; never renumber; the audit's "30/30" is the code
+  COUNT, not this ordinal — ordinals are 0..29): a duplicate declared `:name`,
   a declaration missing `:name`/`:arity`, or a join overrunning `MAX_TARGETS`(1024). An
   arity disagreement with the host reuses the existing `target_arity_mismatch`. (2) **The
   merge model is frozen** (the user chose "host wins, flag arity only"): declarations MERGE
@@ -1158,3 +1159,23 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   `(target :name …)` from the doc to mirror the merged join. Gate: `zig build verify`
   (corpus 17/17 native+wasm, npm 55 incl. +2) + audit 30/30 + fuzz clean. Detail in 11's
   Progress log. **Wave-4 remaining: 11 P5 (diagnostic goldens), then the 1.0 review.**
+- 2026-07-18 — **11 Phase 5 done → plan 11 COMPLETE (all five phases).** Diagnostic goldens.
+  No wire surface, no code — corpus data only — but a durable fact worth pinning: **the
+  `Compile.Code` wire numbers are `@intFromEnum` ordinals, 0-indexed and contiguous**, so
+  the golden `:code N` = the enum position. Four new `diag-*` cases now FREEZE 11
+  previously-golden-untested variants native == wasm — `unknown_target`(0),
+  `target_arity_mismatch`(1), `ease_stages_exceeded`(6), `ease_ops_exceeded`(7),
+  `ease_weights_invalid`(8), `ease_params_invalid`(9), `ease_nesting_unsupported`(10),
+  `track_source_conflict`(17), `control_duplicate_id`(20), `control_invalid`(22),
+  `target_decl_invalid`(**29**, NOT 30 — the earlier Phase-4 entry mislabeled it; corrected
+  above and in 11's log). The four cases also demonstrate **collection-over-abort in a
+  golden** (`diag-controls` = 5 diags in one compile, `diag-ease` = 5), and `diag-target-decl`
+  is the first failed-load golden with an EMPTY host registry (exercises that path in both
+  the native runner and the JS parity renderer). **Deliberate scope:** the pure count-caps
+  (`ease_cap_exceeded`(5), `control_cap_exceeded`(21), `track_cap_exceeded`(3),
+  `key_cap_exceeded`(4)) are NOT golden-pinned — they trigger only on a MAX+1 generated blob
+  whose span is meaningless, are already covered by `audit-diagnostics`(30/30) + unit tests,
+  and their shared `emit()` path is transitively proven by the 11 span-bearing codes. Gate:
+  `zig build verify` (corpus **21/21** native+wasm, npm **59** incl. +4) + audit 30/30. **Only
+  the 1.0 / version review remains in Wave 4 — the last item in the whole rollout.** Fold the
+  deferred studio refresh + the npm triple-pin bump (0.1.0 → 0.2.0) into it.

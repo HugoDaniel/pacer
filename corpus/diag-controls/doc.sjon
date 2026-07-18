@@ -1,0 +1,12 @@
+; diag-controls: the control-shape diagnostics that no golden pinned yet.
+; Six controls trip five diagnostics in ONE compile (collection over abort,
+; the SJON discipline) — so the golden freezes each code number, span, and
+; message, and proves native == wasm emits them identically. Load fails, so
+; times are never evaluated.
+(transport :bpm 120)
+(control :id knob :value 1)
+(control :id knob :value 2)                    ; duplicate id      → control_duplicate_id
+(control :id beat :value 3)                     ; reserved time id → control_invalid
+(control :id a :target nonexistent :value 4)    ; no such target   → unknown_target
+(control :id b :target tint :value 5)           ; scalar on ncomp-3 → target_arity_mismatch
+(control :id c :min [0 0] :value 6)             ; :min arity ≠ :value → control_invalid
