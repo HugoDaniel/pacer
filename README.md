@@ -54,7 +54,17 @@ The driver ships as an npm package — see
 [`npm/pacer/README.md`](./npm/pacer/README.md) for install, the wasm-bytes
 handshake, and the `Pacer` API.
 
+## Versioning
+
+The wire surfaces — the four `'PAC*'` blobs, the `Compile.Code` and
+`Easing.Op` enums, and the `drv_*` export set — are **append-only**. Additive
+growth (a new TLV section, trailing field, enum variant, or export) ships in a
+minor release; bumping any blob `VERSION`, `drv_abiVersion`, or reusing a
+section 4-CC is a breaking release — a major once 1.0 is tagged, a 0.x minor
+until then (the SemVer pre-1.0 convention). The golden corpus + `zig build
+verify` gate both kinds.
+
 ## License
 
-[CC0 1.0 Universal](./npm/pacer/LICENSE) — a public-domain dedication. Do
+[CC0 1.0 Universal](./LICENSE) — a public-domain dedication. Do
 whatever you like with it, no attribution required.

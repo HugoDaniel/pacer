@@ -49,6 +49,10 @@ the `drv_*` export set ride with them. All are append-only: never reorder,
 retype, or remove a field / variant / export — bump `drv_abiVersion` if the
 contract itself must change.
 
+Version policy: appending rides a minor release; any blob `VERSION` /
+`drv_abiVersion` bump (or a section 4-CC reuse) is a breaking release — a
+major once 1.0 tags, a 0.x minor until then.
+
 | Surface | Where | Direction |
 |---|---|---|
 | `'PACT'` targets in | `Abi.encodeTargets` / `decodeTargets` | host → driver |

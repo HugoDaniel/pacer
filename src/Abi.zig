@@ -84,6 +84,12 @@
 //!
 //! Both formats are wire-stable from day one: append/version, never
 //! reorder. The third boundary format, `'PACW'`, lives in `Writes`.
+//!
+//! Release policy (all wire surfaces, `Writes` and `wasm_entry`
+//! included): appending — a new TLV section, trailing field, enum
+//! variant, or `drv_*` export — rides a MINOR release; bumping any blob
+//! `VERSION` / `drv_abiVersion`, or reusing a section 4-CC, is a
+//! BREAKING release — a major once 1.0 tags, a 0.x minor until then.
 
 const std = @import("std");
 const sjon = @import("sjon");
