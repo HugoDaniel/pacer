@@ -534,7 +534,7 @@ test('audio bus: paramRegistry joins the score, applyParams routes writes', asyn
   assert.deepEqual(calls, [['cutoff', 2150]]);
 });
 
-test('applyParams: registry filter and scalar/vector arity', () => {
+test('applyParams: registry filter, scalar/vector arity, null-name skip', () => {
   const calls = [];
   const host = { params: () => [], setParam: (n, v) => calls.push([n, v]), clock: () => null };
   applyParams(
@@ -542,6 +542,10 @@ test('applyParams: registry filter and scalar/vector arity', () => {
       { name: 'radius', registry: 0, ncomp: 1, value: Float32Array.of(9, 0, 0, 0) },
       { name: 'gain', registry: 1, ncomp: 1, value: Float32Array.of(0.5, 0, 0, 0) },
       { name: 'pan', registry: 1, ncomp: 2, value: Float32Array.of(0.25, 0.75, 0, 0) },
+      // A compose-mode declared-only audio target: the host never
+      // registered it, so there is no param name to set — skipped,
+      // exactly as toUniforms skips it on the visual bus.
+      { name: null, registry: 1, ncomp: 1, value: Float32Array.of(0.9, 0, 0, 0) },
     ],
     host,
   );

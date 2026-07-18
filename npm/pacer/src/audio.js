@@ -12,6 +12,8 @@
 
 import { laneValue } from './lane.js';
 
+/** @typedef {import('./types.js').WriteEntry} WriteEntry */
+
 /**
  * @typedef {{ seconds: number, playing: boolean }} AudioClock
  * @typedef {{ name: string, min?: number, max?: number, default?: number, ncomp?: number }} AudioParamSpec
@@ -59,13 +61,17 @@ export function paramRegistry(host) {
  * 1, array otherwise (mirrors `toUniforms`). Call per frame after
  * `Pacer.eval`; entries of other registries are skipped.
  *
- * @param {Array<{name: string, registry: number, ncomp: number, value: Float32Array}>} entries
+ * @param {ReadonlyArray<WriteEntry>} entries
  * @param {AudioTargetHost} host
  * @param {number} registry - the audio bus index (conventionally 1).
  */
 export function applyParams(entries, host, registry = 1) {
   for (const e of entries) {
     if (e.registry !== registry) continue;
+    // A compose-mode declared-only target has no host name (null), so
+    // there is no param to set — the host routes it by registry through
+    // routeWrites instead. Skip it here, as toUniforms does.
+    if (e.name === null) continue;
     host.setParam(e.name, laneValue(e));
   }
 }
