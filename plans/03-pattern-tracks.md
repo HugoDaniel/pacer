@@ -365,3 +365,25 @@ Gate: `zig build verify` + npm gate.
   cross-repo, neither a Wave-4 blocker): `euclid` in SJON's vocabulary, and
   pacer's time env in hap exprs (the SJON `queryTreeWithEnv` outer-`Expr.Env`
   variant). Next per strategy: the end-of-wave studio refresh, then Wave 4.
+
+- **Follow-up: euclid CLOSED (done, 2026-07-18).** SJON `80f0e523` added
+  `(euclid n k pat)` — Bjorklund onsets (E(3,8) tresillo, E(5,8)
+  cinquillo) desugared to fastcat, a pure IR desugar with no new Node
+  variant and no new diagnostic; the domain gate (integer literals,
+  `k >= 1`, `n <= k`, silence on `n < 1` — the empty rhythm) follows the
+  fast/slow degrade discipline, wrong arity emits the existing
+  `arity_mismatch`. Landed in BOTH SJON front-ends (the binary path
+  shares one decoded child across onset slots via a new `euclid_fill`
+  frame — the cursor is a forward stream; `Node.eql` is structural so
+  tree ≡ binary holds), the typescript-parity host, the pattern plugin's
+  head list, and a `pattern-euclid` conformance case (corpus 271 → 272)
+  pinning the tresillo across the Zig runner, the wasm binary path, TS
+  parity, and the Rust host. pacer inherited it with ZERO code change,
+  exactly as this plan predicted — pacer `ee8c014` extends
+  `pattern-basic` with `(track :target pulse :pattern (euclid 3 8 0.8))`
+  (target appended last, ids 0–2 stable) so the golden gates the
+  inheritance: 0.8 at onsets 0.00/0.75/2.00/4.00 s, omitted at rests
+  0.50/1.00 s, native == wasm. Gates: SJON `zig build verify` full
+  (7406 Zig tests, conformance 272 all hosts, fuzz, audits, biome,
+  Rust); pacer `zig build verify` (corpus 21/21 + wasm parity, npm 62).
+  The remaining carried follow-up is `queryTreeWithEnv` alone.

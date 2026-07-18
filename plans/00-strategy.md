@@ -138,8 +138,9 @@ fuzz harnesses (6 harnesses total now under `zig build fuzz`), the post-1.0 wire
 11's progress log. **What remains before a 1.0 tag — both the user's calls:** (1) the
 0.2.0 publish to the Gitea registry (`npm publish` in `npm/pacer`; `prepublishOnly` runs
 the whole gate); (2) the 1.0 tag decision itself (a triple-pin bump to 1.0.0 + tag when
-the user judges the surfaces proven in the field). Carried cross-repo follow-ups
-(unchanged, non-blocking): SJON-side `euclid`; the outer-`Expr.Env` `queryTree` time-env
+the user judges the surfaces proven in the field). Carried cross-repo follow-ups:
+**`euclid` CLOSED 2026-07-18** (SJON `80f0e523` + pacer corpus pin `ee8c014`; see 03's
+progress log); still open, non-blocking: the outer-`Expr.Env` `queryTree` time-env
 slice for hap exprs; instrumented `--fuzz` re-check on the next zig toolchain bump.
 
 Phase 5 landed diagnostic goldens: four `diag-*` corpus cases (`diag-controls`, `diag-ease`,
@@ -1217,3 +1218,20 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   Remaining before a 1.0 tag: ONLY the 0.2.0 `npm publish` (user's action) and the tag
   decision itself. Gate: verify green (corpus 21/21 both halves, npm 62), audit 30/30,
   fuzz green (6 harnesses).
+- 2026-07-18 — **Carried follow-up CLOSED: `euclid` is in SJON's pattern vocabulary**
+  (SJON `80f0e523`; pacer corpus pin `ee8c014`). Durable facts: (1) `(euclid n k pat)`
+  is a PURE DESUGAR to fastcat (Bjorklund onsets → seq of child/silence slots) — no new
+  Node variant, no new diagnostic, no wire surface anywhere; pacer inherited it with
+  zero code change, exactly as plan 03 predicted, and `pattern-basic` now gates the
+  inheritance (E(3,8) tresillo: 0.8 at onsets, omitted at rests, native == wasm).
+  (2) The rhythm is pinned CROSS-HOST at the SJON level — a `pattern-euclid`
+  conformance case (corpus 272) runs through the Zig runner, the wasm binary path, the
+  typescript-parity port (which gained the same bjorklund), and the Rust host. (3) The
+  binary front-end shares one decoded child node across onset slots (`euclid_fill`
+  frame — the cursor is a forward stream and cannot re-decode); the tree front-end
+  compiles the child per onset; `Node.eql` is structural so tree ≡ binary holds — the
+  pattern any future "one child, many slots" combinator (e.g. a rotation arg) should
+  reuse. (4) SJON is under CONCURRENT active development (LSP work landing in parallel
+  this same day) — cross-repo phases must re-check `git status` there before staging.
+  The remaining carried follow-ups: the outer-`Expr.Env` `queryTree` time-env slice for
+  hap exprs (SJON-side), and the instrumented `--fuzz` re-check on a toolchain bump.
