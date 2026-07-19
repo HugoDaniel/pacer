@@ -133,6 +133,20 @@ Gate: `zig build verify` (all cases native+wasm) + npm gate + audit.
 
 ## Progress log
 
+- 2026-07-19 — **Phase 4 done** (wire + npm parity, reds first). `'TMPO'`
+  TLV section after `'EASE'` (fixed order 'SCEN'/'EASE'/'TMPO'):
+  `[count u32][{tick i64, bpm f64} × count]`, segment 0 INCLUDED
+  (self-contained), omitted when count == 1 — mapless blobs byte-stable
+  (pinned). `TEMPO_SECTION_ID`/`TEMPO_REC_LEN`/`MetaTempoRec` with layout
+  comptime pins; Abi `//!` header documents the section. npm:
+  `meta.tempoMap` decodes `[{tick: bigint, bpm}]`, `[]` when absent (old-
+  blob tolerance by the TLV walk); `MetaTempoSeg` typedef; `get meta` doc.
+  DECISION (plan asked): the studio timeline does NOT consume
+  `meta.tempoMap` in this wave — the Wave A studio work (03 P0–P2) needs
+  tempo truth only as score text through the emitter; drawing the true
+  beat grid from 'TMPO' is a later studio plan's UI change, filed there.
+  Gates: `zig build verify` ✓ (native corpus 22/22 + wasm parity), npm
+  lint/typecheck/test ✓ (65 pass).
 - 2026-07-19 — **Phase 3 done** (eval integration, reds first). Compile:
   `buildTransport` attaches the derived piecewise table BEFORE any
   position conversion (an s-unit `:dur` resolves through the finished

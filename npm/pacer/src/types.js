@@ -135,6 +135,15 @@ export {};
  */
 
 /**
+ * One tempo-map segment (`'TMPO'` section): from `tick` onward the
+ * transport runs at `bpm`. Ascending; the first segment is always
+ * `{tick: 0n, bpm: transport.bpm}` (self-contained — no join needed).
+ * @typedef {object} MetaTempoSeg
+ * @property {bigint} tick Segment start on the PPC tick grid.
+ * @property {number} bpm Tempo in effect from `tick` onward.
+ */
+
+/**
  * One primitive op inside a compiled easing program — the wire mirror of
  * `Easing.OpRec`.
  * @typedef {object} MetaEaseOp
@@ -173,6 +182,9 @@ export {};
  * @property {ReadonlyArray<MetaScene>} scenes Named windows; `[]` when none.
  * @property {ReadonlyArray<MetaEaseProgram>} easePrograms Deduped easing
  *   program table; `[]` when the score uses only linear easing.
+ * @property {ReadonlyArray<MetaTempoSeg>} tempoMap Tempo segments including
+ *   segment 0; `[]` for a constant-tempo score (the `'TMPO'` section is
+ *   omitted on the wire).
  */
 
 /**

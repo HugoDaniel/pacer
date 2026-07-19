@@ -40,6 +40,8 @@ const PACM_EASE_ID = 0x45534145; // 'EASE' read little-endian
 const PACM_EASE_PROGRAM_LEN = 772;
 const PACM_EASE_STAGE_LEN = 96;
 const PACM_EASE_OP_LEN = 20;
+const PACM_TEMPO_ID = 0x4f504d54; // 'TMPO' read little-endian
+const PACM_TEMPO_REC_LEN = 16;
 /** Mirror of `Easing.Op` (array index = wire op code). */
 const EASE_OPS = /** @type {const} */ ([
   'linear',
@@ -207,11 +209,14 @@ export class Pacer {
 
   /**
    * Score metadata ('PACM'), decoded lazily and cached until the next
-   * reload: `{ transport, tracks, controls, scenes }` with key ticks
-   * (BigInt) and spans in the score's own coordinates — a control's
-   * `valueSpan` is the commit-to-text anchor for its widget, and each
-   * scene's `nameSpan` anchors its `:name`. `scenes` is `[]` when the
-   * score declares none. Null when not loaded.
+   * reload: `{ transport, tracks, controls, scenes, easePrograms,
+   * tempoMap }` with key ticks (BigInt) and spans in the score's own
+   * coordinates — a control's `valueSpan` is the commit-to-text anchor
+   * for its widget, and each scene's `nameSpan` anchors its `:name`.
+   * `scenes` is `[]` when the score declares none; `tempoMap` is `[]`
+   * for a constant-tempo score and otherwise lists the `(tempo …)`
+   * segments INCLUDING segment 0 (the transport's own `:bpm` at tick 0).
+   * Null when not loaded.
    *
    * Spans (like diagnostic spans) are BYTE offsets into the UTF-8
    * score; they equal string indices only while the score is ASCII —
@@ -308,6 +313,8 @@ export class Pacer {
     const scenes = [];
     /** @type {import('./types.js').MetaEaseProgram[]} */
     const easePrograms = [];
+    /** @type {import('./types.js').MetaTempoSeg[]} */
+    const tempoMap = [];
     while (off < len) {
       const id = dv.getUint32(off, true);
       const plen = dv.getUint32(off + 4, true);
@@ -367,6 +374,14 @@ export class Pacer {
           const k = keys[i];
           if (k) k.easeRef = dv.getUint16(r, true);
         }
+      } else if (id === PACM_TEMPO_ID) {
+        // Tempo segments including segment 0 (self-contained — no
+        // transport join); ascending ticks, first is always 0.
+        const count = dv.getUint32(body, true);
+        let s = body + 4;
+        for (let i = 0; i < count; i++, s += PACM_TEMPO_REC_LEN) {
+          tempoMap.push({ tick: dv.getBigInt64(s, true), bpm: dv.getFloat64(s + 8, true) });
+        }
       }
       off = body + plen;
     }
@@ -385,6 +400,7 @@ export class Pacer {
       controls,
       scenes,
       easePrograms,
+      tempoMap,
     };
     return this.#meta;
   }

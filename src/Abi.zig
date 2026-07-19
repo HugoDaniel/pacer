@@ -82,6 +82,17 @@
 //!       it; index 0 = linear. The array parallels the `key_count` key
 //!       records, so a decoder zips it with them.)
 //!
+//!     'TMPO' tempo map — the transport's piecewise segments (it/01), so
+//!       a timeline consumer draws the true beat grid without re-parsing
+//!       `(tempo …)` forms. Emitted AFTER 'EASE' (the fixed order is
+//!       'SCEN', 'EASE', 'TMPO'), OMITTED when the score is constant-
+//!       tempo (count would be 1 — segment 0 alone; a mapless blob stays
+//!       byte-stable). Self-contained: segment 0 (tick 0, the
+//!       transport's own `:bpm`) is INCLUDED, so no transport join is
+//!       needed. Payload:
+//!         [count u32]
+//!         count × 16 { tick i64, bpm f64 }   // ascending, [0].tick == 0
+//!
 //! Both formats are wire-stable from day one: append/version, never
 //! reorder. The third boundary format, `'PACW'`, lives in `Writes`.
 //!
@@ -128,6 +139,10 @@ pub const SCENES_SECTION_ID: u32 = 0x4e454353;
 pub const SCENE_REC_LEN: usize = 24;
 /// `"EASE"` read LE — the easing-program section id in the meta stream.
 pub const EASE_SECTION_ID: u32 = 0x45534145;
+/// `"TMPO"` read LE — the tempo-map section id in the meta stream.
+pub const TEMPO_SECTION_ID: u32 = 0x4f504d54;
+/// Bytes per tempo-segment record inside the `'TMPO'` payload.
+pub const TEMPO_REC_LEN: usize = 16;
 /// Bytes per compiled-op record inside an `'EASE'` program.
 pub const META_EASE_OP_LEN: usize = 20;
 /// Bytes per stage record inside an `'EASE'` program.
@@ -318,6 +333,12 @@ const MetaSceneRec = extern struct {
     name_span_start: u32,
     name_span_end: u32,
 };
+/// One `'TMPO'` payload record — 16 bytes, mirrors TEMPO_REC_LEN. The
+/// authored `{tick, bpm}` pair verbatim (`TrackTable.TempoSegment`).
+const MetaTempoRec = extern struct {
+    tick: i64,
+    bpm: f64,
+};
 /// One compiled easing op inside an `'EASE'` program record — mirrors
 /// `Easing.OpRec` for the wire, with explicit padding so `asBytes`
 /// carries no undefined bytes.
@@ -351,6 +372,8 @@ comptime {
     std.debug.assert(@sizeOf(MetaKeyRec) == META_KEY_LEN);
     std.debug.assert(@sizeOf(MetaControlRec) == META_CONTROL_LEN);
     std.debug.assert(@sizeOf(MetaSceneRec) == SCENE_REC_LEN);
+    std.debug.assert(@sizeOf(MetaTempoRec) == TEMPO_REC_LEN);
+    std.debug.assert(@offsetOf(MetaTempoRec, "bpm") == 8);
     std.debug.assert(@sizeOf(MetaEaseOpRec) == META_EASE_OP_LEN);
     std.debug.assert(@sizeOf(MetaEaseStageRec) == META_EASE_STAGE_LEN);
     std.debug.assert(@sizeOf(MetaEaseProgramRec) == META_EASE_PROGRAM_LEN);
@@ -400,6 +423,10 @@ pub fn metaEncodedLen(result: *const Compile.CompileResult) usize {
     if (table.programs.len > 1)
         len += META_SECTION_HEADER_LEN + 4 + table.programs.len * META_EASE_PROGRAM_LEN +
             4 + table.keys.len * 2;
+    // 'TMPO' section (omitted for a constant-tempo score — segment 0
+    // alone — so a mapless blob stays byte-stable).
+    if (table.transport.segments.len > 1)
+        len += META_SECTION_HEADER_LEN + 4 + table.transport.segments.len * TEMPO_REC_LEN;
     return len;
 }
 
@@ -533,6 +560,23 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
         for (table.keys) |key| {
             std.mem.writeInt(u16, dest[pos..][0..2], key.ease_ref, .little);
             pos += 2;
+        }
+    }
+
+    // The 'TMPO' section (after 'EASE', fixed order): the authored tempo
+    // segments including segment 0, so a timeline consumer draws the true
+    // beat grid with no transport join. Present only under a tempo map.
+    if (table.transport.segments.len > 1) {
+        const payload_len = 4 + table.transport.segments.len * TEMPO_REC_LEN;
+        std.mem.writeInt(u32, dest[pos..][0..4], TEMPO_SECTION_ID, .little);
+        std.mem.writeInt(u32, dest[pos + 4 ..][0..4], @intCast(payload_len), .little);
+        pos += META_SECTION_HEADER_LEN;
+        std.mem.writeInt(u32, dest[pos..][0..4], @intCast(table.transport.segments.len), .little);
+        pos += 4;
+        for (table.transport.segments) |seg| {
+            const rec: MetaTempoRec = .{ .tick = seg.start_tick, .bpm = seg.bpm };
+            @memcpy(dest[pos..][0..TEMPO_REC_LEN], std.mem.asBytes(&rec));
+            pos += TEMPO_REC_LEN;
         }
     }
 
@@ -963,6 +1007,84 @@ test "encodeMeta: a linear-only score emits no 'EASE' section" {
     // 1 track, 2 keys, 0 controls, no scenes, only the default linear
     // program → the blob ends at the last key (byte-stable vs pre-ease).
     try t.expectEqual(META_HEADER_LEN + META_TRACK_LEN + 2 * META_KEY_LEN, m.len);
+}
+
+test "encodeMeta: a tempo map rides as a 'TMPO' section" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4])
+        \\(tempo :at 4b :bpm 240)
+        \\(tempo :at 8b :bpm 96.5)
+        \\(track :target circle-radius (key :at 0b :value 0.1))
+    ;
+    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    var buf: [4096]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    try t.expectEqual(metaEncodedLen(&r), m.len);
+
+    // 1 track, 1 key, 0 controls, no scenes, linear-only → the section
+    // stream is exactly the 'TMPO' frame.
+    const sec = META_HEADER_LEN + META_TRACK_LEN + META_KEY_LEN;
+    try t.expectEqual(TEMPO_SECTION_ID, std.mem.readInt(u32, m[sec..][0..4], .little));
+    const plen = std.mem.readInt(u32, m[sec + 4 ..][0..4], .little);
+    try t.expectEqual(@as(u32, 4 + 3 * TEMPO_REC_LEN), plen);
+    try t.expectEqual(m.len, sec + META_SECTION_HEADER_LEN + plen); // self-delimiting
+
+    // Payload: count INCLUDING segment 0 (self-contained — no transport
+    // join needed), then {tick i64, bpm f64} ascending.
+    const body = sec + META_SECTION_HEADER_LEN;
+    try t.expectEqual(@as(u32, 3), std.mem.readInt(u32, m[body..][0..4], .little));
+    const ppb: i64 = 180180;
+    const rec0 = body + 4;
+    try t.expectEqual(@as(i64, 0), std.mem.readInt(i64, m[rec0..][0..8], .little));
+    try t.expectEqual(@as(f64, 120), @as(f64, @bitCast(std.mem.readInt(u64, m[rec0 + 8 ..][0..8], .little))));
+    const rec1 = rec0 + TEMPO_REC_LEN;
+    try t.expectEqual(@as(i64, 4 * ppb), std.mem.readInt(i64, m[rec1..][0..8], .little));
+    try t.expectEqual(@as(f64, 240), @as(f64, @bitCast(std.mem.readInt(u64, m[rec1 + 8 ..][0..8], .little))));
+    const rec2 = rec1 + TEMPO_REC_LEN;
+    try t.expectEqual(@as(i64, 8 * ppb), std.mem.readInt(i64, m[rec2..][0..8], .little));
+    try t.expectEqual(@as(f64, 96.5), @as(f64, @bitCast(std.mem.readInt(u64, m[rec2 + 8 ..][0..8], .little))));
+}
+
+test "encodeMeta: a constant-tempo score emits no 'TMPO' frame" {
+    var r = try Compile.compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius (key :at 0b :value 0.1))
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    var buf: [512]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    // Segment count 1 → omitted: byte-identical to a pre-tempo blob.
+    try t.expectEqual(META_HEADER_LEN + META_TRACK_LEN + META_KEY_LEN, m.len);
+}
+
+test "encodeMeta: 'TMPO' rides after 'EASE' in the fixed section order" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4])
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0)
+        \\  (key :at 4b :value 1 :ease out-cubic))
+    ;
+    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    var buf: [8192]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    try t.expectEqual(metaEncodedLen(&r), m.len);
+
+    var off: usize = META_HEADER_LEN + META_TRACK_LEN + 2 * META_KEY_LEN;
+    try t.expectEqual(EASE_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(TEMPO_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(m.len, off);
 }
 
 test "encodeMeta: 'EASE' rides after 'SCEN' when both are present" {

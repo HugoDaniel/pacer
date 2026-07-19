@@ -284,6 +284,30 @@ test('meta.scenes: a score with no scenes yields an empty array', async () => {
   assert.deepEqual(driver.meta.scenes, []);
 });
 
+test('meta.tempoMap: segments decode from the TMPO section', async () => {
+  const score = `(transport :bpm 120 :meter [4 4])
+(tempo :at 4b :bpm 240)
+(tempo :at 8b :bpm 96.5)
+(track :target radius (key :at 0b :value 0.1))`;
+  const driver = await Pacer.load(wasmModule, score, { registries: REGISTRIES });
+  assert.equal(driver.ok, true);
+
+  // Self-contained: segment 0 (the transport's own :bpm) is included, so
+  // a consumer needs no transport join.
+  assert.deepEqual(driver.meta.tempoMap, [
+    { tick: 0n, bpm: 120 },
+    { tick: 4n * TICKS_PER_BEAT, bpm: 240 },
+    { tick: 8n * TICKS_PER_BEAT, bpm: 96.5 },
+  ]);
+});
+
+test('meta.tempoMap: a constant-tempo score yields an empty array', async () => {
+  // The section is omitted on the wire (count 1 → absent), so an old
+  // blob and a mapless score decode identically.
+  const driver = await Pacer.load(wasmModule, SCORE, { registries: REGISTRIES });
+  assert.deepEqual(driver.meta.tempoMap, []);
+});
+
 test('meta.easePrograms: the deduped table decodes with per-key refs', async () => {
   const score = `(transport :bpm 120 :meter [4 4])
 (track :target radius
