@@ -244,8 +244,26 @@ pub const Evaluator = struct {
     /// The host-facing entry point: master-clock seconds in, write
     /// entries out. The returned slice aliases the evaluator's buffer —
     /// consume (or encode) before the next eval.
+    ///
+    /// Tempo-mapped scores wrap in SECONDS before the one conversion
+    /// (the it/01 seam): tick-wrapping a raw conversion would read loop
+    /// iteration 2 at the final segment's tempo. The wrapped value lands
+    /// in [0, dur] by construction, so `evalTicks`'s tick-domain wrap
+    /// below is at most an exact boundary fold (dur ≡ 0 under loop).
+    /// Constant scores keep the historical convert-then-tick-wrap path
+    /// bit-for-bit (the degenerate pin).
     pub fn evalSeconds(self: *Evaluator, seconds: f64) Error![]const Writes.Entry {
-        const t = try self.table.transport.map.tickFromSeconds(seconds);
+        const transport = &self.table.transport;
+        const map = &transport.map;
+        if (map.segments.len > 1 and transport.dur != null) {
+            const loop_secs = transport.loop_secs.?; // compile computed it with dur
+            const wrapped = switch (transport.end) {
+                .loop => TimeMap.loopSeconds(seconds, loop_secs),
+                .hold => TimeMap.holdSeconds(seconds, loop_secs),
+            };
+            return self.evalTicks(try map.tickFromSeconds(wrapped));
+        }
+        const t = try map.tickFromSeconds(seconds);
         return self.evalTicks(t);
     }
 
@@ -650,6 +668,94 @@ test "loop end-behavior wraps the playhead" {
     // Negative time wraps forward: -1b ≡ 7b → 7/8.
     const negative = ev.evalTicks(try map.tickFromBeats(-1))[0].value[0];
     try t_.expectApproxEqAbs(@as(f32, 0.875), negative, 1e-6);
+}
+
+test "tempo-map: evalSeconds wraps in seconds — loop replays the early segment" {
+    // 120 bpm doubling to 240 at beat 4; dur 8b (tick 1441440) is
+    // wall-clock 3 s. t = 3.5 s must replay 0.5 s of SEGMENT 0 (beat 1);
+    // the tick-domain wrap would read 1.5 s of segment-1 tempo and land
+    // on beat 2 — double the correct position.
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4] :dur 8b :end loop)
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target radius
+        \\  (key :at 0b :value 0.0)
+        \\  (key :at 8b :value 1.0))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    const wrapped = (try ev.evalSeconds(3.5))[0].value[0];
+    try t_.expectApproxEqAbs(@as(f32, 0.125), wrapped, 1e-6);
+    // Bit-identical to evaluating the wrapped time directly.
+    try t_.expectEqual((try ev.evalSeconds(0.5))[0].value[0], wrapped);
+    // The bug the seconds-wrap prevents: tick-wrapping the raw conversion.
+    const buggy = ev.evalTicks(@mod(try map.tickFromSeconds(3.5), 1441440))[0].value[0];
+    try t_.expectApproxEqAbs(@as(f32, 0.25), buggy, 1e-6);
+    try t_.expect(buggy != wrapped);
+}
+
+test "tempo-map: evalSeconds hold clamps at loop_secs" {
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4] :dur 8b :end hold)
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target radius
+        \\  (key :at 0b :value 0.0)
+        \\  (key :at 8b :value 1.0))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    try t_.expectEqual(@as(f32, 1.0), (try ev.evalSeconds(5.0))[0].value[0]);
+    try t_.expectEqual((try ev.evalSeconds(3.0))[0].value[0], (try ev.evalSeconds(5.0))[0].value[0]);
+    // Below the edge the map is live: 2.5 s = 2 beats into segment 1 →
+    // beat 6 → 0.75.
+    try t_.expectApproxEqAbs(@as(f32, 0.75), (try ev.evalSeconds(2.5))[0].value[0], 1e-6);
+}
+
+test "tempo-map: :emit [bpm] steps at the boundary and matches (track :expr bpm) bit-exactly" {
+    const bpm_targets = [_]Compile.Target{
+        .{ .name = "bpm", .ncomp = 1 },
+        .{ .name = "radius", .ncomp = 1 },
+    };
+    var r = try compileScoreWith(
+        \\(transport :bpm 120 :meter [4 4] :emit [bpm])
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target radius :expr bpm)
+    , &bpm_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    // One tick before the boundary: both lanes read segment 0.
+    const before = ev.evalTicks(720719);
+    try t_.expectEqual(@as(usize, 2), before.len);
+    try t_.expectEqual(@as(f32, 120), before[0].value[0]); // emit lane
+    try t_.expectEqual(before[0].value[0], before[1].value[0]); // expr twin
+    // At the boundary: the step lands, still bit-identical.
+    const after = ev.evalTicks(720720);
+    try t_.expectEqual(@as(f32, 240), after[0].value[0]);
+    try t_.expectEqual(after[0].value[0], after[1].value[0]);
+}
+
+test "tempo-map: a trigger's beats-since lane is tick-derived, map-unaffected" {
+    var r = try compileScoreWith(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(tempo :at 4b :bpm 240)
+        \\(trigger :target pulse :every 2b)
+    , &trigger_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    // Beat 5: last event at beat 4, one beat ago — phase 0.5 through the
+    // 2-beat period, beats-since exactly 1, regardless of the map.
+    const e = ev.evalTicks(5 * 180180)[0];
+    try t_.expectEqual(@as(f32, 0.5), e.value[0]);
+    try t_.expectEqual(@as(f32, 1.0), e.value[3]);
 }
 
 test "vector tracks interpolate per component, zero lanes stay zero" {

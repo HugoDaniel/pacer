@@ -302,11 +302,19 @@ pub const CompileResult = struct {
     /// positions are ticks and stay put — including positions authored
     /// in `s`, which were converted at load with the load-time tempo
     /// (the standard tempo-nudge semantic). False (no change) when no
-    /// table is loaded or bpm is outside the manifest's 1..1000 bounds.
+    /// table is loaded, bpm is outside the manifest's 1..1000 bounds, or
+    /// the score carries a tempo map — a mapped score's tempo truth is
+    /// score text (segment bpms are not one nudgeable scalar); edit the
+    /// `(tempo …)` forms and reload instead.
     pub fn setBpm(self: *CompileResult, bpm: f64) bool {
         if (!std.math.isFinite(bpm) or bpm < 1 or bpm > 1000) return false;
         const tb = if (self.table) |*tb| tb else return false;
+        if (tb.transport.map.segments.len > 1) return false;
         tb.transport.map = TimeMap.init(bpm, tb.transport.map.beats_per_bar);
+        // Keep the compile-time loop_secs constant coherent (the
+        // constant-score eval path never reads it, but a stale value is
+        // a trap for meta consumers).
+        if (tb.transport.dur) |d| tb.transport.loop_secs = tb.transport.map.secondsFromTick(d);
         return true;
     }
 };
@@ -587,7 +595,20 @@ const Builder = struct {
             std.debug.assert(elems.len == 2); // vector-shape :len 2
             beats_per_bar = @intFromFloat(readNumber(tree, elems[0]).?);
         }
-        const map = TimeMap.init(bpm, beats_per_bar);
+        var map = TimeMap.init(bpm, beats_per_bar);
+
+        // `(tempo …)` segments attach BEFORE any position conversion, so
+        // an s-unit `:dur` here — and every downstream s position —
+        // resolves through the finished piecewise map. The authored pairs
+        // ride the table (`Transport.segments`, the 'TMPO' truth); the
+        // derived cumulative table lives on the map.
+        const segments = try self.buildTempoSegments(ta, &map, bpm);
+        if (segments.len > 1) {
+            const derived = ta.alloc(TimeMap.Segment, segments.len) catch return error.OutOfMemory;
+            for (derived, segments) |*d, s|
+                d.* = .{ .start_tick = s.start_tick, .bpm = s.bpm, .start_sec = undefined, .tps = undefined };
+            map = map.withSegments(derived);
+        }
 
         var dur: ?TrackTable.Tick = null;
         if (kvNode(tree, children, "dur")) |dur_node| {
@@ -614,9 +635,12 @@ const Builder = struct {
             emit_lanes = try self.buildEmit(ta, emit_node);
         }
 
-        const segments = try self.buildTempoSegments(ta, &map, bpm);
+        // The seconds-domain wrap constant for mapped scores, computed
+        // once here (exact f64 from the table).
+        var loop_secs: ?f64 = null;
+        if (dur) |d| loop_secs = map.secondsFromTick(d);
 
-        return .{ .map = map, .dur = dur, .end = end, .emit = emit_lanes, .segments = segments };
+        return .{ .map = map, .dur = dur, .end = end, .emit = emit_lanes, .segments = segments, .loop_secs = loop_secs };
     }
 
     /// Collect the `(tempo …)` forms into the transport's segment table.
@@ -893,9 +917,11 @@ const Builder = struct {
             }
 
             // Window on the tick grid; overflow of either bound skips the
-            // scene (tick_overflow was emitted; the table is doomed).
+            // scene (tick_overflow was emitted; the table is doomed). An
+            // s-unit :dur is wall-clock from the scene START (anchored) —
+            // under a tempo map "1s long" depends on where the scene sits.
             const start_tick = try self.posToTick(map, at_node.?) orelse continue;
-            const dur_ticks = try self.posToTick(map, dur_node.?) orelse continue;
+            const dur_ticks = try self.posToTickLocal(map, dur_node.?, start_tick) orelse continue;
             // The eval-time window gate compares against `start + dur`;
             // guarantee that end fits the grid now, so the frame path never
             // overflows (a non-positive dur is a harmless never-active
@@ -1001,7 +1027,10 @@ const Builder = struct {
 
         const schedule: TrackTable.Trigger = if (every_node) |en| blk: {
             // Periodic interval must be a positive tick count (overflow
-            // already emitted tick_overflow and returned null).
+            // already emitted tick_overflow and returned null). An
+            // s-unit :every converts at the map ORIGIN — a wall-clock
+            // period has no fixed tick width on a varying grid; mapped
+            // scores should author :every in b/bar.
             const every_ticks = try self.posToTick(map, en) orelse return;
             if (every_ticks <= 0) {
                 try self.emit(.trigger_invalid, tree.spanOf(en), ":every must be a positive interval", .{});
@@ -1015,7 +1044,7 @@ const Builder = struct {
             var offset_local: TrackTable.Tick = 0;
             var offset_span = tree.spanOf(idx);
             if (kvNode(tree, children, "offset")) |on| {
-                offset_local = try self.posToTick(map, on) orelse return;
+                offset_local = try self.posToTickLocal(map, on, offset) orelse return;
                 offset_span = tree.spanOf(on);
             }
             const offset_abs = std.math.add(TrackTable.Tick, offset, offset_local) catch {
@@ -1056,7 +1085,7 @@ const Builder = struct {
         var ticks: std.ArrayList(TrackTable.Tick) = .empty;
         var prev: ?TrackTable.Tick = null;
         for (elems) |elem| {
-            const local = try self.posToTick(map, elem) orelse return null;
+            const local = try self.posToTickLocal(map, elem, offset) orelse return null;
             const tick = std.math.add(TrackTable.Tick, local, offset) catch {
                 try self.emit(.tick_overflow, tree.spanOf(elem), "scene-relative trigger position overflows the tick grid", .{});
                 return null;
@@ -1169,7 +1198,9 @@ const Builder = struct {
         const children = tree.formHeader(key_form).children;
 
         const at_node = kvNode(tree, children, "at").?;
-        const local = try self.posToTick(map, at_node) orelse return null;
+        // Scene-relative: the offset anchors an s-unit position under a
+        // tempo map (wall-clock from the scene start).
+        const local = try self.posToTickLocal(map, at_node, offset) orelse return null;
         // Scene start folds in here (offset 0 for a top-level track can
         // never overflow — `local` is already a valid grid position).
         const at = std.math.add(TrackTable.Tick, local, offset) catch {
@@ -1191,10 +1222,25 @@ const Builder = struct {
         return .{ .at = at, .value = val.value, .ease_ref = ease_ref };
     }
 
-    /// `:at` / `:dur` → ticks. Unit set is manifest-validated [b bar s].
+    /// `:at` / `:dur` → ticks at the transport origin. Unit set is
+    /// manifest-validated [b bar s]. Sugar for `posToTickLocal` with a
+    /// zero anchor — the two are the same math there.
+    fn posToTick(self: *Builder, map: *const TimeMap, node: NodeIndex) Error!?TrackTable.Tick {
+        return self.posToTickLocal(map, node, 0);
+    }
+
+    /// `:at` / `:dur` → a LOCAL tick offset from `anchor` (the caller
+    /// folds the anchor back in, as it always did for scene-relative
+    /// positions). b/bar are pure tick offsets — exact, map-free. An
+    /// `s`-unit value under a tempo map is wall-clock FROM THE ANCHOR:
+    /// `tickFromSeconds(secondsFromTick(anchor) + v) - anchor` — one
+    /// conversion each way, both through `TimeMap` (the only converter).
+    /// The degenerate (constant) map keeps the historical single
+    /// conversion verbatim — anchoring would perturb the float path and
+    /// break the bit-stability pin; the two agree in exact math.
     /// Returns null after emitting on overflow (non-finite literals
     /// cannot reach here — the lexer owns number syntax).
-    fn posToTick(self: *Builder, map: *const TimeMap, node: NodeIndex) Error!?TrackTable.Tick {
+    fn posToTickLocal(self: *Builder, map: *const TimeMap, node: NodeIndex, anchor: TrackTable.Tick) Error!?TrackTable.Tick {
         const nu = self.tree.numberWithUnitOf(node);
         const converted = if (std.mem.eql(u8, nu.unit, "b"))
             map.tickFromBeats(nu.value)
@@ -1202,7 +1248,12 @@ const Builder = struct {
             map.tickFromBars(nu.value)
         else blk: {
             std.debug.assert(std.mem.eql(u8, nu.unit, "s"));
-            break :blk map.tickFromSeconds(nu.value);
+            if (map.segments.len <= 1 or anchor == 0)
+                break :blk map.tickFromSeconds(nu.value);
+            break :blk if (map.tickFromSeconds(map.secondsFromTick(anchor) + nu.value)) |abs|
+                abs - anchor
+            else |err|
+                err;
         };
         return converted catch {
             try self.emit(.tick_overflow, self.tree.spanOf(node), "position overflows the tick grid", .{});
@@ -2833,6 +2884,101 @@ test "tempo-map: more than MAX_TEMPO_SEGMENTS segments is tempo_map_invalid" {
     try t.expect(!r.ok());
     const d = r.findDiag(.tempo_map_invalid).?;
     try t.expect(std.mem.indexOf(u8, d.message, "512") != null);
+}
+
+test "tempo-map: s-unit key positions resolve through the piecewise map" {
+    // 120 bpm 4/4 doubling to 240 at beat 4 (tick 720720, wall-clock
+    // 2 s). A key at 3 s is 1 s past the boundary — 4 beats at 240 —
+    // landing on beat 8 (tick 1441440), NOT the constant-bpm beat 6.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0)
+        \\  (key :at 3s :value 1))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const keys = r.table.?.trackKeys(&r.table.?.tracks[0]);
+    try t.expectEqual(@as(i64, 1441440), keys[1].at);
+}
+
+test "tempo-map: scene :at / :dur and trigger :at in s are map-correct" {
+    // scene :at 3s → tick 1441440; :dur 1s is wall-clock FROM THE SCENE
+    // START (3 s → 4 s = 4 beats at 240) → 720720 ticks, not the
+    // origin-tempo 360360. The trigger hit at 3s matches the scene start.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(tempo :at 4b :bpm 240)
+        \\(scene :name drop :at 3s :dur 1s
+        \\  (track :target circle-radius (key :at 0b :value 1)))
+        \\(trigger :target cutoff :at [3s])
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const table = r.table.?;
+    try t.expectEqual(@as(i64, 1441440), table.scenes[0].start_tick);
+    try t.expectEqual(@as(i64, 720720), table.scenes[0].dur_ticks);
+    try t.expectEqual(@as(i64, 1441440), table.tracks[1].source.trigger.at[0]);
+}
+
+test "tempo-map: a scened key in s anchors at the scene start" {
+    // Scene starts at beat 4 = the tempo boundary (wall-clock 2 s). A
+    // key 1 s into the scene runs at 240 bpm → local 720720 ticks,
+    // absolute 1441440 — the constant math would land at 1081080.
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(tempo :at 4b :bpm 240)
+        \\(scene :name drop :at 4b :dur 8b
+        \\  (track :target circle-radius
+        \\    (key :at 0b :value 0)
+        \\    (key :at 1s :value 1)))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const keys = r.table.?.trackKeys(&r.table.?.tracks[0]);
+    try t.expectEqual(@as(i64, 1441440), keys[1].at);
+}
+
+test "tempo-map: transport :dur in s converts from the origin; loop_secs is exact" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4] :dur 3s :end loop)
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target circle-radius (key :at 0b :value 0))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    // 3 s = 2 s of 120 bpm (720720) + 1 s of 240 (720720) = 1441440.
+    try t.expectEqual(@as(?i64, 1441440), r.table.?.transport.dur);
+    try t.expectEqual(@as(?f64, 3.0), r.table.?.transport.loop_secs);
+}
+
+test "tempo-map: setBpm refuses a mapped score (tempo truth is score text)" {
+    var mapped = try compile(t.allocator,
+        \\(transport :bpm 120 :meter [4 4])
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target circle-radius (key :at 0b :value 0))
+    , &test_targets);
+    defer mapped.deinit();
+    try t.expect(mapped.ok());
+    try t.expect(!mapped.setBpm(90));
+    try t.expectEqual(@as(f64, 120), mapped.table.?.transport.map.bpm);
+
+    // A constant score still nudges — and keeps loop_secs coherent.
+    var flat = try compile(t.allocator,
+        \\(transport :bpm 120 :dur 2bar :end loop)
+        \\(track :target circle-radius (key :at 0b :value 0))
+    , &test_targets);
+    defer flat.deinit();
+    try t.expect(flat.ok());
+    try t.expect(flat.setBpm(240));
+    try t.expectEqual(@as(f64, 240), flat.table.?.transport.map.bpm);
+    // 2 bars = 1441440 ticks at 720720 tps = 2 s.
+    try t.expectEqual(@as(?f64, 2.0), flat.table.?.transport.loop_secs);
 }
 
 test "tempo-map: a (tempo …) with no (transport …) is still transport_missing, never a crash" {

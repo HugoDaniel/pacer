@@ -96,6 +96,11 @@ pub const Transport = struct {
     /// Defaults empty only for hand-built transports in tests; every
     /// compiled table carries ≥ 1.
     segments: []const TempoSegment = &.{},
+    /// `map.secondsFromTick(dur)`, computed once at compile (and kept
+    /// coherent by `setBpm`); null iff `dur` is null. The seconds-domain
+    /// wrap constant for MAPPED scores — the constant-score eval path
+    /// never reads it (tick wrap, bit-stable goldens).
+    loop_secs: ?f64 = null,
 };
 
 /// One keyframe, position already on the tick grid.

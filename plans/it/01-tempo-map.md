@@ -133,6 +133,30 @@ Gate: `zig build verify` (all cases native+wasm) + npm gate + audit.
 
 ## Progress log
 
+- 2026-07-19 — **Phase 3 done** (eval integration, reds first). Compile:
+  `buildTransport` attaches the derived piecewise table BEFORE any
+  position conversion (an s-unit `:dur` resolves through the finished
+  map); `Transport.loop_secs` computed once at compile; `posToTickLocal`
+  is the one converter — s-unit positions under a map are wall-clock FROM
+  THE ANCHOR (scene-relative keys/trigger hits/offsets anchor at the
+  scene start, scene `:dur` at the scene's own `:at`; degenerate maps
+  keep the historical single conversion verbatim — anchoring would
+  perturb the float path). `setBpm` refuses a mapped score (tempo truth
+  is score text) and keeps `loop_secs` coherent on constant scores.
+  Eval: `evalSeconds` wraps mapped scores in SECONDS (loopSeconds/
+  holdSeconds) then converts once; `evalTicks` is UNCHANGED — ticks are
+  musical positions, so the tick-domain `@mod` stays correct for direct
+  tick callers, and the wrapped-seconds result lands in [0, dur] where
+  the tick fold is at most the exact dur≡0 boundary. Decision parked in
+  the log: an s-unit `:every` converts at the map origin (a wall-clock
+  period has no fixed tick width on a varying grid — author b/bar);
+  revisit as a diagnostic if it bites. Reds: 3s key lands 1441440 not
+  1081080; scene :at/:dur + trigger :at in s; scened key anchored at a
+  boundary-start scene; transport :dur 3s + loop_secs exact; setBpm
+  refusal; evalSeconds loop replays the EARLY segment (asserting the
+  tick-wrap bug value differs); hold clamps at loop_secs; emit-[bpm] vs
+  `:expr bpm` bit-equal across the step; trigger beats-since map-free.
+  Gates: test ✓, wasm ✓, corpus 22/22 ✓, audit 31/31 ✓, fuzz ✓.
 - 2026-07-19 — **Phase 2 done** (piecewise TimeMap, reds first).
   `TimeMap.Segment` {start_tick, bpm, start_sec, tps}; `withSegments`
   builds the cumulative table in the documented op order (`tps_i = (bpm_i
