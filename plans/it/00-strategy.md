@@ -59,18 +59,22 @@ this pointer.
 | A | 01 tempo-map | ☑ 2026-07-19 |
 | A | 02 engine-contract | ☑ 2026-07-19 |
 | A | 03 exact-import P0–P2 | ☑ 2026-07-19 |
-| A | studio refresh + tempo ritual | ☐ |
+| A | studio refresh + tempo ritual | ☑ 2026-07-19 |
 | B | 03 exact-import P3–P4 (gate: batida T2) | ☐ |
 | B | 04 audio-bus-v2 (gate: batida P40) | ☐ |
 | B | engine ritual + template | ☐ |
 
 ## What's next
 
-→ **Wave A item 4: the tempo ritual** on a synthetic Txx fixture (the
-studio-refresh prereqs already ran during 03 P1 — fresh wasm copied,
-glue re-linked, editor real-wasm tests green). 01/02/03-P0–P2 landed
-whole. After the ritual, Wave A closes; Wave B gates are external
-(batida milestones). Wave B gates are external (batida milestones,
+→ **WAVE A COMPLETE (2026-07-19).** All four items landed the day the
+order was pinned: 01 tempo-map (5 phases, corpus 25 cases, 'TMPO' wire),
+02 engine-contract (host-check kit + matrix), 03 P0–P2 (provider seam,
+TimingData emitter, skeleton-file path), studio refresh + the tempo
+ritual (pngine 9fa7a3e — beat anchors true across a synthetic T240,
+zero drift warnings, the constant-bpm drift made visible at the same
+wall-clock). Wave B is externally gated: batida T2 unblocks 03 P3–P4,
+batida P40 unblocks 04. Next in THIS repo: nothing until a batida
+milestone lands or the 0.2.0 publish/1.0 tag release calls are made. Wave B gates are external (batida milestones,
 tracked in `~/llm/plans/it/10-demos-and-milestones.md`).
 
 ## Decision log
