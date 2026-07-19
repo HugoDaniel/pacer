@@ -84,7 +84,18 @@ with a corpus regen and a diff review:
 - **One `mul + floor` per conversion** — seconds↔ticks goes through the single
   documented f64 seam in `TimeMap`; everything else is exact integer tick math on
   the `PPC = 720720` grid (divides 1..16 exactly). Overflow is a `tick_overflow`
-  diagnostic, never a wrap.
+  diagnostic, never a wrap. Under a `(tempo …)` map the same mul+floor runs
+  against the active segment's origin, over a cumulative segment table built in
+  one documented op order (`start_sec_{i+1} = start_sec_i + Δtick/tps_i`, never
+  reassociated); a ≤1-segment map takes the constant code path VERBATIM — the
+  degenerate pin that keeps every pre-map score bit-identical.
+- **Seconds-domain wrap for mapped scores** — `:end loop`/`hold` under a tempo
+  map wrap host seconds first (IEEE-exact `@mod`/`@min` in `TimeMap.loopSeconds`
+  / `holdSeconds`, `loop_secs` computed once at compile), THEN convert once —
+  tick-wrapping would replay loop iteration 2 at the final segment's tempo.
+  Constant scores keep the historical tick-domain wrap in `Eval` bit-for-bit;
+  `evalTicks` always wraps ticks (they are musical positions — correct in both
+  worlds).
 - **Fixed-count bezier bisection** — `Easing` solves cubic-bezier with a fixed
   iteration count (no epsilon early-exit), so the result is bit-identical.
 - **Pinned `sjon.trig` kernels** — sin / cos / exp / pow route through SJON's

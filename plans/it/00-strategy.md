@@ -56,7 +56,7 @@ this pointer.
 
 | Wave | Item | Status |
 |---|---|---|
-| A | 01 tempo-map | ☐ |
+| A | 01 tempo-map | ☑ 2026-07-19 |
 | A | 02 engine-contract | ☐ |
 | A | 03 exact-import P0–P2 | ☐ |
 | A | studio refresh + tempo ritual | ☐ |
@@ -66,9 +66,10 @@ this pointer.
 
 ## What's next
 
-→ **Open [01-tempo-map.md](01-tempo-map.md), run Phase 1** (schema +
-validation). Nothing here is blocked; Wave B gates are external (batida
-milestones, tracked in `~/llm/plans/it/10-demos-and-milestones.md`).
+→ **Open [02-engine-contract.md](02-engine-contract.md), run Phase 1**
+(host-check kit). 01 tempo-map landed whole (5 phases, corpus 25 cases,
+'TMPO' on the wire). Wave B gates are external (batida milestones,
+tracked in `~/llm/plans/it/10-demos-and-milestones.md`).
 
 ## Decision log
 

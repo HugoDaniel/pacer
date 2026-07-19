@@ -251,6 +251,12 @@ function renderMeta(meta, names) {
     const refs = meta.tracks.flatMap((tr) => tr.keys.map((k) => k.easeRef));
     out += `\n  (measerefs [${refs.join(' ')}])`;
   }
+  // The 'TMPO' section (after 'EASE'): tempo segments including segment
+  // 0, ticks decimal, bpm as an f64 bit pattern — the native runner's
+  // mirror. Empty (omitted on the wire) for a constant-tempo score.
+  for (const seg of meta.tempoMap) {
+    out += `\n  (mtempo :tick ${seg.tick} :bpm "${hex(f64Bits(seg.bpm), 16)}")`;
+  }
   return `${out})\n`;
 }
 

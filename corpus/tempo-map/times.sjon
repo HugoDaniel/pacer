@@ -1,0 +1,16 @@
+; tempo-map harness. Emit joins by exact name: beat (id 0) and bpm
+; (id 1) are emit-only lanes, radius (id 2) is the keyed ramp. The ramp
+; runs 0→1 over beats 0..6 (the 2.5 s key = tick 1081080), then holds
+; to the 8b loop edge (wall-clock 3.0 s).
+(target beat :registry 0)   ; id 0 — emitted lane
+(target bpm :registry 0)    ; id 1 — emitted lane, the tempo step
+(target radius :registry 0) ; id 2 — keyed track, s-unit second key
+
+(times
+  "0000000000000000" ; 0.0 s — beat 0, bpm 120, radius 0
+  "3FF0000000000000" ; 1.0 s — beat 2, bpm 120, radius 2/6
+  "4000000000000000" ; 2.0 s — AT the boundary: beat 4, bpm steps to 240
+  "4004000000000000" ; 2.5 s — beat 6 (map-correct), radius lands 1.0 exactly
+  "400C000000000000" ; 3.5 s — wraps to 0.5 s: beat 1 at 120 (the EARLY segment)
+  "4019000000000000" ; 6.25 s — two loops + 0.25 s: beat 0.5, bpm 120
+)

@@ -1,0 +1,8 @@
+; tempo-map-hold harness: one keyed ramp over the full 8b score.
+(target radius :registry 0)
+
+(times
+  "4004000000000000" ; 2.5 s — beat 6 (inside segment 1): 6/8 = 0.75
+  "4008000000000000" ; 3.0 s — exactly loop_secs: beat 8, the key value 1.0
+  "4014000000000000" ; 5.0 s — past the edge: clamps to 3.0 s, identical writes
+)

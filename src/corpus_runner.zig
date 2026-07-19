@@ -668,6 +668,19 @@ fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult,
             }
         } else if (sid == Abi.EASE_SECTION_ID) {
             try renderEasePrograms(w, blob[body..][0..plen]);
+        } else if (sid == Abi.TEMPO_SECTION_ID) {
+            // Tempo segments (including segment 0): ticks decimal, bpm
+            // as an f64 bit pattern like the transport's own :bpm.
+            const seg_count = std.mem.readInt(u32, blob[body..][0..4], .little);
+            var trec: usize = body + 4;
+            for (0..seg_count) |_| {
+                const rec = blob[trec..][0..Abi.TEMPO_REC_LEN];
+                w.print("\n  (mtempo :tick {d} :bpm \"{X:0>16}\")", .{
+                    std.mem.readInt(i64, rec[0..8], .little),
+                    std.mem.readInt(u64, rec[8..16], .little),
+                }) catch return error.OutOfMemory;
+                trec += Abi.TEMPO_REC_LEN;
+            }
         }
         soff = body + plen;
     }

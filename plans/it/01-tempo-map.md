@@ -133,6 +133,24 @@ Gate: `zig build verify` (all cases native+wasm) + npm gate + audit.
 
 ## Progress log
 
+- 2026-07-19 — **Phase 5 done — PLAN COMPLETE** (goldens + seams doc,
+  reds first: the three new cases failed on missing goldens before
+  `--update`). Cases: `tempo-map/` (two segments, a 2.5 s key landing
+  map-correct at beat 6, `:emit [beat bpm]` with the step AT the
+  boundary, loop wraps crossing back into the EARLY segment at 3.5 s and
+  6.25 s) and `tempo-map-hold/` (the hold edge clamping at loop_secs
+  with identical writes past it) — split into two cases because one
+  transport cannot be both `:end loop` and `:end hold`; `diag-tempo/`
+  freezes `tempo_map_invalid` ordinal 30 with all four span shapes +
+  messages. Both renderers grew `(mtempo :tick T :bpm "H16")` (the
+  ../01 both-renderers rule). Review: every pre-existing golden
+  byte-identical (git shows only the three new dirs). CLAUDE.md
+  determinism-seams amended (piecewise table op order + the
+  seconds-domain wrap + the evalTicks-is-musical note); README
+  score-language paragraph mentions `(tempo …)`. The plan's "90s key"
+  sketch became 2.5 s — same map-correctness pin, hand-computable inside
+  the 8b loop. Gates: verify ✓ (25 cases native+wasm), npm 68/68 ✓,
+  audit 31/31 ✓.
 - 2026-07-19 — **Phase 4 done** (wire + npm parity, reds first). `'TMPO'`
   TLV section after `'EASE'` (fixed order 'SCEN'/'EASE'/'TMPO'):
   `[count u32][{tick i64, bpm f64} × count]`, segment 0 INCLUDED

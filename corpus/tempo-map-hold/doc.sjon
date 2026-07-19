@@ -1,0 +1,11 @@
+; tempo-map-hold: the seconds-domain :end hold edge under a tempo map.
+; Same 120→240 split at beat 4; :dur 8b = 3.0 s wall-clock. Past the
+; edge the playhead clamps AT loop_secs (3.0 s → tick 1441440 = beat 8),
+; so every later eval freezes on identical writes — the hold twin of
+; tempo-map's seconds-domain loop wrap.
+(transport :bpm 120 :meter [4 4] :dur 8b :end hold)
+(tempo :at 4b :bpm 240)
+
+(track :target radius
+  (key :at 0b :value 0.0)
+  (key :at 8b :value 1.0))

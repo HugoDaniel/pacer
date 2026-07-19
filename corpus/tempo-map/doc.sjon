@@ -1,0 +1,15 @@
+; tempo-map: the piecewise transport under the corpus gate. 120 bpm
+; doubling to 240 at beat 4 (tick 720720 — wall-clock 2.0 s), so the
+; loop :dur 8b is 3.0 s of wall-clock, not 4.0. Pins, per eval time:
+;   - the s-unit key resolves through the map (2.5 s = beat 6, tick
+;     1081080 — the constant math would say beat 5);
+;   - :emit [beat bpm]: bpm is a STEP function landing exactly at the
+;     boundary, bit-identical to what a `(track :expr bpm)` would emit;
+;   - loop wraps in SECONDS: 3.5 s replays 0.5 s of SEGMENT 0 (beat 1)
+;     — tick-wrapping would land on beat 2 at the wrong tempo.
+(transport :bpm 120 :meter [4 4] :dur 8b :end loop :emit [beat bpm])
+(tempo :at 4b :bpm 240)
+
+(track :target radius
+  (key :at 0b :value 0.0)
+  (key :at 2.5s :value 1.0))

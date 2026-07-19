@@ -24,7 +24,10 @@ engine (1 cycle = 1 bar on the shared grid), `(trigger …)` event lanes
 (phase/count/gate/beats-since), `(scene …)` windows with scene-local time,
 `(control …)` pins that write every frame and feed expressions
 (live-overridable from the host), `(transport :emit …)` built-in clock lanes,
-and compose-mode `(target …)` declarations so a score compiles with no host
+`(tempo …)` segments — a piecewise tempo map moving only the seconds↔ticks
+projection (b/bar positions stay exact ticks; the `bpm` env/emit lane becomes a
+step function; mapped scores loop/hold in wall-clock seconds) — and
+compose-mode `(target …)` declarations so a score compiles with no host
 registries at all.
 
 ## Layout

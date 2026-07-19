@@ -1,0 +1,4 @@
+; diag-tempo harness: load fails on the malformed (tempo …) forms; this
+; time is never evaluated.
+(target radius :registry 0)
+(times "0000000000000000")

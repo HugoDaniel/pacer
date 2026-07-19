@@ -1,0 +1,20 @@
+; diag-tempo: tempo_map_invalid frozen — the code number (30), each
+; span shape (form vs literal), and each message, native == wasm. One
+; compile collects all four defects; load fails, times never evaluate.
+(transport :bpm 120 :meter [4 4])
+
+; missing :bpm → the (tempo …) form's span
+(tempo :at 4b)
+
+; a seconds-unit :at → the literal's span (the map defines the seconds axis)
+(tempo :at 30s :bpm 150)
+
+; a non-positive :at → the literal's span (segment 0 owns tick 0)
+(tempo :at 0b :bpm 150)
+
+; descending after a valid 8b segment → the literal's span
+(tempo :at 8b :bpm 150)
+(tempo :at 6b :bpm 96)
+
+(track :target radius
+  (key :at 0b :value 0.0))
