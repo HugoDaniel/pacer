@@ -111,3 +111,17 @@ tracked in `~/llm/plans/it/10-demos-and-milestones.md`).
   (`sr.start(0, tm)` — audio slaved to visuals, the size-play tradeoff),
   opposite of the studio topology; the fix if drift ever shows is sampling
   `ax.currentTime`.
+- 2026-07-19 — **Cross-set implementation order pinned** (mirrored in the
+  batida set, `~/llm/plans/it/10`): **pacer Wave A first** — 01's `(tempo …)`
+  vocabulary is the one wire freeze every downstream producer targets, and
+  Wave A upgrades the shipped studio stack with no new repos (the ordering
+  held in practice: 01 ran P1–P4 the same day this was pinned). Then batida
+  T0 → T1 → T2; **T2 is "first light"** for the new stack — the prerendered
+  mode (bounce WAV + `clockOnlyHost` + exact `export-score` skeletons) ships
+  a full demo with no P40/worklets. Then 03 P3–P4 (exact provider, gate:
+  batida T2) → batida P40 → 04 (studio engine, per-channel bus, clock flip)
+  → batida T3 (the long grind, deliberately AFTER the integration milestones
+  so cross-repo flaws surface while cheap) → batida T4 (the demo-stack
+  page). audzio interleaves freely through A2; its consumer moment is A3
+  (batida `play` via cubeb); the `(audio-graph …)` node swap comes last.
+  Critical path: pacer 01 → T0→T1→T2 → 03 P3 → P40 → 04 → T3 → T4.
