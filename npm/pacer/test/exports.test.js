@@ -65,8 +65,13 @@ test('public API resolves through the package name (self-reference)', async () =
 
   const audio = await import('pacer/audio');
   assert.equal(typeof audio.sointuHost, 'function');
+  assert.equal(typeof audio.clockOnlyHost, 'function');
+  assert.equal(audio.clockOnlyHost, audio.sointuHost); // rename-by-append alias
   assert.equal(typeof audio.paramRegistry, 'function');
   assert.equal(typeof audio.applyParams, 'function');
+
+  const hostCheck = await import('pacer/host-check');
+  assert.equal(typeof hostCheck.checkAudioTargetHost, 'function');
 });
 
 test('version is in lockstep across package.json, build.zig.zon, and root.zig', () => {

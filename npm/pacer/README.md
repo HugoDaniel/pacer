@@ -87,8 +87,54 @@ const clock = perfClock();
 | `pacer` | `Pacer` — `load`, `reload`, `eval` / `evalTicks` / `evalBytes`, `meta`, `setControl` / `clearControl` / `registerControl`, `setBpm`, `exprFailures` |
 | `pacer/route` | `toUniforms`, `routeWrites` — split write entries across registries |
 | `pacer/clock` | `perfClock`, `masterClock` — sample the master clock (audio masters when playing) |
-| `pacer/audio` | `sointuHost`, `paramRegistry`, `applyParams` — the `AudioTargetHost` boundary |
+| `pacer/audio` | `clockOnlyHost` (alias `sointuHost`), `paramRegistry`, `applyParams` — the `AudioTargetHost` boundary |
+| `pacer/host-check` | `checkAudioTargetHost` — the host conformance kit, for consumers' test suites |
 | `pacer/pacer.wasm` | the driver binary asset |
+
+## The audio engine contract
+
+pacer knows **registries, params, and one clock — never engines.** An audio
+host is exactly three methods (`pacer/audio`'s `AudioTargetHost`):
+
+```
+params()   → [{ name, ncomp?, min?, max?, default? }]   // the animatable surface
+setParam(name, value)                                    // total: never throws
+clock()    → null | { seconds, playing }                 // null = someone else masters
+```
+
+There is no `timeline()`, no engine metadata, no capability negotiation:
+**tempo and timeline truth travel as score text** — `(transport …)` /
+`(tempo …)` forms, generated skeletons — never as a runtime host query.
+Capability differences surface through `params()` content alone: an engine
+exposes what it honestly controls, a score is engine-relative by construction
+(its registry-1 targets resolve against whatever the active host declares;
+unresolved names are the ordinary `unknown_target` diagnostic).
+
+`checkAudioTargetHost(host, { expectClock }) → findings[]` (`pacer/host-check`)
+is the executable statement of that contract — pure, never throws, empty array
+= conformant. Run it inside your host's own test suite.
+
+One contract, three delivery footprints:
+
+1. **Prerendered wasm-song** — a self-rendering synth binary (KB-scale);
+   clock-only.
+2. **Module + live engine** — real params + a clock; the param surface is the
+   score's registry 1.
+3. **PCM bounce** — rendered audio (a WAV, an `<audio>` element); clock-only,
+   zero engine risk — how a demo ships bit-pinned sound.
+
+Modes 1 and 3 are `clockOnlyHost(player)`: any `currentTime`/`playing` surface
+becomes a conformant host with an empty registry. It was published as
+`sointuHost` (the first such player); both names stay exported.
+
+### Host matrix
+
+| Host | `params()` | `clock()` | Master | Where |
+|---|---|---|---|---|
+| `clockOnlyHost` (alias `sointuHost`) | empty — the asset is pre-rendered (Sointu `pNGa` song, batida/audzio bounce PCM) | player time | audio | `pacer/audio` (shipped) |
+| `chiptuneHost` | volume/tempo/pitch (`ch<N>.*` blocked upstream) | null | rAF (studio) | pngine studio (shipped) |
+| `batidaHost` | `gain`, `ch<N>.gain/mute`, `separation` — no tempo/pitch by batida's timeline-invariance rule | frames/rate | audio | batida glue (planned) |
+| audzio graph | every AudioParam in the loaded `(audio-graph …)` | context time | audio | future (audzio set) |
 
 ## Develop
 

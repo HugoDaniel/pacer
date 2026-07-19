@@ -94,6 +94,21 @@ Gate: npm gate.
 
 ## Progress log
 
+- 2026-07-19 — **Phase 2 done — PLAN COMPLETE** (matrix + docs). Red as
+  scoped by the plan: the exports lockstep in `test/exports.test.js` now
+  pins `pacer/host-check` resolving through the package name plus the
+  `clockOnlyHost === sointuHost` alias on `pacer/audio` (it passed
+  immediately — P1 had shipped the surface; the pin is the artifact).
+  README rewritten around the contract: the three-methods doctrine
+  ("tempo/timeline truth travels as score text, never a runtime host
+  query"), the delivery-mode ladder (prerendered wasm-song / module +
+  live engine / PCM bounce — one contract, three footprints), the kit's
+  usage, and the host matrix (clockOnlyHost / chiptuneHost / batidaHost
+  planned / audzio future). `HostFinding` already landed in types.js
+  (P1). **Follow-ups filed, cross-repo, not done here:** (a) the
+  studio's `chiptune-host.test.ts` adds one `checkAudioTargetHost` red
+  on its next touch; (b) batida's host lands with the kit in its own
+  suite from day one (`expectClock: true`). Gate: npm ✓ (81 pass).
 - 2026-07-19 — **Phase 1 done** (host-check kit, reds first).
   `src/host-check.js` + the `pacer/host-check` subpath export (exports
   map append; triple-pin untouched — accumulate-till-publish).

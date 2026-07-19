@@ -57,7 +57,7 @@ this pointer.
 | Wave | Item | Status |
 |---|---|---|
 | A | 01 tempo-map | ☑ 2026-07-19 |
-| A | 02 engine-contract | ☐ |
+| A | 02 engine-contract | ☑ 2026-07-19 |
 | A | 03 exact-import P0–P2 | ☐ |
 | A | studio refresh + tempo ritual | ☐ |
 | B | 03 exact-import P3–P4 (gate: batida T2) | ☐ |
@@ -66,9 +66,10 @@ this pointer.
 
 ## What's next
 
-→ **Open [02-engine-contract.md](02-engine-contract.md), run Phase 1**
-(host-check kit). 01 tempo-map landed whole (5 phases, corpus 25 cases,
-'TMPO' on the wire). Wave B gates are external (batida milestones,
+→ **Open [03-exact-import.md](03-exact-import.md), run Phase 0** (freeze
+`TimingData`, characterize the approx path) — studio editor repo. 01 and
+02 landed whole (01: 5 phases, corpus 25 cases, 'TMPO' on the wire;
+02: host-check kit + matrix, npm 81 green). Wave B gates are external (batida milestones,
 tracked in `~/llm/plans/it/10-demos-and-milestones.md`).
 
 ## Decision log
