@@ -216,13 +216,16 @@ pub const Code = enum(u16) {
     /// A malformed compose-mode `(target …)` declaration (missing
     /// name/arity, duplicate name, arity conflict with the host, cap).
     target_decl_invalid,
+    /// A malformed `(tempo …)` form (missing `:at`/`:bpm`, non-positive
+    /// / seconds-unit / non-ascending `:at`, segment cap).
+    tempo_map_invalid,
 };
 
 comptime {
     // The corpus prints codes as ordinals; pin both ends so an
     // accidental insertion breaks the build, not the goldens.
     std.debug.assert(@intFromEnum(Code.unknown_target) == 0);
-    std.debug.assert(@intFromEnum(Code.target_decl_invalid) == 29);
+    std.debug.assert(@intFromEnum(Code.tempo_map_invalid) == 30);
 }
 
 /// One pacer load diagnostic. `span` indexes the combined text (same
@@ -611,7 +614,62 @@ const Builder = struct {
             emit_lanes = try self.buildEmit(ta, emit_node);
         }
 
-        return .{ .map = map, .dur = dur, .end = end, .emit = emit_lanes };
+        const segments = try self.buildTempoSegments(ta, &map, bpm);
+
+        return .{ .map = map, .dur = dur, .end = end, .emit = emit_lanes, .segments = segments };
+    }
+
+    /// Collect the `(tempo …)` forms into the transport's segment table.
+    /// Segment 0 is the transport's own `:bpm` at tick 0; each form must
+    /// carry `:at` (> 0, b/bar units only — an `s` position is circular,
+    /// it would need the map being defined) and `:bpm`, strictly
+    /// ascending in DOCUMENT order — reject, don't sort (the trigger
+    /// `:at` discipline). Every defect is `tempo_map_invalid` at the
+    /// offending span; the walk keeps collecting (the table nulls via
+    /// the diag gate), except the cap, which stops it at the first
+    /// overflowing form.
+    fn buildTempoSegments(self: *Builder, ta: Allocator, map: *const TimeMap, bpm0: f64) Error![]const TrackTable.TempoSegment {
+        const tree = self.tree;
+        var segs: std.ArrayList(TrackTable.TempoSegment) = .empty;
+        segs.append(ta, .{ .start_tick = 0, .bpm = bpm0 }) catch return error.OutOfMemory;
+        for (self.forest) |idx| {
+            if (!isForm(tree, idx, "tempo")) continue;
+            const children = tree.formHeader(idx).children;
+            const at_node = kvNode(tree, children, "at");
+            const bpm_node = kvNode(tree, children, "bpm");
+            if (at_node == null or bpm_node == null) {
+                try self.emit(.tempo_map_invalid, tree.spanOf(idx), "(tempo …) requires :at and :bpm", .{});
+                continue;
+            }
+            const nu = tree.numberWithUnitOf(at_node.?);
+            if (std.mem.eql(u8, nu.unit, "s")) {
+                try self.emit(.tempo_map_invalid, tree.spanOf(at_node.?), ":at cannot be in seconds — the tempo map defines the seconds axis; use b or bar", .{});
+                continue;
+            }
+            const converted = if (std.mem.eql(u8, nu.unit, "b"))
+                map.tickFromBeats(nu.value)
+            else
+                map.tickFromBars(nu.value);
+            const tick = converted catch {
+                try self.emit(.tick_overflow, tree.spanOf(at_node.?), "position overflows the tick grid", .{});
+                continue;
+            };
+            if (tick <= 0) {
+                try self.emit(.tempo_map_invalid, tree.spanOf(at_node.?), ":at must be after tick 0 (segment 0 is the transport's own :bpm)", .{});
+                continue;
+            }
+            if (tick <= segs.items[segs.items.len - 1].start_tick) {
+                try self.emit(.tempo_map_invalid, tree.spanOf(at_node.?), ":at positions must be strictly ascending in document order", .{});
+                continue;
+            }
+            if (segs.items.len == TrackTable.MAX_TEMPO_SEGMENTS) {
+                try self.emit(.tempo_map_invalid, tree.spanOf(idx), "more than {d} tempo segments", .{TrackTable.MAX_TEMPO_SEGMENTS});
+                break;
+            }
+            segs.append(ta, .{ .start_tick = tick, .bpm = readNumber(tree, bpm_node.?).? }) catch
+                return error.OutOfMemory;
+        }
+        return segs.items;
     }
 
     /// Resolve a `(transport :emit …)` list into clock lanes. Each entry
@@ -2657,4 +2715,134 @@ test "compile never panics on stray top-level atoms (fuzz regression)" {
         defer r.deinit();
         try t.expect(!r.ok()); // no transport → not loadable, but no panic
     }
+}
+
+// ---- (tempo …) tempo-map segments (plan it/01) ----
+
+test "tempo-map: a clean multi-segment score compiles with 0 diags" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 125 :meter [4 4] :dur 400b :end loop)
+        \\(tempo :at 160b :bpm 150)
+        \\(tempo :at 200b :bpm 96.5)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0.2)
+        \\  (key :at 300b :value 0.8))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const ppb: i64 = 180180;
+    const segs = r.table.?.transport.segments;
+    try t.expectEqual(@as(usize, 3), segs.len);
+    try t.expectEqual(@as(i64, 0), segs[0].start_tick);
+    try t.expectEqual(@as(f64, 125), segs[0].bpm);
+    try t.expectEqual(@as(i64, 160 * ppb), segs[1].start_tick);
+    try t.expectEqual(@as(f64, 150), segs[1].bpm);
+    try t.expectEqual(@as(i64, 200 * ppb), segs[2].start_tick);
+    try t.expectEqual(@as(f64, 96.5), segs[2].bpm);
+}
+
+test "tempo-map: a mapless score still carries segment 0 (the transport's own :bpm)" {
+    var r = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius (key :at 0b :value 0.5))
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    const segs = r.table.?.transport.segments;
+    try t.expectEqual(@as(usize, 1), segs.len);
+    try t.expectEqual(@as(i64, 0), segs[0].start_tick);
+    try t.expectEqual(@as(f64, 120), segs[0].bpm);
+}
+
+test "tempo-map: a missing :at or :bpm is tempo_map_invalid with the form's span" {
+    const cases = [_][:0]const u8{
+        \\(transport :bpm 120)
+        \\(tempo :bpm 150)
+        ,
+        \\(transport :bpm 120)
+        \\(tempo :at 160b)
+    };
+    for (cases) |source| {
+        var r = try compile(t.allocator, source, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        const d = r.findDiag(.tempo_map_invalid).?;
+        const start = r.validated.userOffset(d.span.start);
+        try t.expectEqualStrings("(tempo", source[start..][0..6]);
+    }
+}
+
+test "tempo-map: :at 0b, negative, seconds-unit, descending, duplicate → tempo_map_invalid" {
+    const cases = [_][:0]const u8{
+        \\(transport :bpm 120)
+        \\(tempo :at 0b :bpm 150)
+        ,
+        \\(transport :bpm 120)
+        \\(tempo :at -4b :bpm 150)
+        ,
+        \\(transport :bpm 120)
+        \\(tempo :at 30s :bpm 150)
+        ,
+        \\(transport :bpm 120)
+        \\(tempo :at 200b :bpm 150)
+        \\(tempo :at 160b :bpm 96.5)
+        ,
+        \\(transport :bpm 120)
+        \\(tempo :at 160b :bpm 150)
+        \\(tempo :at 160b :bpm 96.5)
+    };
+    for (cases) |source| {
+        var r = try compile(t.allocator, source, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.findDiag(.tempo_map_invalid) != null);
+    }
+}
+
+test "tempo-map: the seconds-unit rejection spans the offending :at literal" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120)
+        \\(tempo :at 30s :bpm 150)
+    ;
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    const d = r.findDiag(.tempo_map_invalid).?;
+    const start = r.validated.userOffset(d.span.start);
+    const end = r.validated.userOffset(d.span.end);
+    try t.expectEqualStrings("30s", source[start..end]);
+}
+
+test "tempo-map: more than MAX_TEMPO_SEGMENTS segments is tempo_map_invalid" {
+    // 513 generated forms: segment 0 + 511 forms fill the cap; the 512th
+    // form is the first overflowing one (the walk stops there).
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(a, "(transport :bpm 120)\n");
+    for (0..513) |i| {
+        const line = try std.fmt.allocPrint(a, "(tempo :at {d}b :bpm 130)\n", .{(i + 1) * 4});
+        try src.appendSlice(a, line);
+    }
+    try src.append(a, 0);
+    const source = src.items[0 .. src.items.len - 1 :0];
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    const d = r.findDiag(.tempo_map_invalid).?;
+    try t.expect(std.mem.indexOf(u8, d.message, "512") != null);
+}
+
+test "tempo-map: a (tempo …) with no (transport …) is still transport_missing, never a crash" {
+    // Segment 0 IS the transport's :bpm — without a transport there is no
+    // map to join, so the existing transport_missing verdict stands and
+    // the orphaned (tempo …) forms are simply never walked.
+    var r = try compile(t.allocator,
+        \\(tempo :at 160b :bpm 150)
+    , &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    try t.expect(r.findDiag(.transport_missing) != null);
 }

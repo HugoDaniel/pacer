@@ -235,6 +235,20 @@
     (key :name emit :type emit-lanes :optional true
       :description "Reserved time names (beat, bar, phase, bpm, t) broadcast as write lanes, each resolved against the host registries by that exact name. Emitted lanes land before track writes, so an explicit (track …) on the same target overrides an emitted lane; controls still land last."))
 
+  ; A tempo change opens a new transport segment; segment 0 is the
+  ; transport's own :bpm at tick 0. Only the seconds↔ticks projection
+  ; moves — b/bar positions are exact integer ticks regardless of the
+  ; map. :at/:bpm are schema-optional so a missing key — like a
+  ; non-positive, seconds-unit, descending, or duplicate :at — surfaces
+  ; as a pacer tempo_map_invalid diagnostic (with a span), not a bare
+  ; SJON error (the scene/trigger discipline).
+  (form :name tempo
+    :description "A tempo change: from :at onward the transport runs at :bpm, until the next (tempo …) or the end of the score. One form per change, strictly ascending in document order."
+    (key :name at :type time-pos :optional true
+      :description "Segment start: > 0, b/bar units only (an s position would need the map being defined), strictly ascending across (tempo …) forms.")
+    (key :name bpm :type bpm-value :optional true
+      :description "Tempo in effect from :at onward. Fractional tempi are legal."))
+
   (form :name scene
     :description "A named window [at, at+dur) on the transport tick grid; child tracks and triggers resolve their positions scene-relative. Scenes may overlap and hand a target off by write order. :name/:at/:dur are schema-optional so a scene missing any surfaces as a pacer scene_invalid diagnostic (with a span), not a bare SJON missing-key error."
     :positional scene-section

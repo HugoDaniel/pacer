@@ -133,4 +133,20 @@ Gate: `zig build verify` (all cases native+wasm) + npm gate + audit.
 
 ## Progress log
 
-(empty — plan not started)
+- 2026-07-19 — **Phase 1 done** (schema + validation, reds first). `(tempo …)`
+  form in `schema/pacer.sjon` (`:at`/`:bpm` schema-optional, the scene/trigger
+  discipline); `tempo_map_invalid` appended to `Compile.Code` at ordinal 30
+  (comptime pin moved); `TrackTable.TempoSegment` + `MAX_TEMPO_SEGMENTS = 512`
+  (counting segment 0) + `Transport.segments` (default `&.{}` for hand-built
+  test transports; every compiled table carries ≥ 1); `buildTempoSegments`
+  in `Compile.buildTransport` — segment 0 = transport `:bpm` at tick 0,
+  reject-don't-sort, cap stops at the first overflowing form's span. Reds
+  cover: clean 3-segment score (0 diags, exact ticks), mapless segment-0,
+  missing `:at`/`:bpm` (form span), `:at 0b`/negative/`30s`(literal span)/
+  descending/duplicate, 513-form cap, orphaned `(tempo …)` without transport.
+  Interpretation call: the plan's "joins the default transport" red is pinned
+  as the EXISTING `transport_missing` verdict (no crash, forms unwalked) —
+  transport stays required; segment 0 needs its `:bpm`, and inventing a
+  default tempo is a language change no other plan line asks for.
+  Gates: `zig build test` ✓, `audit-diagnostics` 31/31 ✓, `zig build wasm` ✓,
+  corpus 22/22 byte-identical ✓.

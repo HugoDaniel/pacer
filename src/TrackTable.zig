@@ -44,6 +44,9 @@ pub const MAX_KEYS = 4096;
 pub const MAX_EASE_PROGRAMS = 128;
 pub const MAX_CONTROLS = 64;
 pub const MAX_SCENES = 64;
+/// Tempo-map cap, counting segment 0 (the transport's own `:bpm`) plus
+/// one per `(tempo …)` form. Generators coalesce adjacent-equal bpm.
+pub const MAX_TEMPO_SEGMENTS = 512;
 
 /// `Track.scene` sentinel: the track is top-level (un-scened). A real
 /// scene index is always < `MAX_SCENES`, so this can never collide.
@@ -69,6 +72,13 @@ pub const EmitLane = struct {
     registry: u8,
 };
 
+/// One tempo-map segment: from `start_tick` (inclusive) the transport
+/// runs at `bpm`, until the next segment or the end of the score.
+pub const TempoSegment = struct {
+    start_tick: Tick,
+    bpm: f64,
+};
+
 pub const Transport = struct {
     map: TimeMap,
     /// Score length in ticks; `null` = unbounded (end-behavior ignored).
@@ -79,6 +89,13 @@ pub const Transport = struct {
     /// target overrides an emitted lane (controls still land last).
     /// Empty when the score declares no `:emit`.
     emit: []const EmitLane = &.{},
+    /// Tempo-map segments, authored truth for the `'TMPO'` wire section:
+    /// `segments[0]` is always `{0, transport :bpm}`, one more per
+    /// `(tempo …)` form, start ticks strictly ascending (established at
+    /// compile — eval never sorts). Length 1 = constant-tempo score.
+    /// Defaults empty only for hand-built transports in tests; every
+    /// compiled table carries ≥ 1.
+    segments: []const TempoSegment = &.{},
 };
 
 /// One keyframe, position already on the tick grid.
