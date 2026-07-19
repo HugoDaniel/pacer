@@ -133,7 +133,8 @@ Gate: editor tests.
   EARLY (this phase's real-wasm red needed them): `zig build wasm` +
   `npm run build:wasm-copy` in pacer, `pnpm install --prefer-offline` in
   studio/ — the tempo-map wasm + tempoMap-decoding glue are live in the
-  editor now. Gate: editor tests 1713 ✓, tsc + biome clean. (freeze TimingData + characterize, reds
+  editor now. Gate: editor tests 1713 ✓, tsc + biome clean.
+- 2026-07-19 — **Phase 0 done** (freeze TimingData + characterize, reds
   first; pngine adcb47b). `lib/score/timing-provider.ts`: the frozen
   `TimingData` shape exactly as designed (beats native, no seconds
   field), `TimingProvider`/`TimingAnalysis`/`isTimingError`, and
