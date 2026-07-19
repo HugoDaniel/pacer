@@ -102,4 +102,44 @@ Gate: editor tests.
 
 ## Progress log
 
-(empty — plan not started)
+- 2026-07-19 — **Phase 2 done — WAVE A SCOPE COMPLETE (P0–P2)**
+  (skeleton-file path + provider selector, reds first; pngine a442310).
+  Model: `analyzeWith(provider, bytes)` routes through the SELECTED
+  provider (red pins the routing with a marker provider and the
+  {error}→ok:false surface); `defaultProviders` is the auto-prefer
+  roster (exact will be prepended in Wave B); `selectableProviders`
+  hides unavailable ones (never disabled); `skeletonAction(text,
+  current)` is the ONE insert semantics shared by `importAction`'s
+  emitted text and a verbatim engine-emitted `.score.sjon` file.
+  `ItAnalysis` now carries `timing: TimingData` (not `mod`) and the
+  dialog summary is the provider's line (display gains "(.it)" — logged
+  as the one deliberate text change). Dialog stays dumb: provider
+  `<select>` rendered only when there's a choice, a "Load skeleton
+  text…" input dispatching `skeletonAction` directly. P3–P4 wait on
+  batida T2 (Wave B). Gate: editor tests 1720 ✓, tsc + svelte-check
+  (0 errors) + biome clean.
+- 2026-07-19 — **Phase 1 done** (emitter over TimingData, reds first;
+  pngine 85f3661). `emitScore(data, selection)` reads everything from
+  `TimingData`; the old golden text is byte-identical for one-segment
+  data (pinned — the refactor is invisible for the approx provider);
+  `tempoSegments.length > 1` ⇒ `(tempo :at Nb :bpm B)` lines after the
+  transport, and the mapped skeleton loads clean through the REAL studio
+  pacer.wasm with `meta.tempoMap` echoing `[{0,125},{8b·tpb,250}]` — the
+  studio-side proof of plan 01's wire. `TimingData` grew a required
+  provider-built `summary` (the `; imported from …` line) so "(.it)" /
+  "rows/beat" vocabulary stays provider-side; `timingFromModule(mod)` is
+  the exported pure core `approxProvider.analyze` delegates to;
+  `importAction` routes through it. NOTE: the studio-refresh prereqs ran
+  EARLY (this phase's real-wasm red needed them): `zig build wasm` +
+  `npm run build:wasm-copy` in pacer, `pnpm install --prefer-offline` in
+  studio/ — the tempo-map wasm + tempoMap-decoding glue are live in the
+  editor now. Gate: editor tests 1713 ✓, tsc + biome clean. (freeze TimingData + characterize, reds
+  first; pngine adcb47b). `lib/score/timing-provider.ts`: the frozen
+  `TimingData` shape exactly as designed (beats native, no seconds
+  field), `TimingProvider`/`TimingAnalysis`/`isTimingError`, and
+  `approxProvider` (`id: 'approx-ts'`) wrapping it-reader/it-timing
+  verbatim — zero behavior change to the wrapped libs. Reds characterize
+  against `analyzeIt` (census) and `timingOf` (warnings verbatim) over
+  real fixture BYTES (packed cells through `buildIt`, incl. the Axx
+  warning case and the NOTE_MAX cut/off rule); bad bytes → `{error}`,
+  never a throw. Gate: editor tests 1710 ✓ (+6), biome + tsc clean.

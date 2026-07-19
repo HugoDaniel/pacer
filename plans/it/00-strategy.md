@@ -58,7 +58,7 @@ this pointer.
 |---|---|---|
 | A | 01 tempo-map | ☑ 2026-07-19 |
 | A | 02 engine-contract | ☑ 2026-07-19 |
-| A | 03 exact-import P0–P2 | ☐ |
+| A | 03 exact-import P0–P2 | ☑ 2026-07-19 |
 | A | studio refresh + tempo ritual | ☐ |
 | B | 03 exact-import P3–P4 (gate: batida T2) | ☐ |
 | B | 04 audio-bus-v2 (gate: batida P40) | ☐ |
@@ -66,10 +66,11 @@ this pointer.
 
 ## What's next
 
-→ **Open [03-exact-import.md](03-exact-import.md), run Phase 0** (freeze
-`TimingData`, characterize the approx path) — studio editor repo. 01 and
-02 landed whole (01: 5 phases, corpus 25 cases, 'TMPO' on the wire;
-02: host-check kit + matrix, npm 81 green). Wave B gates are external (batida milestones,
+→ **Wave A item 4: the tempo ritual** on a synthetic Txx fixture (the
+studio-refresh prereqs already ran during 03 P1 — fresh wasm copied,
+glue re-linked, editor real-wasm tests green). 01/02/03-P0–P2 landed
+whole. After the ritual, Wave A closes; Wave B gates are external
+(batida milestones). Wave B gates are external (batida milestones,
 tracked in `~/llm/plans/it/10-demos-and-milestones.md`).
 
 ## Decision log
