@@ -145,6 +145,14 @@ the user judges the surfaces proven in the field). Carried cross-repo follow-ups
 items). The ONLY still-open follow-up, non-blocking: the instrumented `--fuzz`
 re-check on the next zig toolchain bump.
 
+→ **Post-1.0 work now has its own set: [`it/`](it/README.md)** (2026-07-19, from
+the batida/demo-stack re-adaptation in `~/llm/plans/it/`): 01 tempo-map
+transport (pacer core — the one plan that moves a determinism seam), 02
+engine-agnostic host contract + conformance kit, 03 exact tracker import via
+timing providers, 04 audio-bus v2 with per-channel params. Wave A is unblocked
+today; Waves B items gate on batida milestones. Board + pointer:
+`it/00-strategy.md`.
+
 Phase 5 landed diagnostic goldens: four `diag-*` corpus cases (`diag-controls`, `diag-ease`,
 `diag-track-source`, `diag-target-decl`) that FREEZE 11 previously-golden-untested `Compile.Code`
 variants — `unknown_target`(0), `target_arity_mismatch`(1), `ease_stages_exceeded`(6),

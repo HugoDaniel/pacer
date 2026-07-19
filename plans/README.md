@@ -56,3 +56,9 @@ surface for it — without ever pulling per-pixel work out of WGSL.
 Execution order, wave milestones, and the current "what's next" pointer are
 maintained in [00-strategy.md](00-strategy.md) — the "Depends on" column above only
 records hard dependencies.
+
+Post-1.0 follow-on: the **demo-stack wave** lives in [`it/`](it/README.md)
+(created 2026-07-19, from the batida re-adaptation in `~/llm/plans/it/`) —
+tempo-map transport, the engine-agnostic audio-host contract, exact tracker
+import, audio-bus v2. It inherits this file's execution discipline; its own
+strategy board is `it/00-strategy.md`.
