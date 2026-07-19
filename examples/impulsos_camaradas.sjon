@@ -1,0 +1,1551 @@
+; "Demoscene" editor starter template — the studio's flagship default.
+;
+; A deferred signed-distance-field pipeline, sequenced in one frame:
+;   1. compute  cs1 → gA : per cell, raymarch the cube map() and store hit pos + mask
+;   2. compute  cs2 → gB : read gA's hit pos, store the surface normal (map() gradient)
+;   3. fragment fs3 → sceneTex (off-screen): perlin-noise scene crossfaded into the
+;                                shaded cube (gA/gB), mixed by the `sceneMix` uniform 
+;   4. fragment fs4 → screen : chroma-shift sceneTex by the `chromaAmt` uniform
+;  
+; The motion (scene crossfade, cube spin, chroma intensity) is NOT baked into the
+; WGSL — it comes from the sibling pacer score (demoscene.score.sjon), which drives
+; the three bare uniform fields `sceneMix` / `spin` / `chromaAmt` of the dedicated
+; `motion` buffer through the worker's setUniforms seam. With no score, they stay 0
+; and the static perlin-noise scene shows.
+
+; Internal render resolution of the SDF g-buffers. Halve these (e.g. 640 × 360) for
+; half-size buffers — and update GW/GH in the WGSL to match (SJON defines can't reach
+; shader text). One workgroup of 64 threads covers 64 cells, dispatched 1-D.
+(define :name GRID_W :value 1280)
+(define :name GRID_H :value 720)
+(define :name NDOT :value (+ (* 20 20) 1))   ; 400 dots (20×20) + 1 black-cover instance (index 400, drawn last); a beating dot grows into the grid, strobes icons, spells "camaradas", then a fist → all-black; see the `dots` layer + passDots
+
+; Dedicated author uniform buffer (NOT pngine-inputs — pngine overwrites that each
+; frame). The pacer score drives these three scalar fields by bare name.
+(buffer :name motion :size 16 :usage [uniform copy-dst])      ; sceneMix, spin, chromaAmt, beat
+
+; pngine time/resolution (time, width, height, aspect) — written every frame.
+(buffer :name pngineU :size 16 :usage [uniform copy-dst])
+
+; Screen-sized SDF g-buffers (vec4f per cell). gA = hit position + hit mask;
+; gB = surface normal + hit flag.
+(buffer :name gA :size (* GRID_W GRID_H 16) :usage [storage])
+(buffer :name gB :size (* GRID_W GRID_H 16) :usage [storage])
+
+; Off-screen composite target (stage 3 renders here; stage 4 samples it). Textures
+; can track the live canvas, so this is full-resolution regardless of GRID_W/H.
+(texture :name sceneTex :size canvas :format rgba16float :usage [render-attachment texture-binding])
+(sampler :name samp :mag-filter linear :min-filter linear)
+
+(queue :name writeInputs
+  (write-buffer :buffer pngineU :offset 0 :data pngine-inputs))
+
+; ── Stage 1: raymarch the SDF cube into gA ──────────────────────────────────
+(shader-module :name cs1 :code """
+// The raymarch spin comes from spinAt(motion.beat): free-spin, then a 4-beat
+// decel to a face-on stop (see spinAt below). pngine (binding 2) supplies the
+// real canvas aspect. (layout auto) strips unused bindings — keep only what the
+// bind group references.
+struct Motion { sceneMix: f32, spin: f32, chromaAmt: f32, beat: f32, };
+@group(0) @binding(0) var<uniform> motion: Motion;
+@group(0) @binding(1) var<storage, read_write> gA: array<vec4f>;
+struct PngineInputs { time: f32, width: f32, height: f32, aspect: f32, };
+@group(0) @binding(2) var<uniform> pngine: PngineInputs;
+
+const GW: u32 = 1280u;   // keep == GRID_W
+const GH: u32 = 720u;    // keep == GRID_H
+
+fn rot2(a: f32) -> mat2x2f { let c = cos(a); let s = sin(a); return mat2x2f(c, s, -s, c); }
+
+fn sdBox(p: vec3f, b: vec3f) -> f32 {
+  let q = abs(p) - b;
+  return length(max(q, vec3f(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+const TAU: f32   = 6.28318530718;
+const ALIGN: f32 = 12.56637061436;  // 4π — box axis-aligned (yaw & pitch full turns)
+const STOP_B: f32 = 145.0;          // beat the cube freezes, face-on
+const DECEL: f32  = 4.0;            // deceleration window (beats)
+
+// Free-spin (1 revolution / 4 beats), then smoothstep-decelerate over the last
+// DECEL beats into the next face-on orientation and hold. Derived purely from
+// `beat`, so cs1 and cs2 stay in lockstep and it resets on the loop wrap.
+fn spinAt(beat: f32) -> f32 {
+  let cont = TAU * beat / 4.0;
+  let startB = STOP_B - DECEL;
+  let contStart = TAU * startB / 4.0;
+  let faceAngle = ceil(contStart / ALIGN) * ALIGN;  // next face-on angle ahead
+  let k = clamp((beat - startB) / DECEL, 0.0, 1.0);
+  // Ease out of the free-spin at its OWN speed (C1-continuous → no stall at 141),
+  // rolling to rest exactly face-on. Cubic e(k): e(0)=0, e(1)=1, e'(1)=0, e'(0)=v0
+  // set to the free-spin distance over the window (2π) ÷ the distance to the next
+  // face-on angle, so it ENTERS at the spin speed. Clamp keeps e monotonic.
+  let v0 = clamp((TAU * DECEL / 4.0) / max(faceAngle - contStart, 0.001), 0.5, 2.0);
+  let e = k * (v0 + k * ((3.0 - 2.0 * v0) + k * (v0 - 2.0)));
+  return select(cont, mix(contStart, faceAngle, e), beat >= startB);
+}
+
+// iq-style scene SDF: one rounded box, yawed + pitched by `spin`.
+fn map(p0: vec3f, spin: f32) -> f32 {
+  var p = p0;
+  let a = rot2(spin) * p.xz;            // yaw around Y
+  p = vec3f(a.x, p.y, a.y);
+  let b = rot2(spin * 0.5) * p.yz;      // pitch around X
+  p = vec3f(p.x, b.x, b.y);
+  return sdBox(p, vec3f(0.6)) - 0.04;   // rounded, slightly smaller
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= GW * GH) { return; }
+  let px = idx % GW;
+  let py = idx / GW;
+
+  let uv = (vec2f(f32(px), f32(py)) + 0.5) / vec2f(f32(GW), f32(GH));
+  let aspect = pngine.aspect;
+  var ndc = uv * 2.0 - 1.0;
+  ndc.x = ndc.x * aspect;
+  ndc.y = -ndc.y;                       // +y up
+
+  let ro = vec3f(0.0, 0.0, -2.6);
+  // As the cube stops (beats 141→145) grow it to fill `cover` of the MIN screen
+  // dimension: a pure image magnification about centre (scale ndc.xy). The base
+  // face-on square measures 0.4823·min-side, so magnify by cover/0.4823;
+  // ·min(aspect,1) retargets to the width on portrait, so it's always `cover` of
+  // the min side with equal margins (10% each at cover = 0.8). cs2 needs no change
+  // — it samples normals at gA's hit positions, whatever rays we cast here.
+  let cover = 0.8;
+  let grow = smoothstep(141.0, 145.0, motion.beat);
+  let mag = mix(1.0, (cover / 0.4823) * min(aspect, 1.0), grow);
+  let rd = normalize(vec3f(ndc / mag, 1.5));
+
+  var t = 0.0;
+  var hit = 0.0;
+  var pos = ro;
+  for (var i = 0; i < 96; i = i + 1) {
+    pos = ro + rd * t;
+    let d = map(pos, spinAt(motion.beat));
+    if (d < 0.001) { hit = 1.0; break; }
+    t = t + d;
+    if (t > 8.0) { break; }
+  }
+  gA[idx] = vec4f(pos, hit);
+}
+""")
+
+; ── Stage 2: surface normals (SDF gradient) into gB ──────────────────────────
+(shader-module :name cs2 :code """
+// No pngine uniform here (see cs1): spinAt(motion.beat) + the g-buffers are used.
+struct Motion { sceneMix: f32, spin: f32, chromaAmt: f32, beat: f32, };
+@group(0) @binding(0) var<uniform> motion: Motion;
+@group(0) @binding(1) var<storage, read> gA: array<vec4f>;
+@group(0) @binding(2) var<storage, read_write> gB: array<vec4f>;
+
+const GW: u32 = 1280u;   // keep == GRID_W
+const GH: u32 = 720u;    // keep == GRID_H
+
+fn rot2(a: f32) -> mat2x2f { let c = cos(a); let s = sin(a); return mat2x2f(c, s, -s, c); }
+
+fn sdBox(p: vec3f, b: vec3f) -> f32 {
+  let q = abs(p) - b;
+  return length(max(q, vec3f(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+const TAU: f32   = 6.28318530718;
+const ALIGN: f32 = 12.56637061436;  // 4π — box axis-aligned (yaw & pitch full turns)
+const STOP_B: f32 = 145.0;          // beat the cube freezes, face-on
+const DECEL: f32  = 4.0;            // deceleration window (beats)
+
+// Free-spin (1 revolution / 4 beats), then smoothstep-decelerate over the last
+// DECEL beats into the next face-on orientation and hold. Derived purely from
+// `beat`, so cs1 and cs2 stay in lockstep and it resets on the loop wrap.
+fn spinAt(beat: f32) -> f32 {
+  let cont = TAU * beat / 4.0;
+  let startB = STOP_B - DECEL;
+  let contStart = TAU * startB / 4.0;
+  let faceAngle = ceil(contStart / ALIGN) * ALIGN;  // next face-on angle ahead
+  let k = clamp((beat - startB) / DECEL, 0.0, 1.0);
+  // Ease out of the free-spin at its OWN speed (C1-continuous → no stall at 141),
+  // rolling to rest exactly face-on. Cubic e(k): e(0)=0, e(1)=1, e'(1)=0, e'(0)=v0
+  // set to the free-spin distance over the window (2π) ÷ the distance to the next
+  // face-on angle, so it ENTERS at the spin speed. Clamp keeps e monotonic.
+  let v0 = clamp((TAU * DECEL / 4.0) / max(faceAngle - contStart, 0.001), 0.5, 2.0);
+  let e = k * (v0 + k * ((3.0 - 2.0 * v0) + k * (v0 - 2.0)));
+  return select(cont, mix(contStart, faceAngle, e), beat >= startB);
+}
+
+fn map(p0: vec3f, spin: f32) -> f32 {
+  var p = p0;
+  let a = rot2(spin) * p.xz;
+  p = vec3f(a.x, p.y, a.y);
+  let b = rot2(spin * 0.5) * p.yz;
+  p = vec3f(p.x, b.x, b.y);
+  return sdBox(p, vec3f(0.6)) - 0.04;
+}
+
+fn calcNormal(p: vec3f, spin: f32) -> vec3f {
+  let e = vec2f(0.0015, 0.0);
+  return normalize(vec3f(
+    map(p + e.xyy, spin) - map(p - e.xyy, spin),
+    map(p + e.yxy, spin) - map(p - e.yxy, spin),
+    map(p + e.yyx, spin) - map(p - e.yyx, spin)));
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= GW * GH) { return; }
+  let a = gA[idx];
+  if (a.w < 0.5) { gB[idx] = vec4f(0.0, 0.0, 0.0, 0.0); return; }
+  let n = calcNormal(a.xyz, spinAt(motion.beat));
+  gB[idx] = vec4f(n, 1.0);
+}
+""")
+
+; ── Stage 3: composite noise + shaded cube into the off-screen texture ───────
+(shader-module :name fs3 :code """
+struct PngineInputs { time: f32, width: f32, height: f32, aspect: f32, };
+struct Motion { sceneMix: f32, spin: f32, chromaAmt: f32, beat: f32, };
+@group(0) @binding(0) var<uniform> pngine: PngineInputs;
+@group(0) @binding(1) var<uniform> motion: Motion;
+@group(0) @binding(2) var<storage, read> gA: array<vec4f>;
+@group(0) @binding(3) var<storage, read> gB: array<vec4f>;
+
+const GW: u32 = 1280u;   // keep == GRID_W
+const GH: u32 = 720u;    // keep == GRID_H
+
+fn hash3(p: vec3f) -> f32 {
+  return fract(sin(dot(p, vec3f(127.1, 311.7, 74.7))) * 43758.5453123);
+}
+fn vnoise3(p: vec3f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  // trilinear blend of the 8 lattice corners
+  let x00 = mix(hash3(i + vec3f(0.0, 0.0, 0.0)), hash3(i + vec3f(1.0, 0.0, 0.0)), u.x);
+  let x10 = mix(hash3(i + vec3f(0.0, 1.0, 0.0)), hash3(i + vec3f(1.0, 1.0, 0.0)), u.x);
+  let x01 = mix(hash3(i + vec3f(0.0, 0.0, 1.0)), hash3(i + vec3f(1.0, 0.0, 1.0)), u.x);
+  let x11 = mix(hash3(i + vec3f(0.0, 1.0, 1.0)), hash3(i + vec3f(1.0, 1.0, 1.0)), u.x);
+  let y0 = mix(x00, x10, u.y);
+  let y1 = mix(x01, x11, u.y);
+  return mix(y0, y1, u.z);
+}
+fn fbm(p0: vec3f) -> f32 {
+  var p = p0;
+  var amp = 0.5;
+  var sum = 0.0;
+  for (var i = 0; i < 5; i = i + 1) { sum = sum + amp * vnoise3(p); p = p * 2.0; amp = amp * 0.5; }
+  return sum;
+}
+fn palette(t: f32) -> vec3f {
+  return vec3f(0.5) + vec3f(0.5) * cos(6.28318 * (vec3f(1.0) * t + vec3f(0.263, 0.416, 0.557)));
+}
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+
+// ── Off-beat DANCE (KNOBS): a hash-picked subset of the cloud dots bob at the
+// OFF-beat (the "and" between beats) — a subtle syncopated lift that settles on
+// each beat onset. `offbeat()` peaks at beat+0.5; the same motif recurs in the
+// dots + grid phases (each module has its own copy of this tiny helper).
+const BOUNCE_FRAC:  f32 = 0.16;  // fraction of cells that dance (KNOB)
+const BOUNCE_AMP:   f32 = 0.30;  // bob height, cells (KNOB — subtle)
+const BOUNCE_FLOOR: f32 = 0.16;  // min radius a dancer keeps so its bob reads (KNOB)
+
+// Off-beat bob: 0 at each beat onset, peaks on the OFF-beat (the "and"); the small
+// per-element seed spreads the peak ±~0.05 beat around it so it ripples, not pulses.
+fn offbeat(beat: f32, seed: f32) -> f32 { return abs(sin(3.14159265 * beat + 0.6 * (seed - 0.5))); }
+
+// ── Req 1: dot reveal. Before B_PULSE (bar 9.1 = beat 32) the halftone cloud isn't fully
+// shown — dots only FLASH along a diagonal band that sweeps once per beat (a "sample"
+// reveal), then fade. At B_PULSE the full cloud locks on and the beat-pulse begins.
+const B_PULSE: f32 = 32.0;
+
+// ── Req 2: red-fist background (beats 200→220). While the hero closed fist holds inside the
+// white square (drawn by the dots layer ON TOP), the surrounding black margin FILLS one small
+// red fist per beat — each tilted ∈[−33°,+33°] in a varied red — then fades out by 220 as the
+// grid canvas floods in. rot2 + the 14×14 FIST bitmap are copied from the dots module (WGSL
+// can't share fns).
+const B_FISTBG:     f32 = 200.0;
+const B_FISTBG_END: f32 = 220.0;
+const FIST_DENS:    f32 = 6.0;    // fist cells across the aspect-width (KNOB — smaller ⇒ bigger fists)
+fn rot2(a: f32) -> mat2x2f { let c = cos(a); let s = sin(a); return mat2x2f(c, s, -s, c); }
+const FIST: array<u32, 14> = array<u32, 14>(0u, 0u, 992u, 3768u, 2728u, 2728u, 2748u, 4068u, 2164u, 2188u, 3224u, 2032u, 0u, 0u);
+
+// ── Square TUNNEL backdrop (beats 148→200). In the black margin around the white hero square,
+// nested REPLICAS of that square recede toward a dark throat behind it — a square tunnel echoing
+// the hero shape, shaded to black at the throat. The nested-square BORDERS now act as a MASK over
+// the intro's PERLIN DOTS (reusing `n` above): the walls are "drawn" with the bouncing halftone
+// cloud (off-beat bob), white/shaded not blue. Rides the pre-drop build into the drop (160), then
+// settles to a quiet backdrop under the icon strobe and fades out by 200 as the red fists arrive.
+// The box-SDF iso-contours ARE nested rounded squares, so one sdRoundBox gives both the pristine
+// square cut-out AND the border phase (K/sd). sdRoundBox is copied from the grid module.
+fn sdRoundBox(p: vec2f, b: vec2f, r: f32) -> f32 {
+  let q = abs(p) - b + vec2f(r);
+  return min(max(q.x, q.y), 0.0) + length(max(q, vec2f(0.0))) - r;
+}
+const B_TUNNEL:     f32 = 148.0;  // tunnel forms (bar 38.1)          KNOBS ↓ live-tune
+const B_DROP:       f32 = 160.0;  // the drop (bar 41.1)
+const B_TUN_END:    f32 = 200.0;  // hands off to the red-fist bg
+const TUN_SQ_HALF:  f32 = 0.4;    // × min(aspect,1): hero half-extent (== fs3/dots)
+const TUN_ROUND:    f32 = 0.02;   // corner rounding of the nested squares
+const TUN_EDGE_AA:  f32 = 0.012;  // AA of the pristine square cut-out
+const TUN_DEPTH_K:  f32 = 0.11;   // perspective depth scale (K / sd)
+const TUN_SPEED:    f32 = 0.55;   // forward scroll, squares / beat (flip sign to reverse)
+const TUN_LURCH:    f32 = 0.35;   // extra forward surge on each kick
+const TUN_RINGS:    f32 = 5.0;    // nested squares per depth unit
+const TUN_LINE_W:   f32 = 0.09;   // border-band width of each nested square (phase) — the dot MASK
+const TUN_DOT_DENS: f32 = 64.0;   // halftone-dot density across the aspect width (the wall dots)
+const TUN_BACKDROP: f32 = 0.4;    // post-drop sustained level
+const TUN_DROP_DK:  f32 = 2.0;    // red-burst decay (per beat)
+const TUN_BLUE      = vec3f(0.35, 0.6, 1.0);  // post-process cool tint for the walls (KNOB)
+const TUN_BLUE_AMT: f32 = 0.6;    // wall cool-cast strength: 0 = white dots, 1 = full blue (KNOB)
+const TUN_GLOW:     f32 = 0.5;    // blue border-halo (bloom) intensity (KNOB)
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  let x = f32((i << 1u) & 2u);
+  let y = f32(i & 2u);
+  return vec4f(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+}
+
+@fragment fn fs(@builtin(position) fragPos: vec4f) -> @location(0) vec4f {
+  let uv = fragPos.xy / vec2f(pngine.width, pngine.height);
+  let aspect = pngine.width / pngine.height;
+  let beat = motion.beat;                 // pacer musical beat (BPM-synced)
+  let pulse = pow(1.0 - fract(beat), 4.0); // a sharp "beep" at each beat onset
+  let locked = smoothstep(B_PULSE - 2.0, B_PULSE, beat);  // Req 1: cloud + pulse lock on by bar 9.1
+
+  // Shared noise field: 3D domain-warped fbm (z drifts on wall-clock time, so the
+  // cloud keeps flowing between beats).
+  let np = vec3f(uv * 4.0, pngine.time * 0.20);
+  let q = vec3f(fbm(np + vec3f(0.0, 0.0, 0.0)),
+                fbm(np + vec3f(5.2, 1.3, 2.8)),
+                fbm(np + vec3f(1.7, 9.2, 3.4)));
+  let n = fbm(np + 1.6 * (q - vec3f(0.5)));
+
+  // Halftone dot grid over the field. DENS = cells across the aspect-width.
+  let DENS = 90.0;
+  let guv = vec2f(uv.x * aspect, uv.y) * DENS;
+  let cellId = floor(guv);
+  let cellF = fract(guv) - vec2f(0.5);
+  let cellR = length(cellF);
+  let aa = fwidth(cellR);
+
+  // The beeper is ONE cloud dot: the grid cell holding screen (1/3, 1/3). It
+  // never fades and swells on the beat, so it reads as a member of the cloud.
+  let beepCell = floor(vec2f((1.0 / 3.0) * aspect, 1.0 / 3.0) * DENS);
+  let isBeep = select(0.0, 1.0, all(cellId == beepCell));
+  let beepRad = 0.42 * (0.55 + 0.75 * pulse * locked);   // no swell before the pulse locks on (Req 1)
+  let rad = max(n * 0.5, beepRad * isBeep);
+
+  // OFF-BEAT DANCE: a hash-picked ~1-in-6 of the cloud dots lift on the OFF-beat
+  // (the "and"), settling on each beat — subtle. Amplitude fades as the cloud
+  // recedes; the beeper never dances; a separate radius keeps scene-2 (cellR) intact.
+  let bounceEra = 1.0 - smoothstep(74.0, 90.0, beat);
+  let isBouncer = step(hash21(cellId), BOUNCE_FRAC) * (1.0 - isBeep) * bounceEra;
+  let bph = hash21(cellId * vec2f(1.3, 0.7));
+  let bAmp = BOUNCE_AMP * smoothstep(0.0, 40.0, beat);
+  let bounce = isBouncer * bAmp * offbeat(beat, bph);
+  let cellRb = length(cellF - vec2f(0.0, bounce));
+  let radb = max(rad, BOUNCE_FLOOR * isBouncer);
+  let disc = 1.0 - smoothstep(-aa, aa, cellRb - radb);
+
+  // Scene 1: full-screen halftone cloud (fades over beats 72..80); the beeper
+  // cell stays lit through every scene and gets a brightness kick on the beat.
+  // Req 1: before B_PULSE the cloud isn't shown — a diagonal band sweeps once per beat,
+  // flash-revealing a sparse subset of dots that then fade. `locked` crossfades to the
+  // full cloud (+ the ever-lit beeper) by beat 32, where the beat-pulse takes over.
+  let diag = fract((cellId.x + cellId.y) / 40.0);           // diagonal coord (wraps across the field)
+  let sweepPos = fract(beat);                                // band position sweeps 0→1 each beat
+  let bw = 0.14;
+  let band = smoothstep(sweepPos - bw, sweepPos, diag) * (1.0 - smoothstep(sweepPos, sweepPos + bw, diag));
+  let flash = band * step(0.55, hash21(cellId * vec2f(1.7, 0.9)));   // ~45% of cells shimmer
+  let cloudFull = 1.0 - smoothstep(72.0, 80.0, beat);
+  let vis = mix(flash, max(cloudFull, isBeep), locked);
+  // "the tap": the intro's 909 accent — an F-5 hit on the "and of 2", i.e. beat ≡ 1.5 (mod 4)
+  // (beats 1.5, 5.5, 9.5, …). On each tap the flashed diagonal-sweep dots flush RED for ~0.6 beat,
+  // then fall back to the cool palette. Gated to the intro (1−locked) ⇒ gone once the cloud locks (32).
+  let tapSince = fract((beat - 1.5) / 4.0) * 4.0;            // beats since the last tap (0 at 1.5,5.5,9.5,…)
+  let tapRed   = pow(max(1.0 - tapSince / 0.6, 0.0), 2.0) * (1.0 - locked);
+  let introCol = mix(palette(n * 0.6 + 0.10), vec3f(1.0, 0.05, 0.04), tapRed);
+  var col = introCol * disc * vis;
+  col = col + palette(0.55) * disc * isBeep * (0.35 + 0.9 * pulse) * locked;
+
+  // Req 3: SNARE red-dot. The snare enters at beat 65 (bar 17.2) on the backbeat — the ODD
+  // integer beats. On each snare hit a hash-picked random cloud cell flashes RED and swells,
+  // decaying before the next beat. The cell is drawn from a disc of radius SNARE_R cells around the
+  // pulsing beeper dot (uniform in-disc via sqrt), so the reds cluster near it. Gated to the cloud era.
+  let SNARE_R  = 6.0;                                          // red-dot spawn radius, in cloud cells (KNOB)
+  let snareOdd = f32(i32(floor(beat)) & 1);                     // 1 on odd beats, 0 on even
+  let snareOn  = snareOdd * step(65.0, beat) * cloudFull * locked;
+  let snSeed   = floor(beat);
+  let snAng    = hash21(vec2f(snSeed, 1.7)) * 6.28318531;       // random direction from the beeper
+  let snR      = sqrt(hash21(vec2f(snSeed, 4.3))) * SNARE_R;    // random radius ≤ SNARE_R cells (uniform disc)
+  let snCell   = beepCell + round(vec2f(cos(snAng), sin(snAng)) * snR);
+  let isSnare  = select(0.0, 1.0, all(cellId == snCell));
+  let snareEnv = pow(1.0 - fract(beat), 3.0) * snareOn;         // sharp attack on the hit → decay
+  let snRad    = 0.34 + 0.24 * snareEnv;                        // the picked dot swells as it pulses
+  let snDisc   = 1.0 - smoothstep(-aa, aa, cellR - snRad);
+  col = col + vec3f(1.0, 0.06, 0.05) * snDisc * isSnare * snareEnv * 1.6;
+
+  // The SDF g-buffer (nearest cell): hit mask, normal, camera distance.
+  let cx = min(u32(uv.x * f32(GW)), GW - 1u);
+  let cy = min(u32(uv.y * f32(GH)), GH - 1u);
+  let cellIdx = cy * GW + cx;
+  let g0 = gA[cellIdx];
+  let nrm = gB[cellIdx].xyz;
+  let camDist = length(g0.xyz - vec3f(0.0, 0.0, -2.6));
+
+  // Scene 2 (beats 72..133): on each beat, near the dot, dots shaped by the cube
+  // silhouette (hit mask + distance) yet still modulated by the noise cloud.
+  let sceneTwo = smoothstep(70.0, 80.0, beat) * (1.0 - smoothstep(130.0, 138.0, beat));
+  let shaped = mix(n, clamp((camDist - 1.3) / 2.0, 0.0, 1.0), 0.5);
+  let disc2 = 1.0 - smoothstep(-aa, aa, cellR - shaped * 0.6);
+  let toBeep = (uv - vec2f(1.0 / 3.0, 1.0 / 3.0)) * vec2f(aspect, 1.0);
+  let proximity = 1.0 - smoothstep(0.05, 0.42, length(toBeep));
+  let local = disc2 * g0.w * proximity * pulse * sceneTwo;
+  col = col + palette(shaped * 0.4 + 0.15) * local;
+
+  // (The beeper is folded into the halftone grid above — it IS a cloud dot now.)
+
+  // Scene 3: the raymarched cube — revealed by sceneMix from 133, spun by
+  // spinAt() in cs1/cs2, decelerated to a face-on stop at beat 145.
+  let bg = vec3f(0.02, 0.02, 0.05);
+  var cubeCol = bg;
+  if (g0.w > 0.5) {
+    let ld = normalize(vec3f(0.6, 0.8, -0.5));
+    let lambert = max(dot(nrm, ld), 0.0);
+    let base = palette(g0.y * 0.30 + 0.5);
+    var lit = base * (0.25 + 0.75 * lambert);          // higher ambient floor
+    let rim = pow(1.0 - max(dot(nrm, vec3f(0.0, 0.0, -1.0)), 0.0), 2.0);
+    lit = lit + vec3f(0.22, 0.32, 0.55) * rim;         // stronger rim light
+    let facing = abs(dot(nrm, vec3f(0.0, 0.0, -1.0)));
+    let edgeFade = smoothstep(0.03, 0.35, facing);
+    cubeCol = mix(bg, lit, edgeFade);
+  }
+
+  // Scene 4 (beats 145..149): the aligned cube whites out. Only its hit region
+  // turns white; the background stays black → a white square.
+  let squareMask = step(0.5, g0.w);               // 0/1 rounded-square mask
+  let whiteMix = smoothstep(145.0, 149.0, beat);
+  cubeCol = mix(cubeCol, vec3f(1.0), whiteMix * squareMask);
+
+  // ── Req 2: red-fist background. In the MARGIN (outside the hero square) fill one small red
+  // fist per beat over 200→220, each tilted ±33° in a varied red; fade the whole term out by
+  // 220 as the grid canvas takes over. Renders behind the dots layer ⇒ the hero fist stays on top.
+  let fistWin = step(B_FISTBG, beat) * (1.0 - smoothstep(B_FISTBG_END - 1.0, B_FISTBG_END, beat));
+  if (squareMask < 0.5 && fistWin > 0.0) {
+    let fg = vec2f(uv.x * aspect, uv.y) * FIST_DENS;   // screen tiled into square fist cells
+    let fcell = floor(fg);
+    let flocal = fract(fg) - vec2f(0.5);
+    let revealBeat = B_FISTBG + floor(hash21(fcell) * (B_FISTBG_END - B_FISTBG));  // beat-snapped pop-in
+    let shown = step(revealBeat, beat);
+    let ang = (hash21(fcell * vec2f(1.7, 2.3)) - 0.5) * 2.0 * radians(33.0);
+    let fl = rot2(-ang) * flocal + vec2f(0.5);         // rotate the sample about the cell centre
+    let fx = i32(floor(fl.x * 14.0));
+    let fy = i32(floor(fl.y * 14.0));
+    var fbit = 0.0;
+    if (fx >= 0 && fx < 14 && fy >= 0 && fy < 14) {
+      fbit = f32((FIST[u32(fy)] >> u32(fx)) & 1u);
+    }
+    let h = hash21(fcell * vec2f(3.1, 1.9));
+    let redCol = vec3f(0.55 + 0.45 * h, 0.05 * h, 0.05 * h);   // varied reds
+    cubeCol = mix(cubeCol, redCol, fbit * shown * fistWin);
+  }
+
+  // ── Square TUNNEL backdrop: nested replicas of the hero square recede toward a black throat
+  // behind it, their BORDERS masking the intro's bouncing perlin dots. Margin only (squareMask < 0.5);
+  // 148→200, then the red fists (above) take over. NB the branch keys on tunWin ONLY (a uniform of
+  // beat) so fwidth() below stays in UNIFORM control flow; the per-pixel margin test (squareMask) is
+  // folded into the blend factor, not the condition.
+  let tunWin = step(B_TUNNEL, beat) * (1.0 - smoothstep(B_TUN_END - 2.0, B_TUN_END, beat));
+  if (tunWin > 0.0) {
+    var p = uv - vec2f(0.5);
+    p.x = p.x * aspect;                                   // centred, aspect-corrected
+    let bx = vec2f(TUN_SQ_HALF * min(aspect, 1.0));
+    let sd = sdRoundBox(p, bx, TUN_ROUND);               // >0 in the margin: distance to the hero square
+
+    // ── music reaction ──
+    let buildRamp = smoothstep(B_TUNNEL, B_DROP, beat);                                    // 148→160 crescendo
+    let breakDim  = 1.0 - 0.5 * smoothstep(155.5, 156.0, beat) * (1.0 - smoothstep(159.0, 159.5, beat));
+    let dt        = beat - B_DROP;
+    let dropBurst = step(0.0, dt) * exp(-TUN_DROP_DK * dt);                                // spike @160 → ~2-beat decay
+    let calm      = mix(1.0, TUN_BACKDROP, smoothstep(B_DROP + 1.0, B_DROP + 6.0, beat)); // settle to backdrop
+    let snareOdd  = f32(i32(floor(beat)) & 1);                                            // snare backbeat = odd beats
+    let flashBack = snareOdd * pow(1.0 - fract(beat), 3.0);
+    let scroll    = (TUN_SPEED * (beat - B_TUNNEL) + TUN_LURCH * pulse) * breakDim + dropBurst * 2.0;
+
+    // ── nested-square BORDERS (the mask): box-SDF iso-contours are nested squares; a thin band at
+    // each contour boundary is the border. K/sd + scroll piles the bands up toward the throat. ──
+    let depth = TUN_DEPTH_K / max(sd, 1e-3);
+    let tv    = depth + scroll;
+    let aaB   = fwidth(tv) * TUN_RINGS + 1e-4;                                            // aliasing guard
+    let ph    = fract(tv * TUN_RINGS);
+    let dl    = min(ph, 1.0 - ph);                                                        // 0 at a square boundary
+    let edge  = 1.0 - smoothstep(TUN_LINE_W, TUN_LINE_W + aaB, dl);                       // nested-square border band
+
+    // ── the intro PERLIN DOTS reused as the wall fill: `n` (the domain-warped fbm above) shapes each
+    // halftone dot's radius, and a hash-picked ~1-in-6 subset BOUNCES on the off-beat (offbeat() motif,
+    // beat-locked). White/shaded, not the cool palette. ──
+    let tdg    = vec2f(uv.x * aspect, uv.y) * TUN_DOT_DENS;
+    let tCell  = floor(tdg);
+    let tF     = fract(tdg) - vec2f(0.5);
+    let tDance = step(hash21(tCell), BOUNCE_FRAC);                                        // ~1-in-6 dots dance
+    let tBounce = tDance * BOUNCE_AMP * offbeat(beat, hash21(tCell * vec2f(1.3, 0.7)));   // off-beat bob
+    let tCellR = length(tF - vec2f(0.0, tBounce));
+    let tRad   = max(n * 0.5, BOUNCE_FLOOR * tDance);                                     // perlin radius; dancers keep a floor
+    let tAA    = fwidth(tCellR) + 1e-4;
+    let tDot   = 1.0 - smoothstep(-tAA, tAA, tCellR - tRad);                              // the halftone dot disc
+
+    // ── borders MASK the dots ⇒ the walls are "drawn" with the bouncing perlin dots ──
+    let wall  = tDot * edge;
+
+    // ── shade toward black at the throat (near the square) ──
+    let shade = smoothstep(0.0, 0.35, sd);                                               // 0 at square → 1 outward
+    // ── post-process BLUE: (a) grade the wall dots to a cool cast; (b) a soft blue GLOW halo hugs each
+    // nested-square border (a band wider than the dot mask) so the walls bloom cool. fs4's chroma shift
+    // then post-processes it for real. The snare/drop highlights below punch bright over the blue. ──
+    let grade = mix(vec3f(1.0), TUN_BLUE, TUN_BLUE_AMT);                                  // cool wall tint
+    let glow  = 1.0 - smoothstep(TUN_LINE_W, TUN_LINE_W * 2.5, dl);                       // wide soft border halo
+    var tcol  = vec3f(wall * shade) * grade * (0.5 + 0.9 * buildRamp) * calm;             // cool-white dots
+    tcol = tcol + TUN_BLUE * (TUN_GLOW * glow * shade) * (0.4 + 0.6 * buildRamp) * calm;  // blue bloom on the borders
+    tcol = tcol + vec3f(1.0)             * wall * flashBack * 0.7;                        // snare → white flash on the dots
+    tcol = tcol + vec3f(1.0, 0.12, 0.08) * dropBurst;                                     // DROP → red burst (full margin)
+
+    // ── pristine anti-aliased cut + MARGIN gate (squareMask is 0 in the margin, 1 in the hero square) ──
+    let mask = smoothstep(0.0, TUN_EDGE_AA, sd);
+    cubeCol  = mix(cubeCol, tcol, mask * tunWin * (1.0 - squareMask));
+  }
+
+  // Scenes 5+: the black dots are a separate INSTANCED layer (see the `dots` module
+  // + passDots) — a beating dot grows into the 20×20 grid, then strobes 16×16 icons
+  // ON the beat, drawn OVER this scene. fs3 just leaves the white square to punch into.
+
+  col = mix(col, cubeCol, clamp(motion.sceneMix, 0.0, 1.0));
+  return vec4f(col, 1.0);
+}
+""")
+
+; ── Stage 4: chroma-shift post-process to the screen ─────────────────────────
+(shader-module :name fs4 :code """
+struct PngineInputs { time: f32, width: f32, height: f32, aspect: f32, };
+struct Motion { sceneMix: f32, spin: f32, chromaAmt: f32, beat: f32, };
+@group(0) @binding(0) var<uniform> pngine: PngineInputs;
+@group(0) @binding(1) var<uniform> motion: Motion;
+@group(0) @binding(2) var sceneTex: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+
+// ── Pixelation post-FX: as the cube FIRST APPEARS (dots fading → full cube, chroma ramping up) the
+// screen QUANTIZES into square blocks; as the chroma shift unwinds and the white square resolves, the
+// blocks melt back to full resolution. The envelope mirrors the chroma keys (up 135→142, down 145→149),
+// so the pixelation rides the post-process chroma shift and leaves with it. Res-independent block count.
+const B_PIX_IN:   f32 = 135.0;  // blocks ramp in (cube solidifying, dots fading)
+const B_PIX_HOLD: f32 = 142.0;  // fully pixelated (full cube, chroma near max)
+const B_PIX_OUT:  f32 = 145.0;  // blocks start clearing (white-out + chroma unshift begin)
+const B_PIX_END:  f32 = 149.0;  // full resolution again (chroma 0, white square shown)
+const PIX_CELLS:  f32 = 90.0;   // block count across the width at full pixelation (KNOB)
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  let x = f32((i << 1u) & 2u);
+  let y = f32(i & 2u);
+  return vec4f(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+}
+
+@fragment fn fs(@builtin(position) fragPos: vec4f) -> @location(0) vec4f {
+  let dims = vec2f(pngine.width, pngine.height);
+  let uv = fragPos.xy / dims;
+  let amt = clamp(motion.chromaAmt, 0.0, 2.0);
+
+  // ── pixelation: rises as the cube forms, falls as the chroma unwinds + the square shows. Block edge
+  // eases 1px (full res) → width/PIX_CELLS (chunky) in PIXEL space, so blocks are square + res-independent.
+  let pixEnv  = smoothstep(B_PIX_IN, B_PIX_HOLD, motion.beat) * (1.0 - smoothstep(B_PIX_OUT, B_PIX_END, motion.beat));
+  let blockPx = mix(1.0, pngine.width / PIX_CELLS, pixEnv);
+  let puv     = (floor(fragPos.xy / blockPx) + 0.5) * blockPx / dims;   // snap to block centres (identity at pixEnv=0)
+
+  // Offset grows toward the edges and rotates slowly; split R/B around centred G.
+  let ang = pngine.time * 0.30;
+  let dir = vec2f(cos(ang), sin(ang));
+  let edge = length((uv - 0.5) * vec2f(pngine.width / pngine.height, 1.0));
+  let off = dir * (0.004 + 0.012 * edge) * amt;
+
+  let r = textureSample(sceneTex, samp, puv + off).r;
+  let g = textureSample(sceneTex, samp, puv).g;
+  let b = textureSample(sceneTex, samp, puv - off).b;
+  var col = vec3f(r, g, b);
+  col = col * (1.0 - 0.30 * edge * edge);   // gentle vignette
+  return vec4f(col, 1.0);
+}
+""")
+
+; ── Stage 3.5: instanced dot layer — one dot GROWS into the grid, then STROBES ──
+; Framework: NDOT = 20×20 = 400 instanced billboards (draw 6 × NDOT), centred coord
+; u = index − 9.5 ∈ {±0.5 … ±9.5} (even ⇒ no single centre dot; the 2×2 middle
+; straddles the centre). All derived purely from motion.beat (⇒ identical under play
+; / scrub / thumbnails), drawn OVER the scene (passDots, load-op load) as black
+; premultiplied-alpha dots punched into the white square:
+;   1. BEAT   (149→154): a single dot grows in at the centre and pulses. It IS the
+;      four 2×2 middle instances collapsed onto (0,0) — 4 dots drawn as one.
+;   2. SPLIT  (B_SPLIT): the single dot separates into the centred 2×2 block
+;      (u = ±0.5 each). This is what centres the whole 20×20 — nothing re-centres later.
+;   3. VERT   (B_VERT): the 2×2 grows vertically into TWO full-height lines (the two
+;      centre columns u.x = ±0.5), staggered outward by |u.y|.
+;   4. HORZ   (B_HORZ): the two lines fan out horizontally into the full 20×20 grid,
+;      staggered outward by |u.x| — each dot slides out from its column at full height.
+;   5. ICONS  (B_SHAPES+): on every beat the grid becomes the next 16×16 1-bit icon
+;      (centred with a 2-dot margin: 16 + 2 + 2 = 20), holds one beat, swaps on the
+;      beat through all NSHAPE icons, then holds the last. Icon i row iy is
+;      ICON[i*16 + iy]; bit ix is 1<<ix (LSB = leftmost).
+;   6. REFRESH (B_REFRESH): a fast diagonal wipe from (0,0) refills the full 20×20,
+;      erasing the last icon as every empty dot lights back up.
+;   7. CONTRACT (B_CONTRACT): the grid peels its bottom-right L-bands inward until only
+;      the top-left 14×14 (indices 0..13) remains; the rest goes white.
+;   8. WORD (B_WORD+): inside that 14×14, spell "camaradas" one 14×14 glyph at a time,
+;      on the beat (c a m a r a d a s). GLYPH[gi*14 + gy], bit gx (LSB = leftmost);
+;      WORD maps each of the 9 letters to its unique glyph (c a m r d s).
+;   9. TALLY: as each letter lands, one dot piles up in column gx=17, growing upward from
+;      the bottom (17,19 → 17,18 → …) — a vertical counter, one dot per character.
+;  10. FULL  (B_FULL): "s" done → the full 14×14 flashes back for one beat and a 10th dot
+;      lands at the TOP of the counter, (17,0).
+;  11. FIST  (B_FIST): the 14×14 becomes a closed fist (fist1.png); the (17,0) dot turns red.
+;      It holds ~4 beats.
+;  12. DOTS  (B_DOTS): the whole 20×20 grid lights up — all dots black (the red dot too).
+;  13. BG    (B_BG): a dedicated cover instance (index 400, drawn last) fades a full-square
+;      black veil in on top — the white background goes (and stays) full black.
+(shader-module :name dots :code """
+struct PngineInputs { time: f32, width: f32, height: f32, aspect: f32, };
+struct Motion { sceneMix: f32, spin: f32, chromaAmt: f32, beat: f32, };
+@group(0) @binding(0) var<uniform> pngine: PngineInputs;
+@group(0) @binding(1) var<uniform> motion: Motion;
+
+const COLS: u32 = 20u;       // 20×20 instance grid (== NDOT axis)
+const COVER: u32 = 400u;     // dedicated cover instance (index == 20×20), drawn last (bg→black)
+const HALF: f32 = 9.5;       // centred coord u = index − HALF ∈ {±0.5 … ±9.5}
+const NREF: f32 = 9.5;       // outer-dot |u| — snap stagger fractions
+const B_SPLIT: f32 = 154.0;  // beat the single dot splits into the centred 2×2 (KNOB)
+const B_VERT:  f32 = 155.0;  // beat the 2×2 grows into two vertical lines (KNOB)
+const B_HORZ:  f32 = 157.0;  // beat the two lines fan out into the 20×20 grid (KNOB)
+const EASE:    f32 = 0.55;   // per-dot snap duration, beats (KNOB — lower = harder pop)
+const SPREAD:  f32 = 0.40;   // outward per-dot stagger, beats (KNOB — the "grow-out" ripple)
+const B_SHAPES:  f32 = 162.0;// beat the first icon lands; one icon per beat after (KNOB)
+const SHAPE_BEATS: f32 = 1.0;// beats each icon holds (KNOB — raise to slow the strobe)
+const NSHAPE:    f32 = 21.0; // number of icons
+
+// ── Scene 2 knobs: after the last icon, refresh → contract → spell "camaradas" ──
+const B_REFRESH:   f32 = 184.0; // beat the fast corner-wipe refills the full 20×20 (KNOB)
+const REFRESH_LEN: f32 = 1.0;   // beats the refresh wipe takes (KNOB — "kinda fast")
+const B_CONTRACT:  f32 = 186.0; // beat the grid peels BR→TL down to a 14×14 (KNOB)
+const CONTRACT_LEN: f32 = 2.0;  // beats the contraction takes (KNOB)
+const B_WORD:      f32 = 190.0; // beat the first letter lands; one letter per beat after (KNOB)
+const WORD_BEATS:  f32 = 1.0;   // beats each letter holds (KNOB)
+const NWORD:       f32 = 9.0;   // letters in "camaradas"
+const B_FULL:  f32 = 199.0;  // "s" done → the full 14×14 flashes back + a 10th dot at (17,0) (KNOB)
+const B_FIST:  f32 = 200.0;  // the fist fills the 14×14; the (17,0) dot turns red (KNOB)
+// (Req 2) The closed fist now HOLDS 200→220 (bar 41→56) while fs3 fills the margin with red
+// fists; the grid canvas (beat 220) is the handoff. So the old all-dots-black + black-veil
+// finish is disabled by pushing both knobs past 220 (they never fire before the grid covers).
+const B_DOTS:  f32 = 400.0;  // was 204 — no all-dots-black; the fist holds to bar 56 (KNOB)
+const B_BG:    f32 = 400.0;  // was 206 — backdrop stays open for fs3's red fists; grid wipes it @220 (KNOB)
+
+// 21 icons × 16 rows, LSB = leftmost pixel. Generated from ~/Dev/2026_impulse/N.png.
+const ICON: array<u32, 336> = array<u32, 336>(
+  0u, 0u, 4080u, 6168u, 12300u, 9828u, 9828u, 10260u,
+  12276u, 10260u, 9252u, 13260u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 9828u, 9828u, 8196u,
+  12276u, 12276u, 10212u, 13260u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 9828u, 10836u, 8196u,
+  10212u, 10212u, 9156u, 12300u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 9252u, 9828u, 8196u,
+  10212u, 10212u, 9156u, 12300u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 9252u, 9828u, 8196u,
+  9156u, 10212u, 10212u, 12300u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 9828u, 9828u, 8196u,
+  8196u, 12276u, 8196u, 12300u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 9828u, 9828u, 8196u,
+  9156u, 9252u, 10260u, 12300u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 8772u, 9828u, 8196u,
+  8196u, 9156u, 9252u, 12300u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 8196u, 11892u, 8196u,
+  8196u, 8964u, 8964u, 12300u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 9828u, 9828u, 8196u,
+  10260u, 9252u, 9156u, 12300u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 9828u, 9828u, 8196u,
+  9156u, 10212u, 10212u, 13260u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 9828u, 9828u, 8196u,
+  12276u, 8772u, 8772u, 12684u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 4080u, 6168u, 12300u, 8772u, 9828u, 8196u,
+  9156u, 10212u, 10212u, 12300u, 6168u, 4080u, 0u, 0u,
+  0u, 0u, 0u, 4064u, 14624u, 8248u, 9512u, 8200u,
+  8200u, 8200u, 8216u, 12336u, 8160u, 4128u, 8160u, 0u,
+  1920u, 1152u, 1152u, 1152u, 7392u, 12348u, 9380u, 8196u,
+  8204u, 8200u, 8216u, 12336u, 8160u, 4128u, 8160u, 0u,
+  480u, 288u, 288u, 288u, 7968u, 12348u, 9508u, 8196u,
+  8204u, 8200u, 8216u, 12336u, 8160u, 4128u, 8160u, 0u,
+  480u, 15648u, 9504u, 9504u, 10016u, 8252u, 9508u, 8196u,
+  8204u, 8200u, 8216u, 12336u, 8160u, 4128u, 8160u, 0u,
+  4064u, 14624u, 10528u, 10528u, 10528u, 8252u, 9508u, 8196u,
+  8204u, 8200u, 8216u, 12336u, 8160u, 4128u, 8160u, 0u,
+  0u, 0u, 0u, 4092u, 2148u, 6180u, 4132u, 12324u,
+  8228u, 8228u, 15972u, 1148u, 1216u, 1408u, 1792u, 0u,
+  0u, 1792u, 1408u, 1216u, 1148u, 15972u, 8228u, 8228u,
+  12324u, 4132u, 6180u, 2148u, 4092u, 0u, 0u, 0u,
+  992u, 1712u, 1168u, 1168u, 3224u, 3048u, 6828u, 29351u,
+  22197u, 21653u, 20613u, 20933u, 21349u, 24125u, 28679u, 0u,
+);
+
+// 6 unique 14×14 glyphs (c a m r d s), one u32 per row, LSB = leftmost. "camaradas"
+// picks them via WORD. Regenerate with ~/Dev/2026_impulse/tools/gen_glyphs.py.
+const GLYPH: array<u32, 84> = array<u32, 84>(
+  0u, 1008u, 2040u, 1564u, 28u, 14u, 14u, 14u,
+  14u, 1564u, 1564u, 2040u, 1008u, 0u, 0u, 96u,
+  240u, 408u, 408u, 780u, 780u, 1020u, 1020u, 1542u,
+  1542u, 1542u, 1542u, 0u, 0u, 1542u, 1806u, 1950u,
+  1782u, 1782u, 1638u, 1542u, 1542u, 1542u, 1542u, 1542u,
+  1542u, 0u, 0u, 254u, 510u, 902u, 774u, 902u,
+  510u, 126u, 118u, 230u, 454u, 902u, 774u, 0u,
+  0u, 254u, 510u, 390u, 774u, 774u, 774u, 774u,
+  774u, 774u, 390u, 510u, 254u, 0u, 0u, 508u,
+  1022u, 6u, 6u, 14u, 252u, 1008u, 1536u, 1536u,
+  3072u, 1022u, 508u, 0u,
+);
+// camaradas → glyph indices (c=0 a=1 m=2 r=3 d=4 s=5)
+const WORD: array<u32, 9> = array<u32, 9>(0u, 1u, 2u, 1u, 3u, 1u, 4u, 1u, 5u);
+// Closing fist, 14×14 (centred from fist1.png). Regenerate with tools/gen_fist.py.
+const FIST: array<u32, 14> = array<u32, 14>(0u, 0u, 992u, 3768u, 2728u, 2728u, 2748u, 4068u, 2164u, 2188u, 3224u, 2032u, 0u, 0u);
+
+struct VSOut {
+  @builtin(position) position: vec4f,
+  @location(0) uv: vec2f,
+  @location(1) alpha: f32,
+  @location(2) color: vec3f,
+  @location(3) fill: f32,
+};
+
+// Staggered snap: 0 before this dot's start (trig + f·SPREAD), eased to 1 over EASE.
+fn snap(beat: f32, trig: f32, f: f32) -> f32 {
+  let s = trig + f * SPREAD;
+  return smoothstep(s, s + EASE, beat);
+}
+
+// Off-beat bob (the same motif as fs3/grid): 0 on each beat onset, peak on the
+// "and"; the per-dot seed spreads the peak so the grid ripples, not pulses.
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn offbeat(beat: f32, seed: f32) -> f32 { return abs(sin(3.14159265 * beat + 0.6 * (seed - 0.5))); }
+const DANCE_AMP: f32 = 0.10;   // off-beat bob, as a fraction of dot spacing P (KNOB — subtle)
+
+@vertex fn vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> VSOut {
+  let aspect = pngine.width / pngine.height;
+  let sqHalf = 0.4 * min(aspect, 1.0);       // white-square half-size, sq units (== fs3)
+  let beat = motion.beat;
+
+  let ux = f32(i % COLS) - HALF;             // centred coord, ±0.5 … ±9.5 (no dot at 0)
+  let uy = f32(i / COLS) - HALF;
+  let fieldHalf = 0.9 * sqHalf;              // outer-dot extent (keeps a 1-dot white margin)
+  let P = fieldHalf / HALF;                  // spacing (outer dots land at ±fieldHalf)
+  let R = P * 0.24;                          // dot radius, sq units (KNOB)
+
+  // Grow-out snaps: split the single dot, then Y (vertical lines), then X (full grid).
+  let sSplit = snap(beat, B_SPLIT, 0.0);            // 1 dot → centred 2×2
+  let sVert  = snap(beat, B_VERT, abs(uy) / NREF);  // 2×2 → two full-height lines (grows y out)
+  let sHorz  = snap(beat, B_HORZ, abs(ux) / NREF);  // two lines → 20×20 grid (fans x out)
+
+  // Position: each dot rides out from the centre → its 2×2 seat → its full row/col.
+  let cbx = sign(ux) * 0.5;                  // this dot's centre-column x (±0.5)
+  let cby = sign(uy) * 0.5;                  // this dot's centre-row   y (±0.5)
+  let x = cbx * sSplit + (ux - cbx) * sHorz; // 0 → ±0.5 → ux
+  let y = cby * sSplit + (uy - cby) * sVert; // 0 → ±0.5 → uy
+  // subtle off-beat DANCE: each dot lifts on the "and", settles on the beat (the
+  // COVER veil is re-centred below, so it never dances).
+  let danceY = DANCE_AMP * P * offbeat(beat, hash21(vec2f(ux, uy)));
+  let pos = vec2f(x * P, y * P - danceY);
+
+  // Birth: the 2×2 middle is always on (it IS the beating dot); the two centre columns
+  // are born vertically (sVert); the rest are born as the grid fans out horizontally.
+  let appear = smoothstep(149.0, 153.0, beat);
+  let isMid = abs(ux) < 1.0 && abs(uy) < 1.0;       // the centred 2×2
+  let isCol = abs(ux) < 1.0 && abs(uy) > 1.0;       // the two centre columns (line dots)
+  let born  = select(select(sHorz, sVert, isCol), 1.0, isMid);
+  let gridA = appear * born;
+
+  // Icon bit: 16×16 centred in the 20×20 grid (2-dot margin ⇒ cols/rows 2..17).
+  let sIdx = clamp(floor((beat - B_SHAPES) / SHAPE_BEATS), 0.0, NSHAPE - 1.0);
+  let ix = i32(i % COLS) - 2;
+  let iy = i32(i / COLS) - 2;
+  var bit = 0.0;
+  if (ix >= 0 && ix < 16 && iy >= 0 && iy < 16) {
+    let word = ICON[u32(sIdx) * 16u + u32(iy)];
+    bit = f32((word >> u32(ix)) & 1u);
+  }
+  let shapeMix = smoothstep(B_SHAPES - 0.25, B_SHAPES + 0.25, beat);   // grid → icon crossfade
+  let aShapes = mix(gridA, bit, shapeMix);
+
+  // ── Scene 2: refresh → contract → the word "camaradas" ─────────────────────
+  let gx = i % COLS;
+  let gy = i / COLS;
+  // 0. REFRESH: a fast diagonal wipe from (0,0) refills every dot to the full 20×20,
+  //    erasing the icon (its dots are already lit; the empties light up behind the front).
+  let wipe = (f32(gx) + f32(gy)) / 38.0;                      // 0 at (0,0) → 1 at (19,19)
+  let fillFront = clamp((beat - B_REFRESH) / REFRESH_LEN, 0.0, 1.25);
+  let refreshFill = 1.0 - smoothstep(fillFront - 0.12, fillFront, wipe);
+  let aFilled = max(aShapes, refreshFill);
+
+  // 1. CONTRACT: peel the bottom-right L-bands inward (k: 19 → 13) → a 14×14 top-left grid.
+  let cellMax = max(f32(gx), f32(gy));
+  let kProg = clamp((beat - B_CONTRACT) / CONTRACT_LEN, 0.0, 1.0);
+  let k = mix(19.0, 13.0, kProg);
+  let contractMask = 1.0 - smoothstep(k, k + 1.0, cellMax);   // present iff cellMax ≤ k
+  let gridPresence = aFilled * contractMask;
+
+  // 2. WORD → panel: inside the 14×14, spell "camaradas" one glyph at a time, on the beat.
+  //    After "s": B_FULL flashes the full 14×14 back for a beat, then B_FIST shows the fist.
+  let wIdx = clamp(floor((beat - B_WORD) / WORD_BEATS), 0.0, NWORD - 1.0);
+  let gi = WORD[u32(wIdx)];
+  var panel = 0.0;
+  if (gx < 14u && gy < 14u) {
+    let glyphRow = GLYPH[gi * 14u + gy];
+    panel = f32((glyphRow >> gx) & 1u);                       // the current letter …
+    panel = mix(panel, 1.0, smoothstep(B_FULL - 0.15, B_FULL + 0.15, beat));   // … full 14×14 flash …
+    let fistBit = f32((FIST[gy] >> gx) & 1u);
+    panel = mix(panel, fistBit, smoothstep(B_FIST - 0.15, B_FIST + 0.15, beat)); // … then the fist.
+  }
+  let wordMix = smoothstep(B_WORD - 0.25, B_WORD + 0.25, beat);
+
+  // 3. TALLY: each letter drops one dot onto a vertical pile in column gx=17, growing up
+  //    from the bottom — (17,19) for the 1st letter … — one dot per "camaradas" character.
+  //    A 10th dot lands at the TOP (17,0) on B_FULL, and it turns red on B_FIST (below).
+  var tallyBit = 0.0;
+  if (gx == 17u) {
+    if (gy >= 11u) {
+      let t0 = B_WORD + f32(19u - gy) * WORD_BEATS;           // char index 19-gy ∈ 0..8, its beat
+      tallyBit = smoothstep(t0 - 0.15, t0 + 0.15, beat);      // pops on the beat, then stays lit
+    } else if (gy == 0u) {
+      tallyBit = smoothstep(B_FULL - 0.15, B_FULL + 0.15, beat);   // the top dot at (17,0)
+    }
+  }
+  // 4. DOTS: after the fist holds ~4 beats, the whole 20×20 grid lights up — all dots black.
+  let allDots = smoothstep(B_DOTS - 0.15, B_DOTS + 0.15, beat);
+  let sceneA = max(max(mix(gridPresence, panel, wordMix), tallyBit), allDots);
+
+  // Every dot pulses on the beat (a swell peaking at each onset); all the SAME size.
+  let pulse = pow(1.0 - fract(beat), 4.0);
+  let swell = 1.0 + 0.18 * pulse;
+
+  // Colour: dots are black, except the top tally dot (17,0) — red from B_FIST until the
+  // all-dots-black moment (B_DOTS), when it joins the rest and goes black.
+  var col = vec3f(0.0, 0.0, 0.0);
+  if (gx == 17u && gy == 0u) {
+    let red = smoothstep(B_FIST - 0.15, B_FIST + 0.15, beat)
+            * (1.0 - smoothstep(B_DOTS - 0.15, B_DOTS + 0.15, beat));
+    col = vec3f(1.0, 0.0, 0.0) * red;
+  }
+
+  // 5. BACKGROUND → black: a dedicated cover instance (COVER, drawn LAST so it sits on top)
+  //    fades a full-square black veil in — multiplying the square (white bg + black dots)
+  //    toward black. The dots are already black, so only the background visibly darkens.
+  let bgMix = smoothstep(B_BG - 0.10, B_BG + 0.40, beat);
+  var a = sceneA;
+  var fill = 0.0;
+  var pos2 = pos;
+  var rad2 = R * swell;
+  if (i == COVER) {
+    a = bgMix;                                               // fades in 0 → 1 at B_BG
+    fill = 1.0;                                              // solid quad, not a disc
+    pos2 = vec2f(0.0, 0.0);                                  // centred on the square
+    rad2 = sqHalf * 1.04;                                    // covers the whole square
+    col = vec3f(0.0, 0.0, 0.0);
+  }
+
+  let corner6 = array(
+    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+    vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
+  );
+  let corner = corner6[v];
+  let clipC = vec2f(2.0 * pos2.x / aspect, -2.0 * pos2.y);   // sq → clip (aspect-correct)
+  let clip = clipC + corner * vec2f(rad2 * 2.0 / aspect, rad2 * 2.0);
+
+  var o: VSOut;
+  o.position = vec4f(clip, 0.0, 1.0);
+  o.uv = corner;
+  o.alpha = a;
+  o.color = col;
+  o.fill = fill;
+  return o;
+}
+
+@fragment fn fs(@location(0) uv: vec2f, @location(1) alpha: f32,
+                @location(2) color: vec3f, @location(3) fill: f32) -> @location(0) vec4f {
+  let d = length(uv);                        // 0 centre → 1 at the inscribed-circle edge
+  let aa = fwidth(d) + 0.0001;
+  let disc = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+  let cov = mix(disc, 1.0, fill) * alpha;    // disc for dots, solid for the black cover
+  return vec4f(color * cov, cov);            // premultiplied: black dot / red dot / black square
+}
+""")
+
+; ── Stage 3.6: the "cube canvas" — a fragment-SDF grid that OWNS the screen from ──
+; beat 205. The whited-out hero square is revealed to be ONE tile of a full canvas of
+; TIGHTLY-PACKED white cubes (no gaps — solid white). Everything is a pure function of
+; (cellId, beat) — identical under play / scrub / thumbnails — and NOTHING here touches
+; the ≤204 choreography: the layer's alpha is 0 before beat 205, so passGrid no-ops.
+; Beats are used for COMPOSITION TIMING ONLY (WHEN each step fires) — never as a pulse.
+;
+; Choreography:
+;   205→207  WHITE : the hero tile fades in at the old square's size, then zooms/floods
+;                    out to a solid tight-packed white canvas (≈ two beats).
+;   207→208  VLINES: whole squares at ODD x turn black ⇒ vertical black lines (no hold).
+;   208→209  HLINES: whole squares at ODD y turn black ⇒ horizontal black lines.
+;   209+     GRID  : white squares survive only at even/even — a grid of white squares.
+;
+; The per-tile substrate stays simple (position + half-extents); every upcoming scene
+; (bars / merges / snakes / text) is just a spatial pattern of off-squares over this grid.
+(shader-module :name grid :code """
+struct PngineInputs { time: f32, width: f32, height: f32, aspect: f32, };
+struct Motion { sceneMix: f32, spin: f32, chromaAmt: f32, beat: f32, };
+@group(0) @binding(0) var<uniform> pngine: PngineInputs;
+@group(0) @binding(1) var<uniform> motion: Motion;
+
+// ── Reveal / canvas knobs (beats + tile geometry; SJON defines can't reach WGSL) ──
+const B_GRID:   f32 = 220.0; // beat the hero tile fades in (bar 56.1 breakdown — wipes fs3's red fists)
+const FADE_LEN: f32 = 0.5;   // fade-in duration
+const B_ZOOM:   f32 = 220.5; // beat the zoom-out/flood starts
+const ZOOM_LEN: f32 = 1.5;   // → a full solid-white canvas by ~207 (TWO beats to go white)
+const R_LAND:   f32 = 1.3;   // cells-across at rebirth → hero tile == the old square — KNOB
+const R_WORK:   f32 = 96.0;  // working density (cells across the min side) — KNOB (96 ⇒ ~48 white-square rows)
+const HALF_ON:  f32 = 0.52;  // tile half-extent, cell units (>0.5 ⇒ TIGHT PACK, no seams — solid white)
+const RC: f32 = 0.04;        // tile corner radius, cell units (KNOB)
+const B_VLINES:   f32 = 222.0; // beat odd-x squares turn black ⇒ VERTICAL lines (right when white completes)
+const VLINES_LEN: f32 = 0.6;   // beats the vertical lines take to fill in
+const B_HLINES:   f32 = 223.0; // beat odd-y squares turn black ⇒ HORIZONTAL lines
+const HLINES_LEN: f32 = 0.6;   // beats the horizontal lines take to fill in
+
+// ── Scene A: an INCHWORM white line over the settled grid — the grid STAYS VISIBLE ──
+// Even columns (base-grid cubes) are permanently ON. The line is made by filling the ODD
+// gaps: from the base ON/OFF/ON/OFF row, fill gap g ⇒ a 3-run; fill the NEXT gap too ⇒ a
+// 5-run (grow); release the back gap ⇒ a 3-run at the new spot (move). One toggle per beat,
+// advancing 2 cols per grow+move cycle. (The 3↔5 is the MOVE mechanic here, not a pulse.)
+const B_SEG:    f32 = 225.0; // beat worm 1 appears
+const SEG_ROW:  f32 = 6.0;   // the row it rides (id.y; +y is screen-down from the hero)
+const SEG_X0:   f32 = 0.0;   // left even col of its first run (anchored on the hero column)
+const SEG_GAPS: f32 = 1.0;   // resting filled gaps ⇒ run = 2·gaps+1 = 3 cubes
+const SEG_STEP: f32 = 1.0;   // beats per toggle (grow or move)
+
+// Worm 2 — bigger, enters from the LEFT screen edge 4 beats later, also moves right.
+const B_SEG2:    f32 = 228.0;  // ~3 beats after worm 1
+const SEG2_ROW:  f32 = -28.0;  // ~10 white-squares below the top row (top even row ≈ -48)
+const SEG2_GAPS: f32 = 3.0;    // run = 2·3+1 = 7 cubes (grid forces ODD runs; nearest ≥ the "6" asked)
+const SEG2_STEP: f32 = 0.5;    // beats per toggle (0.5 ⇒ twice as fast as worm 1)
+// (worm 2's start column is derived from aspect in fs so it sits exactly at the left edge)
+
+// Worm 3 — VERTICAL, 5 cubes, climbs UP column x=10 from the bottom edge, 2 beats after worm 2.
+const B_SEG3:    f32 = 230.0;
+const SEG3_COL:  f32 = 10.0;   // the column it climbs (even ⇒ base-ON)
+const SEG3_GAPS: f32 = 2.0;    // run = 2·2+1 = 5 cubes
+const SEG3_STEP: f32 = 0.5;    // beats per toggle (start row = bottom edge derived in fs; dir = up)
+
+// Worm 4 — short (3 cubes), moves LEFT off-screen, from x=-6 / 6 white-squares below the top, 4 beats after worm 3.
+const B_SEG4:    f32 = 234.0;
+const SEG4_ROW:  f32 = -36.0;  // 6 white-squares below the top row (−48)
+const SEG4_X0:   f32 = -6.0;   // starting column (moves left toward — and off — the edge)
+const SEG4_GAPS: f32 = 1.0;    // run = 3 cubes
+const SEG4_STEP: f32 = 0.5;    // beats per toggle
+
+// A 4-line form (placeholder placement/timing). Rest layout: two horizontal bars (bottom @fy,
+// top @fy+2, x∈0..2) + two vertical legs (left @fx+4, right @fx+6). Rigid LEFTWARD crawl: over a
+// 5-beat cycle each line shifts left 2 dots, ONE per beat, then a pause — b1 bottom-H, b2 top-H,
+// b3 left-V, b4 right-V, b5 pause → whole form translated left 2. All lines move the same way ⇒
+// the form stays together (unlike the earlier torn version).
+const B_FORM:  f32 = 238.0;  // beat it appears (placeholder — coexists with the worms)
+const FORM_X0: f32 = -24.0;  // origin id.x for form x=0 (placeholder; crawls left from here)
+const FORM_Y:  f32 = 0.0;    // origin id.y for form y=0 (placeholder)
+
+// 4 parallel vertical lines (length 3, spacing 2) at ~2/3 across / 2/3 down, on EVEN columns/rows
+// (ON the grid's dots — each bar rides a column of dots, filling the gap between them). Lines 1,3
+// vs 2,4 sit 2 rows apart and SWAP their y every beat (bounce). Anchor derived from aspect, snapped even.
+const B_VL: f32 = 238.0;     // beat they appear (alongside the crawling form)
+
+// 4 horizontal lines (length 3) in a staircase: line1 (y,x), line2 (y+2,x), line3 (y+2,x+4),
+// line4 (y+4,x+4). Anchored at (10,10) from the bottom-LEFT (his y counts UP). Crawls RIGHT
+// +2/4beats, one line at a time (order 3,1,4,2 — all net +2/cycle ⇒ rigid).
+const B_HL: f32 = 238.0;     // beat they appear + start crawling (placeholder timing)
+
+// "double-bar" merge shape (bar 60 beat 1 @ 4/4 ⇒ motion beat 241): two parallel 3-dot horizontal
+// lines on ADJACENT dot rows (1 dot apart), each with a 1-dot vertical stub at its MIDDLE — the top
+// line's stub points UP, the bottom line's stub points DOWN. Coords below are in GRID CELLS (2 cells =
+// 1 dot), anchored at DBL_O = the user's offset (15,15) dots ⇒ (30,30) cells, right+down of centre.
+const B_DBL:  f32 = 244.0;
+const DBL_OX: f32 = 20.0;    // anchor id.x: 10 dots right of the hero (0,0), 2 cells/dot (moved 5 dots left)
+const DBL_OY: f32 = 30.0;    // anchor id.y: 15 dots down of the hero (+id.y is screen-down)
+
+// "arch" merge shape (slanted parallelogram): a fixed 2×2 square body with two protruding arm dots —
+// leftmost sticks out bottom-left, rightmost top-right (top dot row x=1..3, base row x=0..2). Coords in
+// GRID CELLS (2 = 1 dot); anchored at BOX_O = the user's offset (−20,−15) dots ⇒ (−40,−30) cells (up-LEFT
+// of centre; +id.y is screen-down). Shows at bar 63 beat 2 @ 4/4 ⇒ beat 254; then the two END dots BOB
+// up & down on the beat (each flips to the square's other row and back — see fs).
+const B_BOX:  f32 = 250.0;
+const BOX_OX: f32 = -40.0;   // anchor id.x: 20 dots LEFT of the hero (0,0), 2 cells/dot
+const BOX_OY: f32 = -30.0;   // anchor id.y: 15 dots UP of the hero
+
+// ── Pulsing SQUARE: one of the grid's OWN white squares — the one at screen (1/3,1/3), where the
+// demo's opening beeper lived ("the start one") — SWELLS on every beat (its box half-extent grows,
+// so the square itself pulses; NOT an overlay). Starts after the last shape (the arch @254).
+const B_DOT:      f32 = 256.0;  // beat the square starts pulsing (bar 65.1 climax; after the arch @250)
+const B_DOT_GROW: f32 = 358.0;  // it GROWS + translates to screen centre (fast) — late climax, before the letters
+const GROW_LEN:   f32 = 2.0;    // grow + travel duration in beats (fast)
+const DOT_GROW:   f32 = 0.9;    // final side as a fraction of the min screen side (height) — 90%
+const DOT_SWELL:  f32 = 0.6;    // beat swell as a FRACTION of the box (eased down as it grows huge)
+
+// ── CAMARADAS word reveal: the reusable 3×3 letter-tile asset (below) spells C A M A R A D A S,
+// one letter per beat, carved as BLACK cells into the grown+centred pulsing square. The 9 letters
+// sit in a 3×3 arrangement (reading order) with 1-cell margins/gaps ⇒ a 13×13 cell field. (Req 4)
+// The letters have NO shear or rotation — they simply PULSE with the square's beat-swell (the carved
+// field scales with the pulsing square). The pulse runs through the whole CAMARADAS scene; at the
+// track's last sound (B_SILENCE=384) it FREEZES, and ON that same beat — the final slow bass hit (a lone
+// A-2 that lands squarely on 384 after a 5.5-beat gap) — the S alone rotates to −15° as the closing
+// signal (B_S_ROT=384), held through the silent tail to the loop (400b).
+const B_WORD:       f32 = 368.0;  // beat the first letter (C) appears (square grown+centred by ~367)
+const WORD_STEP:    f32 = 1.0;    // beats per letter (C..S over beats 368..376)
+// ── Req 2: the track's LAST sound is beat 384 (bar 97.1) — the final slow bass hit (a lone A-2 on the
+// downbeat, 5.5 beats after the previous syncopated bass note); beats 385→400 are total silence before the
+// loop. At B_SILENCE the whole finale FREEZES (tile + letter shear ease to rest); the letters DON'T rotate.
+// ON that final bass hit the S alone tilts to −15° at B_S_ROT (= 384) — held to the loop.
+const B_SILENCE:  f32 = 384.0;
+const S_SIGNAL_DEG: f32 = -15.0;   // the S's final static tilt (KNOB)
+const B_S_ROT:    f32 = B_SILENCE;   // S rotates ON the final slow bass hit (lone A-2 @ beat 384 = B_SILENCE)
+
+// ── Cube reveal: the opening's raymarched cube RETURNS as a MASK over the grid. It rotates, and
+// each white square's fade is driven by the cube's DISTANCE there (nearer ⇒ more faded), so the
+// grid "renders" the rotating cube as an eroded, depth-shaded shape. The pulsing square is EXEMPT
+// (always stays). Computed analytically (same 0.6 box + yaw/pitch as cs1's map()) — self-contained.
+const B_CUBE:        f32 = B_DOT - 16.0; // 16 beats before the pulsing square (⇒ 240; moved 12 earlier)
+const CUBE_SPIN:     f32 = 8.0;   // beats per full revolution
+const CUBE_MAG0:     f32 = 0.025; // start on-screen size ≈ ONE dot (~1 cell / 0.012·min side)
+const CUBE_MAG_FULL: f32 = 6.0;   // grown size — the cube fills the WHOLE screen (sim: 100% cover at all spins)
+const B_CUBE_FULL:   f32 = 360.0; // beat the slow growth finishes (occupies the whole screen), then holds
+const CUBE_NEAR:     f32 = 2.0;   // camDist that fully fades a square
+const CUBE_FAR:      f32 = 2.9;   // camDist beyond which the cube no longer fades
+
+// ── Finale SQUARE TUNNEL: the pixelated square tunnel returns around the big centred pulsing square,
+// now a BLURRED, VERY SUBTLE background haze. Nested squares recede from the beating square into a black
+// throat, filling the margin (monochrome, fits the white-on-black finale). The pixelated pattern (coarse
+// blocks) is sampled at several taps and averaged ⇒ the hard blocks bleed together (out-of-focus); soft
+// bands + a low level keep it faint BEHIND the crisp square/letters. Inner box tracks the square (dotHalf
+// ⇒ throat breathes on the beat); scroll surges on each beat pulse and FREEZES at silence (384).
+const B_FIN_TUN:     f32 = 360.0;  // beat it appears (square grown + centred by ~360)
+const FIN_TUN_CELLS: f32 = 40.0;   // pixelation: blocks across the width (KNOB — lower = chunkier)
+const FIN_TUN_K:     f32 = 0.10;   // perspective depth scale (K / sd)
+const FIN_TUN_RINGS: f32 = 4.0;    // nested squares per depth unit
+const FIN_TUN_LW:    f32 = 0.16;   // border-band half-width (phase)
+const FIN_TUN_SOFT:  f32 = 0.14;   // band-edge softness (phase) — soft, blurred nested squares (KNOB)
+const FIN_TUN_SPEED: f32 = 0.35;   // forward scroll, squares / beat
+const FIN_TUN_LURCH: f32 = 0.6;    // extra forward surge on each beat pulse
+const FIN_TUN_BLUR:  f32 = 1.2;    // blur tap offset in BLOCKS (larger = softer / more out-of-focus) (KNOB)
+const FIN_TUN_LEVEL: f32 = 0.13;   // overall brightness — VERY subtle background haze (KNOB)
+
+fn sdRoundBox(p: vec2f, b: vec2f, r: f32) -> f32 {
+  let q = abs(p) - b + vec2f(r);
+  return min(max(q.x, q.y), 0.0) + length(max(q, vec2f(0.0))) - r;
+}
+
+// Off-beat dance (shared motif with fs3/dots): each square lifts on the "and",
+// settles on the beat. Gated to fade in AFTER the line-draw so the solid-white
+// flood (220→224) stays seamless; then the settled lattice subtly dances.
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn offbeat(beat: f32, seed: f32) -> f32 { return abs(sin(3.14159265 * beat + 0.6 * (seed - 0.5))); }
+const GRID_DANCE:    f32 = 0.05;   // square off-beat bob, cell units (KNOB — subtle)
+const GRID_DANCE_ON: f32 = 225.0;  // beat the dance fades in, after the line-draw (KNOB)
+
+// ── `swayR` drives the GRID-SQUARE top-shear: RIGHT-ONLY, and HITS ON THE BEAT. The top snaps fully
+// RIGHT (+1) exactly on each beat onset (fract=0), then springs back to centre before the next — a
+// sharp on-beat right accent. (Was abs(sin·), which RESTED centred on the onset and peaked off-beat,
+// so the motion felt centred on the beat; this puts the hit ON the beat.)
+fn swayR(beat: f32) -> f32 { let s = 1.0 - fract(beat); return s * s; }
+const B_SHEAR:   f32 = 253.0;  // beat the square TOP-shear "dance" begins (bar 64.2 = 253; Req 3)
+const SHEAR_AMP: f32 = 0.16;   // square top-shear, cell units — DOUBLED (was 0.08); unison ⇒ no tearing (KNOB)
+
+// Cube reveal helpers — rotate a vec by the same yaw (spin) + pitch (spin·0.5) as cs1's map(),
+// then intersect the camera ray with the axis-aligned 0.6 box analytically (rotation preserves
+// distance ⇒ the returned tN is the camera distance to the cube's front face; −1 on a miss).
+fn rot2(a: f32) -> mat2x2f { let c = cos(a); let s = sin(a); return mat2x2f(c, s, -s, c); }
+fn rotRay(v: vec3f, spin: f32) -> vec3f {
+  var p = v;
+  let a = rot2(spin) * p.xz;       p = vec3f(a.x, p.y, a.y);
+  let b = rot2(spin * 0.5) * p.yz; p = vec3f(p.x, b.x, b.y);
+  return p;
+}
+fn cubeDist(cuv: vec2f, aspect: f32, spin: f32, mag: f32) -> f32 {
+  var ndc = cuv * 2.0 - vec2f(1.0);
+  ndc.x = ndc.x * aspect;
+  ndc.y = -ndc.y;                                  // +y up (as cs1)
+  let ro = rotRay(vec3f(0.0, 0.0, -2.6), spin);
+  let rd = rotRay(normalize(vec3f(ndc / mag, 1.5)), spin);
+  let m = vec3f(1.0) / rd;
+  let n = m * ro;
+  let k = abs(m) * vec3f(0.6);
+  let t1 = -n - k;
+  let t2 = -n + k;
+  let tN = max(max(t1.x, t1.y), t1.z);
+  let tF = min(min(t2.x, t2.y), t2.z);
+  return select(-1.0, tN, tN <= tF && tF >= 0.0);
+}
+
+// ── Reusable 3×3 letter-tile ASSET ────────────────────────────────────────────────
+// A tile is a 3×3 of cells; a 9-bit mask sets which cells are INK (bit = row*3 + col, LSB =
+// top-left cell, row 0 = top). Encodes the word C A M A R A D A S (A repeats). Meant to be
+// dropped into any module to show "here and there" — WGSL fns can't be shared, so copy this
+// block like offbeat(). Renders as crisp 1-bit pixels (no per-cell AA — that would seam the
+// merged black cells); the square's own SDF edge is still anti-aliased.
+fn wordMask(i: u32) -> u32 {
+  var w = array<u32, 9>(479u, 383u, 307u, 383u, 379u, 383u, 508u, 383u, 214u);
+  return w[i];   // C A M / A R A / D A S  (reading order == reveal order)
+}
+// Ink of one 3×3 letter block whose top-left cell is `org`, sampled at `uv` (cell units).
+fn blockInk(uv: vec2f, org: vec2f, mask: u32) -> f32 {
+  let rel = uv - org;                                  // [0,3) inside the block
+  let inBlock = step(0.0, rel.x) * step(rel.x, 3.0) * step(0.0, rel.y) * step(rel.y, 3.0);
+  let cell = floor(clamp(rel, vec2f(0.0), vec2f(2.999)));
+  let bit  = u32(cell.y) * 3u + u32(cell.x);
+  let on   = f32((mask >> bit) & 1u);
+  return inBlock * on;
+}
+// The 3×3 arrangement of the 9 letters (1-cell margins + gaps ⇒ a 13×13 field). `nRev` letters
+// are revealed in reading order. Once all are up they DANCE (Req 4): every block's TOP shears
+// (bounces) by `shear` (top cells slide in x, bottom fixed), unison on the beat — no per-letter
+// rotation (`rotA` stays 0). Only the S (i=8) takes `sRot`, its final −15° signal. Returns ink∈{0,1}.
+fn camaradasHit(uv: vec2f, nRev: f32, shear: f32, rotA: f32, sRot: f32) -> f32 {
+  var ink = 0.0;
+  for (var i = 0u; i < 9u; i = i + 1u) {
+    if (f32(i) >= nRev) { continue; }                  // not yet revealed
+    let org = vec2f(1.0 + f32(i % 3u) * 4.0, 1.0 + f32(i / 3u) * 4.0);
+    let c = org + vec2f(1.5);                           // this block's own centre (3×3)
+    let rr = rotA + select(0.0, sRot, i == 8u);        // Req 2: only the S (i=8) takes the final −15° signal
+    var suv = c + rot2(rr) * (uv - c);                  // rotate the sample about the block centre
+    let tf = clamp((org.y + 3.0 - suv.y) / 3.0, 0.0, 1.0);   // 0 at the block's base → 1 at its top
+    suv = vec2f(suv.x - shear * tf, suv.y);             // inverse top-shear ⇒ the top slides in x
+    ink = max(ink, blockInk(suv, org, wordMask(i)));
+  }
+  return ink;
+}
+// Letters revealed so far: 0 before B_WORD, +1 each WORD_STEP beats, capped at 9.
+fn wordReveal(beat: f32) -> f32 {
+  return clamp(floor((beat - B_WORD) / WORD_STEP) + 1.0, 0.0, 9.0);
+}
+
+// Reveal front: tiles turn on from screen-centre outward as the grid zooms out. Gating
+// is geometric (a cull offset on the SDF) — a min-field can't alpha-fade a single tile.
+fn revAmt(id: vec2f, beat: f32) -> f32 {
+  let z = smoothstep(B_ZOOM, B_ZOOM + ZOOM_LEN, beat);
+  let R = mix(R_LAND, R_WORK, z);
+  let cellR = length(id) / R;
+  let front = 0.30 + z * 1.7;
+  return 1.0 - smoothstep(front - 0.25, front, cellR);
+}
+
+// One inchworm run: rests at `gaps` filled odd gaps (run = 2·gaps+1 cubes), grows +1 gap then
+// releases the back gap, advancing 2 cols per cycle. Returns the [L, R] even-anchored span.
+fn wormRun(beat: f32, bSeg: f32, start: f32, dir: f32, gaps: f32, stepBeats: f32) -> vec2f {
+  let s = floor(max(beat - bSeg, 0.0) / stepBeats);   // toggle index (rest / grow / rest / …)
+  let sHalf = floor(s * 0.5);
+  let odd = s - 2.0 * sHalf;                           // 0 = rest, 1 = grow
+  let trail = start + dir * 2.0 * sHalf;               // trailing edge, advances in `dir`
+  let lead  = trail + dir * 2.0 * (gaps + odd);        // leading edge, extends +1 gap on grow
+  return vec2f(min(trail, lead), max(trail, lead));    // [lo, hi] on the moving axis
+}
+
+fn inRun(c: f32, run: vec2f) -> f32 { return step(run.x - 0.5, c) * step(c, run.y + 0.5); }
+
+// One 4-line form. Axis-aligned crawl (no diagonals): each line drawn at its base position plus an
+// accumulated per-line offset. off = (L1 right, L2 right, L3 up, L4 up) in cells. Up = −id.y.
+fn formHit(idx: f32, idy: f32, fx: f32, fy: f32, off: vec4f) -> f32 {
+  // off = per-line LEFT x-offset for (bottom-H, top-H, left-V, right-V); every line moves in x
+  let L1 = step(0.5, 1.0 - abs(idy - fy))         * step(fx + off.x - 0.5, idx) * step(idx, fx + off.x + 2.5);
+  let L2 = step(0.5, 1.0 - abs(idy - (fy + 2.0))) * step(fx + off.y - 0.5, idx) * step(idx, fx + off.y + 2.5);
+  let L3 = step(0.5, 1.0 - abs(idx - (fx + 4.0 + off.z))) * step(fy - 0.5, idy) * step(idy, fy + 2.5);
+  let L4 = step(0.5, 1.0 - abs(idx - (fx + 6.0 + off.w))) * step(fy - 0.5, idy) * step(idy, fy + 2.5);
+  return max(max(L1, L2), max(L3, L4));
+}
+
+// 4 parallel vertical lines (length 3, spacing 2). Lines 1,3 (even i) and 2,4 (odd i) sit 2 rows
+// apart and swap each beat via `phase` (0/1). vx,vy = anchor (leftmost col, base top row).
+fn vlHit(idx: f32, idy: f32, vx: f32, vy: f32, phase: f32) -> f32 {
+  var acc = 0.0;
+  for (var i = 0u; i < 4u; i = i + 1u) {
+    let fi = f32(i);
+    let col = vx + 2.0 * fi;
+    let group = fi - 2.0 * floor(fi * 0.5);        // i mod 2 → 0 for lines 1,3; 1 for lines 2,4
+    let gp = group + phase;
+    let off = 2.0 * (gp - 2.0 * floor(gp * 0.5));   // 0 or 2, swapping with the beat phase
+    let onCol = step(0.5, 1.0 - abs(idx - col));
+    let inRows = step(vy + off - 0.5, idy) * step(idy, vy + off + 2.5);
+    acc = max(acc, onCol * inRows);
+  }
+  return acc;
+}
+
+// 4 horizontal lines (length 3) in a staircase, each with its own rightward x-offset `off` (the crawl).
+// (hx,hy) = grid id of the (x,y) corner (line1). His y counts UP so +dy → −id.y: line1 @hy, line2 @hy−2,
+// line3 @hy−2 (x+4), line4 @hy−4 (x+4). off = per-line x-shift for (line1, line2, line3, line4).
+fn hlHit(idx: f32, idy: f32, hx: f32, hy: f32, off: vec4f) -> f32 {
+  let A = step(0.5, 1.0 - abs(idy - hy))         * step(hx + off.x - 0.5, idx)       * step(idx, hx + off.x + 2.5);        // line1  x
+  let B = step(0.5, 1.0 - abs(idy - (hy - 2.0))) * step(hx + off.y - 0.5, idx)       * step(idx, hx + off.y + 2.5);        // line2  x
+  let C = step(0.5, 1.0 - abs(idy - (hy - 2.0))) * step(hx + 4.0 + off.z - 0.5, idx) * step(idx, hx + 4.0 + off.z + 2.5);  // line3  x+4
+  let D = step(0.5, 1.0 - abs(idy - (hy - 4.0))) * step(hx + 4.0 + off.w - 0.5, idx) * step(idx, hx + 4.0 + off.w + 2.5);  // line4  x+4
+  return max(max(A, B), max(C, D));
+}
+
+// "double-bar" merge shape. (ax,ay) = anchor grid cell. Two 3-dot horizontal lines on adjacent
+// dot rows ay+2 and ay+4 (cols ax..ax+4), plus a 1-dot vertical stub at the middle column ax+2 for
+// each: the top stub climbs UP (ay..ay+2), the bottom stub drops DOWN (ay+4..ay+6). ANIMATED by the
+// signed shift `sh` (in dots): +1 slides the top stub to the LEFT dot (ax) and the bottom stub to the
+// RIGHT dot (ax+4); 0 both at the middle; −1 top→RIGHT, bottom→LEFT. Driven as a 3-state sweep (see fs).
+// Fills bridges too ⇒ the runs merge into solid lines (evens are already ON from the base grid).
+fn dblHit(idx: f32, idy: f32, ax: f32, ay: f32, sh: f32) -> f32 {
+  let sx = sh * 2.0;   // stub shift in cells: +2 (top→left / bot→right), 0 (middle), −2 (top→right / bot→left)
+  let H1 = step(0.5, 1.0 - abs(idy - (ay + 2.0))) * step(ax - 0.5, idx) * step(idx, ax + 4.5);
+  let H2 = step(0.5, 1.0 - abs(idy - (ay + 4.0))) * step(ax - 0.5, idx) * step(idx, ax + 4.5);
+  let V1 = step(0.5, 1.0 - abs(idx - (ax + 2.0 - sx))) * step(ay - 0.5, idy) * step(idy, ay + 2.5);
+  let V2 = step(0.5, 1.0 - abs(idx - (ax + 2.0 + sx))) * step(ay + 3.5, idy) * step(idy, ay + 6.5);
+  return max(max(H1, H2), max(V1, V2));
+}
+
+// "arch" merge shape (parallelogram). A FIXED 2×2 square body (cols ax+2..ax+4, rows ay..ay+2) plus two
+// bobbing arm dots: the leftmost at col ax (bridged to the square's left corner ax+2) on row ay+lv, the
+// rightmost at col ax+6 (bridged to the right corner ax+4) on row ay+rv. lv/rv ∈ {0,2} cells pick the TOP
+// or BASE row for each arm ⇒ the ends go up & down. Fills bridges too ⇒ merges into solid strokes.
+fn boxHit(idx: f32, idy: f32, ax: f32, ay: f32, lv: f32, rv: f32) -> f32 {
+  let Ht = step(0.5, 1.0 - abs(idy - ay))         * step(ax + 1.5, idx) * step(idx, ax + 4.5);  // square top
+  let Hb = step(0.5, 1.0 - abs(idy - (ay + 2.0))) * step(ax + 1.5, idx) * step(idx, ax + 4.5);  // square base
+  let Vl = step(0.5, 1.0 - abs(idx - (ax + 2.0))) * step(ay - 0.5, idy) * step(idy, ay + 2.5);  // square left
+  let Vr = step(0.5, 1.0 - abs(idx - (ax + 4.0))) * step(ay - 0.5, idy) * step(idy, ay + 2.5);  // square right
+  let Al = step(0.5, 1.0 - abs(idy - (ay + lv)))  * step(ax - 0.5, idx) * step(idx, ax + 2.5);  // left arm  @row ay+lv
+  let Ar = step(0.5, 1.0 - abs(idy - (ay + rv)))  * step(ax + 3.5, idx) * step(idx, ax + 6.5);  // right arm @row ay+rv
+  return max(max(max(Ht, Hb), max(Vl, Vr)), max(Al, Ar));
+}
+
+// One soft TAP of the finale tunnel at pixel point `fp`: quantize to coarse blocks (the pixelation), SOFT
+// nested-square bands (smoothstep, not a hard step), dark throat. Averaging several taps (in fs) blurs
+// across block edges ⇒ a hazy, out-of-focus pixelated tunnel. Returns [0,1] brightness (pre-level).
+fn finTunTap(fp: vec2f, dims: vec2f, aspect: f32, cenP: vec2f, halfP: f32, sBeat: f32, pulse: f32) -> f32 {
+  let fblock = dims.x / FIN_TUN_CELLS;
+  let fuv    = (floor(fp / fblock) + vec2f(0.5)) * fblock / dims;      // block-centre uv (pixelated)
+  let tp     = (fuv - vec2f(0.5)) * vec2f(aspect, 1.0);
+  let tsd    = sdRoundBox(tp - cenP, vec2f(halfP), 0.02);             // >0 in the margin; inner box tracks the square
+  let tv     = FIN_TUN_K / max(tsd, 1e-3) + FIN_TUN_SPEED * sBeat + FIN_TUN_LURCH * pulse;
+  let tf     = fract(tv * FIN_TUN_RINGS);
+  let band   = 1.0 - smoothstep(FIN_TUN_LW, FIN_TUN_LW + FIN_TUN_SOFT, min(tf, 1.0 - tf));  // soft nested-square band
+  return band * smoothstep(0.0, 0.35, tsd);                          // 0 for tsd≤0 ⇒ square + letters untouched
+}
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  let x = f32((i << 1u) & 2u);
+  let y = f32(i & 2u);
+  return vec4f(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+}
+
+@fragment fn fs(@builtin(position) fragPos: vec4f) -> @location(0) vec4f {
+  let beat = motion.beat;
+  let layer = smoothstep(B_GRID, B_GRID + FADE_LEN, beat);
+  if (layer <= 0.0) { return vec4f(0.0); }   // no-op before 205 (premultiplied transparent)
+
+  let uv = fragPos.xy / vec2f(pngine.width, pngine.height);
+  let aspect = pngine.width / pngine.height;
+  let z = smoothstep(B_ZOOM, B_ZOOM + ZOOM_LEN, beat);
+  let R = mix(R_LAND, R_WORK, z);
+  let p = (uv - vec2f(0.5)) * vec2f(aspect, 1.0);   // centred, aspect-corrected
+  let g = p * R + vec2f(0.5);                        // grid space: 1 unit = 1 cell
+  let id0 = floor(g);
+
+  // Pulsing square at (1/3,1/3): swells on the beat from B_DOT; at B_DOT_GROW it GROWS to ~90% of
+  // the min side AND translates to screen centre (fast). dotT = eased grow+travel progress (0→1).
+  let dotG = (vec2f(1.0 / 3.0) - vec2f(0.5)) * vec2f(aspect, 1.0) * R + vec2f(0.5);
+  let dotEven = 2.0 * floor(floor(dotG) * 0.5);
+  let dotPulse = pow(1.0 - fract(beat), 4.0) * step(B_DOT, beat)
+               * (1.0 - step(B_SILENCE, beat));   // beat swell B_DOT → through the CAMARADAS scene → STATIC at silence (384)
+  let dotT = smoothstep(B_DOT_GROW, B_DOT_GROW + GROW_LEN, beat);   // 0→1 grow + travel to centre
+
+  // Cube reveal: a centred cube rotates from B_CUBE, fading squares by distance; grows dot→full-screen.
+  let cubeOn = smoothstep(B_CUBE, B_CUBE + 1.0, beat);
+  let cubeSpin = max(0.0, beat - B_CUBE) * 6.28318530718 / CUBE_SPIN;   // TAU per CUBE_SPIN beats
+  let cubeGrow = clamp((beat - B_CUBE) / (B_CUBE_FULL - B_CUBE), 0.0, 1.0);
+  let cubeMag = CUBE_MAG0 * pow(CUBE_MAG_FULL / CUBE_MAG0, cubeGrow);   // dot → full-screen, held after
+
+  // Line-draw (beats time WHEN — never a pulse): from the solid-white canvas, whole
+  // squares at ODD x turn black ⇒ vertical lines; then squares at ODD y turn black ⇒
+  // horizontal lines — leaving white squares only at even/even (a grid of white squares).
+  let vprog = smoothstep(B_VLINES, B_VLINES + VLINES_LEN, beat);
+  let hprog = smoothstep(B_HLINES, B_HLINES + HLINES_LEN, beat);
+
+  // Scene A — two inchworm lines: fill the next odd gap (grow), then release the back gap
+  // (move), advancing 2 cols per cycle. Each run spans [.x, .y] on its own row.
+  let seg1On = step(B_SEG,  beat);
+  let seg2On = step(B_SEG2, beat);
+  let seg3On = step(B_SEG3, beat);
+  let seg4On = step(B_SEG4, beat);
+  let run1 = wormRun(beat, B_SEG,  SEG_X0,  1.0, SEG_GAPS,  SEG_STEP);   // worm 1 → right, on SEG_ROW
+  // worm 2 starts hard against the left screen edge (aspect-derived ⇒ exact on any canvas)
+  let leftCol = floor((-0.5 * aspect) * R_WORK + 0.5);
+  let seg2X0 = 2.0 * floor(leftCol * 0.5);                              // snap to an even (base-ON) column
+  let run2 = wormRun(beat, B_SEG2, seg2X0, 1.0, SEG2_GAPS, SEG2_STEP);  // worm 2 → right, on SEG2_ROW
+  // worm 3 is VERTICAL: climbs UP column SEG3_COL from the bottom screen edge
+  let botRow = 2.0 * floor((0.5 * R_WORK + 0.5) * 0.5);                 // bottom even row
+  let run3 = wormRun(beat, B_SEG3, botRow, -1.0, SEG3_GAPS, SEG3_STEP); // worm 3 → up, on col SEG3_COL
+  let run4 = wormRun(beat, B_SEG4, SEG4_X0, -1.0, SEG4_GAPS, SEG4_STEP);// worm 4 → left, on SEG4_ROW
+  // 4-line crawl: each line shifts left 2 once per 5-beat cycle (one per beat, then a pause)
+  let formOn = step(B_FORM, beat);
+  let bIn = max(0.0, floor(beat - B_FORM));
+  let formOff = -2.0 * vec4f(
+    floor((bIn + 4.0) / 5.0),   // bottom horizontal (beat 1 of the cycle)
+    floor((bIn + 3.0) / 5.0),   // top horizontal    (beat 2)
+    floor((bIn + 2.0) / 5.0),   // left vertical      (beat 3)
+    floor((bIn + 1.0) / 5.0));  // right vertical     (beat 4)  [beat 5 = pause]
+
+  // 4 bouncing vertical lines at ~2/3 across / 2/3 down; columns snapped EVEN (ON the dots), lines
+  // 1,3 vs 2,4 swap y every beat
+  let vlOn = step(B_VL, beat);
+  let vlBeat = max(0.0, floor(beat - B_VL));
+  let vlPhase = vlBeat - 2.0 * floor(vlBeat * 0.5);          // beat parity → swaps the two groups
+  let vlX = 2.0 * floor((-leftCol / 3.0 - 1.0) * 0.5);       // ~2/3 across, snapped to an EVEN (dot) column
+  let vlY = 2.0 * floor(botRow / 6.0);                       // ~2/3 down, snapped EVEN (dot row)
+
+  // 4 horizontal lines (staircase) at (10,10) from the bottom-left; crawls RIGHT +2/4beats, one
+  // line at a time in order line3, line1, line4, line2 (all net +2/cycle ⇒ rigid)
+  let hlOn = step(B_HL, beat);
+  let hlX = leftCol + 10.0;   // 10 cells from the left edge
+  let hlY = botRow - 10.0;    // 10 cells up from the bottom (id.y counts down)
+  let hlBIn = max(0.0, floor(beat - B_HL));
+  let hlOff = 2.0 * vec4f(
+    floor((hlBIn + 2.0) / 4.0),   // line1 moves 2nd (beat 2)
+    floor(hlBIn / 4.0),           // line2 moves 4th (beat 4)
+    floor((hlBIn + 3.0) / 4.0),   // line3 moves 1st (beat 1)
+    floor((hlBIn + 1.0) / 4.0));  // line4 moves 3rd (beat 3)
+
+  // double-bar merge shape at DBL_O; a PING-PONG sweep, each state held 2 beats: top stub
+  // L→M→R→M→L (bottom mirrors R→L→…), reversing at the ends — no jump. State = floor(beatsSince/2);
+  // over mod-4 the triangle `|m−2|−1` gives shift +1(L) / 0(M) / −1(R) / 0(M).
+  let dblOn = step(B_DBL, beat);
+  let dblState = floor(max(0.0, beat - B_DBL) / 2.0);          // advances every 2 beats
+  let dblM = dblState - 4.0 * floor(dblState * 0.25);          // state mod 4 (ping-pong period)
+  let dblShift = abs(dblM - 2.0) - 1.0;                        // +1 L / 0 M / −1 R / 0 M (triangle)
+
+  // "arch"/parallelogram at BOX_O — its two END dots BOB up & down on the beat: the leftmost flips
+  // between the square's base row (home, DOWN) and top row (UP); the rightmost mirrors (home UP ↔ DOWN).
+  // Anti-phase is the geometry's ONLY connected option (each arm has a single valid alternate row) ⇒ the
+  // shape stays a parallelogram, flipping its slant each beat. Rows are whole dots (0/2 cells) ⇒ lattice OK.
+  // Starts on beat 254 at the home layout (left DOWN, right UP = the designed shape).
+  let boxOn = step(B_BOX, beat);
+  let boxBeat = floor(max(0.0, beat - B_BOX));
+  let armPhase = boxBeat - 2.0 * floor(boxBeat * 0.5);        // 0,1,0,1,… (flip each beat)
+  let boxLV = 2.0 - armPhase * 2.0;                          // left arm row:  2 (down/home) ↔ 0 (up)
+  let boxRV = armPhase * 2.0;                                // right arm row: 0 (up/home)   ↔ 2 (down)
+
+  // Req 2: freeze the finale at the last sound. danceGate eases 1→0 across beat 384 so the shear
+  // bounce settles to rest; ON the final slow bass hit sSignal eases the S's −15° in over
+  // B_S_ROT→B_S_ROT+1 (384→385). The letters themselves never rotate — only this final S signal.
+  let danceGate = 1.0 - smoothstep(B_SILENCE - 0.5, B_SILENCE + 0.5, beat);
+  let sSignal   = radians(S_SIGNAL_DEG) * smoothstep(B_S_ROT, B_S_ROT + 1.0, beat);
+
+  // Field = min over the 3×3 neighbourhood of the tile boxes. A tile that is unrevealed
+  // (reveal flood) or blacked-out (odd-x/odd-y) is culled ⇒ a full-square black hole.
+  var d = 1e9;
+  for (var oy = -1; oy <= 1; oy = oy + 1) {
+    for (var ox = -1; ox <= 1; ox = ox + 1) {
+      let id = id0 + vec2f(f32(ox), f32(oy));
+      let oddX = step(0.25, fract(id.x * 0.5));   // 1 if id.x is odd → vertical line
+      let oddY = step(0.25, fract(id.y * 0.5));   // 1 if id.y is odd → horizontal line
+      let black = max(oddX * vprog, oddY * hprog);         // base grid STAYS fully visible
+      // fill the odd gaps inside each worm's run so it connects into a solid line (evens already ON)
+      let hit1 = seg1On * step(0.5, 1.0 - abs(id.y - SEG_ROW))  * inRun(id.x, run1);
+      let hit2 = seg2On * step(0.5, 1.0 - abs(id.y - SEG2_ROW)) * inRun(id.x, run2);
+      let hit3 = seg3On * step(0.5, 1.0 - abs(id.x - SEG3_COL)) * inRun(id.y, run3);  // VERTICAL
+      let hit4 = seg4On * step(0.5, 1.0 - abs(id.y - SEG4_ROW)) * inRun(id.x, run4);
+      let hitF = formOn * formHit(id.x, id.y, FORM_X0, FORM_Y, formOff);
+      let hitVL = vlOn * vlHit(id.x, id.y, vlX, vlY, vlPhase);
+      let hitHL = hlOn * hlHit(id.x, id.y, hlX, hlY, hlOff);
+      let hitDBL = dblOn * dblHit(id.x, id.y, DBL_OX, DBL_OY, dblShift);
+      let hitBOX = boxOn * boxHit(id.x, id.y, BOX_OX, BOX_OY, boxLV, boxRV);
+      let onSeg = max(max(max(max(max(max(max(hit1, hit2), max(hit3, hit4)), hitF), hitVL), hitHL), hitDBL), hitBOX);
+      let present = max(revAmt(id, beat) * (1.0 - black), onSeg);
+      // subtle off-beat DANCE: each square bobs on the "and" once the lattice has formed.
+      let dwob = GRID_DANCE * offbeat(beat, hash21(id)) * smoothstep(GRID_DANCE_ON, GRID_DANCE_ON + 2.0, beat);
+      let local = g - (id + vec2f(0.5) + vec2f(0.0, dwob));
+      // the (1/3,1/3) beeper cell: kept lit + cube-exempt; pulse+growth is the box after the loop
+      let isPulse = step(abs(id.x - dotEven.x) + abs(id.y - dotEven.y), 0.5);
+      // cube reveal: the rotating cube's distance at this square fades it out (pulsing sq exempt)
+      let cuv = id / (R * vec2f(aspect, 1.0)) + vec2f(0.5);           // this cell's centre → screen uv
+      let cdist = cubeDist(cuv, aspect, cubeSpin, cubeMag);
+      let cfade = step(0.0, cdist) * (1.0 - smoothstep(CUBE_NEAR, CUBE_FAR, cdist)) * cubeOn * (1.0 - isPulse * (1.0 - dotT));
+      let present2 = present * (1.0 - cfade);
+      // Req 3: unison RIGHT-ONLY top-shear — from B_SHEAR each square's TOP breathes to the right on
+      // the beat (swayR: rests centred on the onset, pushes right at mid-beat, springs back; bottom
+      // vertices fixed). Same swayR for every tile ⇒ tops move together, so the tight pack never tears.
+      let shearOn = step(B_SHEAR, beat) * danceGate;    // Req 2: shear freezes at silence (384)
+      let topFrac = clamp((HALF_ON - local.y) / (2.0 * HALF_ON), 0.0, 1.0);   // 0 bottom → 1 top
+      let ls = vec2f(local.x - SHEAR_AMP * swayR(beat) * topFrac * shearOn, local.y);
+      let db = sdRoundBox(ls, vec2f(HALF_ON), RC) + (1.0 - present2) * 2.0;
+      d = min(d, db);
+    }
+  }
+
+  // The beeper square GROWS + travels to screen centre (dotT). A SEPARATE global box — the 3×3
+  // loop only reaches ±1 cell. Exponential scale; keeps pulsing; no-op before B_DOT.
+  let dotArm  = step(B_DOT, beat);
+  let dotFull = DOT_GROW * 0.5 * R;                             // half-extent = 90% of screen height
+  let dotBase = HALF_ON * pow(dotFull / HALF_ON, dotT);        // cell → 90% screen (exponential in dotT)
+  let swellF  = DOT_SWELL * (1.0 - 0.6 * dotT);                // punchy when small, gentle when huge
+  let dotHalf = dotBase * (1.0 + swellF * dotPulse);
+  let startC  = dotEven + vec2f(0.5);                          // the beeper cell centre (g-space)
+  let dotC    = mix(startC, vec2f(0.5), dotT);                 // translate (1/3,1/3) → screen centre
+  // Req 3: while it's still a small grid tile the pulsing square shears with the lattice; once it
+  // grows + centres (dotT→1) its own shear fades out — the carved letters take over the dance (Req 4).
+  let dlocal   = g - dotC;
+  let shearOn2 = step(B_SHEAR, beat) * (1.0 - dotT) * danceGate;   // Req 2: freezes at silence
+  let dTopFrac = clamp((dotHalf - dlocal.y) / (2.0 * dotHalf), 0.0, 1.0);
+  let dls      = vec2f(dlocal.x - SHEAR_AMP * (dotBase / HALF_ON) * swayR(beat) * dTopFrac * shearOn2, dlocal.y);
+  // Corners: rounded like the lattice while it RESTS (dotT=0), but go SHARP as soon as it starts moving
+  // forward / growing (dotT>0) — the grown pulsing square is a hard-cornered square, never rounded. (The
+  // fs3 rotating-cube whiteout square that zooms keeps its own rounding — untouched, different module.)
+  let dCorner = RC / HALF_ON * dotBase * (1.0 - smoothstep(0.0, 0.25, dotT));
+  let dPulse  = sdRoundBox(dls, vec2f(dotHalf), dCorner);   // radius scales with size, →0 once moving
+  d = min(d, dPulse + (1.0 - dotArm) * 1e9);                    // armed only from B_DOT on
+
+  let aa = fwidth(d) + 0.0001;
+  var cov = 1.0 - smoothstep(-aa, aa, d);   // 1 = white square, 0 = black (line / bg)
+
+  // ── CAMARADAS: carve the revealed letters as BLACK cells into the grown+centred pulsing
+  // square. uv13 maps the square's own frame (g − dotC, half-extent dotHalf) onto the 13×13
+  // letter field, so the letters share the square's centre + beat pulse. Timing (wordReveal +
+  // B_WORD) keeps ink off the small early pulsing square; other grid whites are far from the
+  // centre ⇒ uv13 lands outside [0,13] ⇒ no false ink.
+  let uv13 = ((g - dotC) / dotHalf * 0.5 + vec2f(0.5)) * 13.0;
+  // The letters carry NO shear and NO rotation — only the square's beat-pulse (uv13 scales with
+  // dotHalf, which carries dotPulse). shear=0, rotA=0; the S still takes its final −15° via sSignal.
+  let ink = camaradasHit(uv13, wordReveal(beat), 0.0, 0.0, sSignal);
+  cov = cov * (1.0 - ink);
+
+  // ── Finale square tunnel — a BLURRED, VERY SUBTLE background haze. The pixelated tunnel (finTunTap) is
+  // sampled at 5 taps (centre + 4 diagonals ~1 block apart) and averaged ⇒ the hard blocks bleed together
+  // (out-of-focus). Soft bands + the low FIN_TUN_LEVEL keep it faint behind the crisp square/letters.
+  // Each tap is 0 for tsd≤0, so the square + carved letters stay untouched. Scroll freezes at silence.
+  let finTun = smoothstep(B_FIN_TUN, B_FIN_TUN + 2.0, beat) * dotT;    // appears once the square is grown+centred
+  let cenP   = (dotC - vec2f(0.5)) / R;                                // the pulsing square's centre in p-space
+  let halfP  = dotHalf / R;                                            // its half-extent (breathes on the beat)
+  let sBeat  = min(beat, B_SILENCE);                                   // freeze the scroll at silence
+  let dims   = vec2f(pngine.width, pngine.height);
+  let o      = (pngine.width / FIN_TUN_CELLS) * FIN_TUN_BLUR;          // blur tap offset in pixels (~block-scale)
+  var tun    = finTunTap(fragPos.xy,                dims, aspect, cenP, halfP, sBeat, dotPulse);
+  tun = tun + finTunTap(fragPos.xy + vec2f( o,  o), dims, aspect, cenP, halfP, sBeat, dotPulse);
+  tun = tun + finTunTap(fragPos.xy + vec2f(-o,  o), dims, aspect, cenP, halfP, sBeat, dotPulse);
+  tun = tun + finTunTap(fragPos.xy + vec2f( o, -o), dims, aspect, cenP, halfP, sBeat, dotPulse);
+  tun = tun + finTunTap(fragPos.xy + vec2f(-o, -o), dims, aspect, cenP, halfP, sBeat, dotPulse);
+  cov = max(cov, tun * 0.2 * FIN_TUN_LEVEL * finTun);                  // 5-tap average × very subtle level
+
+  // The grid OWNS the screen once faded in: white tiles, black holes, opaque. (The dots
+  // B_BG veil is now redundant — it just pre-blacks the backdrop during the crossfade.)
+  let a = layer;
+  return vec4f(vec3f(cov) * a, a);           // premultiplied white-on-black
+}
+""")
+
+; ── Pipelines ────────────────────────────────────────────────────────────────
+(compute-pipeline :name cp1 :module cs1 :entry main)
+(compute-pipeline :name cp2 :module cs2 :entry main)
+
+(render-pipeline :name rp3
+  (layout auto)
+  (vertex (module fs3) (entry vs))
+  (fragment (module fs3) (entry fs)
+    (targets (target :format rgba16float))))
+
+(render-pipeline :name rp4
+  (layout auto)
+  (vertex (module fs4) (entry vs))
+  (fragment (module fs4) (entry fs)
+    (targets (target :format preferred-canvas-format))))
+
+; Dot layer: instanced billboards, black premultiplied-alpha over sceneTex. No depth.
+(render-pipeline :name rpDots
+  (layout auto)
+  (vertex (module dots) (entry vs))
+  (fragment (module dots) (entry fs)
+    (targets (target :format rgba16float
+      (blend
+        (color :src-factor one :dst-factor one-minus-src-alpha)
+        (alpha :src-factor one :dst-factor one-minus-src-alpha))))))
+
+; Cube-canvas grid: full-screen fragment SDF, premultiplied white-on-black over sceneTex
+; (same target/blend as rpDots so it composites cleanly and owns the screen from 205).
+(render-pipeline :name rpGrid
+  (layout auto)
+  (vertex (module grid) (entry vs))
+  (fragment (module grid) (entry fs)
+    (targets (target :format rgba16float
+      (blend
+        (color :src-factor one :dst-factor one-minus-src-alpha)
+        (alpha :src-factor one :dst-factor one-minus-src-alpha))))))
+
+; ── Bind groups ──────────────────────────────────────────────────────────────
+(bind-group :name bgC1 :layout-pipeline cp1 :layout-index 0
+  (entry :binding 0 :buffer motion)
+  (entry :binding 1 :buffer gA)
+  (entry :binding 2 :buffer pngineU))
+
+(bind-group :name bgC2 :layout-pipeline cp2 :layout-index 0
+  (entry :binding 0 :buffer motion)
+  (entry :binding 1 :buffer gA)
+  (entry :binding 2 :buffer gB))
+
+(bind-group :name bg3 :layout-pipeline rp3 :layout-index 0
+  (entry :binding 0 :buffer pngineU)
+  (entry :binding 1 :buffer motion)
+  (entry :binding 2 :buffer gA)
+  (entry :binding 3 :buffer gB))
+
+(bind-group :name bg4 :layout-pipeline rp4 :layout-index 0
+  (entry :binding 0 :buffer pngineU)
+  (entry :binding 1 :buffer motion)
+  (entry :binding 2 :texture sceneTex)
+  (entry :binding 3 :sampler samp))
+
+; Dot layer needs exactly pngine (aspect/size) + motion (beat) — no gaps (layout auto).
+(bind-group :name bgDots :layout-pipeline rpDots :layout-index 0
+  (entry :binding 0 :buffer pngineU)
+  (entry :binding 1 :buffer motion))
+
+; Grid canvas: identical binding set to the dots — pngine (aspect/size) + motion (beat).
+(bind-group :name bgGrid :layout-pipeline rpGrid :layout-index 0
+  (entry :binding 0 :buffer pngineU)
+  (entry :binding 1 :buffer motion))
+
+; ── Passes ───────────────────────────────────────────────────────────────────
+(compute-pass :name pass1 :pipeline cp1 :bind-groups [bgC1]
+  :dispatch-workgroups (ceil (/ (* GRID_W GRID_H) 64)))
+
+(compute-pass :name pass2 :pipeline cp2 :bind-groups [bgC2]
+  :dispatch-workgroups (ceil (/ (* GRID_W GRID_H) 64)))
+
+(render-pass :name pass3
+  (color-attachment :view sceneTex :clear-value [0 0 0 1] :load-op clear :store-op store)
+  :pipeline rp3
+  :bind-groups [bg3]
+  (draw :vertex-count 3))
+
+; Draw the dots OVER pass3's scene (load-op load preserves it); before the chroma post.
+(render-pass :name passDots
+  (color-attachment :view sceneTex :load-op load :store-op store)
+  :pipeline rpDots
+  :bind-groups [bgDots]
+  (draw :vertex-count 6 :instance-count NDOT))
+
+; Draw the cube-canvas grid OVER the dots (load-op load); no-op until beat 205, then it
+; fades in and owns the screen. Still before the chroma post so fs4 shifts it too.
+(render-pass :name passGrid
+  (color-attachment :view sceneTex :load-op load :store-op store)
+  :pipeline rpGrid
+  :bind-groups [bgGrid]
+  (draw :vertex-count 3))
+
+(render-pass :name pass4
+  (color-attachment :view context-current-texture :clear-value [0 0 0 1] :load-op clear :store-op store)
+  :pipeline rp4
+  :bind-groups [bg4]
+  (draw :vertex-count 3))
+
+(frame :name main :perform [writeInputs pass1 pass2 pass3 passDots passGrid pass4])
+
