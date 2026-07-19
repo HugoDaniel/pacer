@@ -19,7 +19,8 @@
 //! | `bar`   | continuous bar position                              |
 //! | `cycle` | alias of `bar` (the `Pattern` vocabulary)            |
 //! | `phase` | position within the current bar, `[0, 1)`            |
-//! | `bpm`   | transport tempo                                      |
+//! | `bpm`   | active tempo segment's bpm at the tick (a step       |
+//! |         | function; constant scores: the transport's `:bpm`)   |
 //! | `dur`   | score length in BEATS — bound only when the          |
 //! |         | transport declares `:dur` (referencing it in an      |
 //! |         | unbounded score is an `UnknownBinding` dry-run catch) |
@@ -204,7 +205,7 @@ fn bindTime(transport: *const TrackTable.Transport, tick: Tick, scene: ?TrackTab
     n += 1;
     buf[n] = .{ .name = "phase", .value = .{ .number = map.phaseOf(tick) } };
     n += 1;
-    buf[n] = .{ .name = "bpm", .value = .{ .number = map.bpm } };
+    buf[n] = .{ .name = "bpm", .value = .{ .number = map.bpmAt(tick) } };
     n += 1;
     if (transport.dur) |dur| {
         buf[n] = .{ .name = "dur", .value = .{ .number = map.beatOf(dur) } };
@@ -420,6 +421,23 @@ test "evalAt: control bindings — scalar, vector, mixed with time" {
     const tick: Tick = 2 * 180180;
     const mixed = try evalAt(t_.allocator, tree, core_schema, &test_transport, &controls, doc.node(2), tick, null, 1);
     try t_.expectEqual(@as(f32, 0.5), mixed[0]);
+}
+
+test "evalAt: bpm binds the active segment's tempo under a tempo map" {
+    var doc = try TestDoc.init("(+ bpm 0)");
+    defer doc.deinit();
+    var buf: [2]TimeMap.Segment = .{
+        .{ .start_tick = 0, .bpm = 120, .start_sec = undefined, .tps = undefined },
+        .{ .start_tick = 720720, .bpm = 240, .start_sec = undefined, .tps = undefined },
+    };
+    var mapped = test_transport;
+    mapped.map = TimeMap.init(120, 4).withSegments(&buf);
+    // A step function of the (wrapped) tick: still 120 one tick before
+    // the boundary, 240 exactly at it.
+    const before = try evalAt(t_.allocator, &doc.result.tree, core_schema, &mapped, &.{}, doc.node(0), 720719, null, 1);
+    try t_.expectEqual(@as(f32, 120), before[0]);
+    const after = try evalAt(t_.allocator, &doc.result.tree, core_schema, &mapped, &.{}, doc.node(0), 720720, null, 1);
+    try t_.expectEqual(@as(f32, 240), after[0]);
 }
 
 test "evalAt: an unbound control name is still UnknownBinding" {

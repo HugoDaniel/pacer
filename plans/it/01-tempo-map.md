@@ -133,6 +133,26 @@ Gate: `zig build verify` (all cases native+wasm) + npm gate + audit.
 
 ## Progress log
 
+- 2026-07-19 — **Phase 2 done** (piecewise TimeMap, reds first).
+  `TimeMap.Segment` {start_tick, bpm, start_sec, tps}; `withSegments`
+  builds the cumulative table in the documented op order (`tps_i = (bpm_i
+  * tpb)/60`, `start_sec_{i+1} = start_sec_i + Δtick/tps_i` — one divide,
+  one add, never reassociated); `tickFromSeconds`/`secondsFromTick` scan
+  linearly to the active segment and run the SAME one-mul-one-floor seam
+  against the segment origin; `bpmAt` is the step function the `bpm` env
+  binding + `:emit [bpm]` lane now read (`ExprTrack.bindTime`);
+  `loopSeconds`/`holdSeconds` are the seconds-domain wrap (`@mod`/`@min`,
+  NaN flows to the conversion guard). Degenerate pin SHARPENED from the
+  plan wording: a ≤1-segment map takes the constant code path VERBATIM
+  (branch, not equivalent math) — floor(fmod(s,L)·tps) ≠ mod(floor(s·tps),
+  dur) is provable near boundaries, so bit-identity for existing scores is
+  achieved by routing, and the seconds-wrap applies to MAPPED scores only
+  (Eval keeps tick-wrap for constant scores — Phase 3 wires this). Reds:
+  boundary-exact conversions both sides + AT, fractional-bpm third
+  segment, origin inversion, oracle sweep (old impl verbatim, bit-compared),
+  early-segment loop wrap (asserts the tick-wrap bug it prevents), hold
+  clamp, overflow/NaN guards, bpm step function, mapped `bpm` env red in
+  ExprTrack. Gates: test ✓, wasm ✓, corpus 22/22 ✓, audit 31/31 ✓.
 - 2026-07-19 — **Phase 1 done** (schema + validation, reds first). `(tempo …)`
   form in `schema/pacer.sjon` (`:at`/`:bpm` schema-optional, the scene/trigger
   discipline); `tempo_map_invalid` appended to `Compile.Code` at ordinal 30
