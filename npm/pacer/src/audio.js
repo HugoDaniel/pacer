@@ -25,23 +25,31 @@ import { laneValue } from './lane.js';
  */
 
 /**
- * Adapt a Sointu-style player (pngine `createAudioPlayer`'s surface:
- * `currentTime` / `playing` getters) into an AudioTargetHost. The
- * song is pre-rendered, so the param surface is empty and `setParam`
- * is accepted-and-ignored; the value of the adapter is the clock —
- * the locked topology works end-to-end before a real audio engine
- * exists.
+ * Adapt a player surface (`currentTime` / `playing` getters) into a
+ * clock-only AudioTargetHost — the PRERENDERED delivery mode: the audio
+ * asset is already rendered (a Sointu `pNGa` song, a batida/audzio
+ * native bounce, any `<audio>` element wrapper), so the param surface
+ * is empty and `setParam` is accepted-and-ignored; the value of the
+ * adapter is the clock. Prerendered is a delivery mode, not legacy —
+ * it is how a demo ships bit-pinned audio with zero engine risk.
  *
  * @param {{ currentTime: number, playing: boolean }} player
  * @returns {AudioTargetHost}
  */
-export function sointuHost(player) {
+export function clockOnlyHost(player) {
   return {
     params: () => [],
     setParam: () => {},
     clock: () => ({ seconds: player.currentTime, playing: player.playing }),
   };
 }
+
+/**
+ * Alias of {@link clockOnlyHost} — the adapter's original name, kept
+ * because published names never break. The pattern was never
+ * Sointu-specific; new code should import `clockOnlyHost`.
+ */
+export const sointuHost = clockOnlyHost;
 
 /**
  * A host's param surface as a Pacer registry — pass as `registries[1]`

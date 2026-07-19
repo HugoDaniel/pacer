@@ -188,6 +188,17 @@ export {};
  */
 
 /**
+ * One conformance defect reported by `checkAudioTargetHost`
+ * (`pacer/host-check`): a stable kebab-case code plus a human message.
+ * An empty findings array means the host satisfies the AudioTargetHost
+ * contract.
+ * @typedef {object} HostFinding
+ * @property {string} code Stable finding code (e.g. `param-ncomp`,
+ *   `set-param-throws`, `clock-shape`).
+ * @property {string} message What was wrong, with the offending spec named.
+ */
+
+/**
  * A control reference: its `:id` string or its slot index.
  * @typedef {string | number} ControlRef
  */

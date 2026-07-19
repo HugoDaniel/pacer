@@ -38,6 +38,10 @@
       "types": "./types/audio.d.ts",
       "default": "./src/audio.js"
     },
+    "./host-check": {
+      "types": "./types/host-check.d.ts",
+      "default": "./src/host-check.js"
+    },
     "./clock": {
       "types": "./types/clock.d.ts",
       "default": "./src/clock.js"

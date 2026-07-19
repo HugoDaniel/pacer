@@ -94,4 +94,20 @@ Gate: npm gate.
 
 ## Progress log
 
-(empty — plan not started)
+- 2026-07-19 — **Phase 1 done** (host-check kit, reds first).
+  `src/host-check.js` + the `pacer/host-check` subpath export (exports
+  map append; triple-pin untouched — accumulate-till-publish).
+  `checkAudioTargetHost(host, opts) → HostFinding[]` with stable
+  kebab-case codes: params-shape / param-name / param-duplicate /
+  param-ncomp / param-bounds / params-unstable / set-param-shape /
+  set-param-throws / clock-shape / clock-missing. Never throws on a
+  hostile host (every host call try/caught); totality probes = an
+  unknown-name setParam + a NaN on the first real param; idempotence =
+  the name:ncomp fingerprint across two consecutive params() calls (the
+  studio's re-arm fingerprint surface). `clockOnlyHost` is now the
+  canonical export in audio.js (JSDoc reframed around the prerendered
+  delivery mode), `sointuHost` a same-function alias pointing forward —
+  pinned by `clockOnlyHost === sointuHost` and a kit pass with
+  `expectClock: true`. The `HostFinding` typedef landed in types.js now
+  (P2's plan slot) — the kit's JSDoc needed its home immediately.
+  Gate: npm lint/typecheck/test ✓ (81 pass).
