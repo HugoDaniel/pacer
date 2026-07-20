@@ -106,10 +106,10 @@ const ControlSlot = struct {
 
 /// Frame evaluator over a compiled score. The `CompileResult` is
 /// borrowed whole (expr tracks need its tree + schema, not just the
-/// table), must already sit in its final memory location (it is moved
-/// by value; see `Compile.CompileResult`), and must outlive the
-/// evaluator. Owns its arena (cache + entry buffer + expr scratch);
-/// SJON deinit convention.
+/// table) — hold the pair through `Driver` (lifetime as structure)
+/// unless you can uphold the placement / no-reassign / teardown-order
+/// rules yourself (see `Compile.CompileResult`). Owns its arena (cache +
+/// entry buffer + expr scratch); SJON deinit convention.
 pub const Evaluator = struct {
     arena: std.heap.ArenaAllocator,
     table: *const TrackTable,
@@ -146,10 +146,10 @@ pub const Evaluator = struct {
     expr_failures: u64 = 0,
 
     /// Build the evaluator over a SUCCESSFUL compile. Borrows `result`
-    /// whole (table + tree + schema) — `result` must already sit in its
-    /// final memory location, never be reassigned while the evaluator
-    /// lives, and outlive it (see the struct doc). All allocation
-    /// happens here; the frame path never touches the gpa.
+    /// whole (table + tree + schema) — `Driver.init` is the checked way
+    /// to call this; a raw call takes on the placement / no-reassign /
+    /// teardown-order obligations itself (see the struct doc). All
+    /// allocation happens here; the frame path never touches the gpa.
     pub fn init(gpa: std.mem.Allocator, result: *const Compile.CompileResult) error{OutOfMemory}!Evaluator {
         std.debug.assert(result.table != null); // compile succeeded
         const table = &result.table.?;

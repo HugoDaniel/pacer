@@ -50,4 +50,4 @@ Two plans are release-relevant, the rest are quality:
 - [x] 06 emit-value-switch
 - [x] 05 builder-rows
 - [x] 04 pattern-dry-run-budget
-- [ ] 03 driver-pinning
+- [x] 03 driver-pinning

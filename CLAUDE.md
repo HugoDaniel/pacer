@@ -111,11 +111,14 @@ with a corpus regen and a diff review:
 ## The CompileResult borrow-whole rule
 
 `Eval.Evaluator` borrows a `CompileResult` WHOLE — table + validated tree +
-schema (expr tracks re-read the tree every frame). So: build the evaluator from a
-STORED (not temporary) result; tear the evaluator down BEFORE the result; never
-reassign a live result. Both rules are confined to `wasm_entry.zig`'s
-`unload` / `drv_load` and the corpus runner. `drv_load` validates its arguments
-BEFORE `unload`, so a bad call is a no-op (the live table survives).
+schema (expr tracks re-read the tree every frame). The rule is structure, not
+discipline: `Driver` (`src/Driver.zig`) owns the pair — in-place `init` (the
+pointer receiver IS the placement contract), evaluator armed iff the compile
+was clean, `deinit` encoding the teardown order once. Hold the pair through
+`Driver`; construct a raw pair only where you can uphold placement /
+no-reassign / teardown-order yourself (Eval's own tests do, on never-moved
+stack locals). `drv_load` validates its arguments BEFORE `unload`, so a bad
+call is a no-op (the live table survives).
 
 ## The golden corpus
 

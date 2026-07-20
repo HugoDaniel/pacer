@@ -76,6 +76,7 @@ const std = @import("std");
 const sjon = @import("sjon");
 const Abi = @import("Abi.zig");
 const Compile = @import("Compile.zig");
+const Driver = @import("Driver.zig");
 const Easing = @import("Easing.zig");
 const Eval = @import("Eval.zig");
 const Writes = @import("Writes.zig");
@@ -181,11 +182,14 @@ fn runCase(
     const harness_src = readCaseFile(a, io, out, root, name, "times.sjon") orelse return .failed;
     const harness = (try parseHarness(a, gpa, out, name, harness_src)) orelse return .failed;
 
-    var result = try Compile.compile(gpa, doc, harness.targets);
-    defer result.deinit();
+    // The Driver owns the result/evaluator pair and its teardown order —
+    // the borrow-whole rule as structure, not call-site discipline.
+    var driver: Driver = undefined;
+    try driver.init(gpa, doc, harness.targets);
+    defer driver.deinit();
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    if (!try renderCase(a, out, name, &aw.writer, &result, harness, doc)) return .failed;
+    if (!try renderCase(a, out, name, &aw.writer, &driver, harness, doc)) return .failed;
     const actual = aw.toOwnedSlice() catch return error.OutOfMemory;
 
     const expected_path = try std.fs.path.join(a, &.{ root, name, "expected.sjon" });
@@ -480,10 +484,11 @@ fn renderCase(
     out: *Io.Writer,
     name: []const u8,
     w: *Io.Writer,
-    result: *Compile.CompileResult,
+    driver: *Driver,
     harness: Harness,
     doc: []const u8,
 ) !bool {
+    const result = &driver.result;
     w.writeAll(GENERATED_HEADER) catch return error.OutOfMemory;
     w.print("(load :ok {})\n", .{result.ok()}) catch return error.OutOfMemory;
 
@@ -491,11 +496,12 @@ fn renderCase(
     if (!result.ok()) return true;
 
     // The meta block reflects the DOCUMENT — render it before any
-    // set-bpm/set-control directive mutates evaluator/transport state.
+    // set-bpm/set-control directive mutates evaluator/transport state
+    // (the armed evaluator holds no transport state until a directive
+    // touches it, so arming at load kept this ordering intact).
     try renderMeta(a, w, result, doc);
 
-    var ev = try Eval.Evaluator.init(gpaOf(result), result);
-    defer ev.deinit();
+    const ev = &driver.evaluator.?;
 
     for (harness.steps) |step| switch (step) {
         .eval => |bits| {
@@ -768,12 +774,6 @@ fn controlTypeName(t: u8) []const u8 {
         // land here before it can reach a golden (like track sources).
         else => unreachable,
     };
-}
-
-/// The evaluator wants the gpa the result was compiled with; the
-/// `Validated` kept it for exactly this kind of follow-up allocation.
-fn gpaOf(result: *const Compile.CompileResult) Allocator {
-    return result.validated.gpa;
 }
 
 /// Render `(diag …)` lines from the `'PACD'` blob — the same encode

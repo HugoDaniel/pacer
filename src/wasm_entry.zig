@@ -61,6 +61,7 @@ const std = @import("std");
 const sjon = @import("sjon");
 const Abi = @import("Abi.zig");
 const Compile = @import("Compile.zig");
+const Driver = @import("Driver.zig");
 const Eval = @import("Eval.zig");
 const TrackTable = @import("TrackTable.zig");
 const Writes = @import("Writes.zig");
@@ -112,12 +113,14 @@ var writes_buffer: [WRITES_CAP]u8 align(4) = undefined;
 /// entirely inside `drv_load`.
 var targets_scratch: [Abi.MAX_TARGETS]Compile.Target = undefined;
 
-/// Loaded state. `evaluator` borrows `result.?` whole (table + tree +
-/// schema — expr tracks re-read the tree each frame), so teardown order
-/// (evaluator first) and the no-reassign-while-live rule are
-/// load-bearing — both are confined to `unload`/`drv_load`.
-var result: ?Compile.CompileResult = null;
-var evaluator: ?Eval.Evaluator = null;
+/// Loaded state. The `Driver` owns the result/evaluator pair and its
+/// borrow-whole lifetime (in-place init, ordered teardown — see
+/// `Driver.zig`); `loaded` guards the undefined storage. Outside
+/// `drv_load`, `loaded` implies a clean score: the diagnostics path
+/// tears the driver down before returning, so `driver.evaluator` is
+/// always armed while `loaded` is true.
+var driver: Driver = undefined;
+var loaded: bool = false;
 
 const LoadStatus = enum(u32) { ok = 0, diagnostics = 1, bad_call = 2, oom = 3 };
 
@@ -185,45 +188,48 @@ export fn drv_load(doc_len: u32, targets_len: u32) u32 {
     doc_buffer[doc_len] = 0;
     const source: [:0]const u8 = doc_buffer[0..doc_len :0];
 
-    var r = Compile.compile(gpa, source, targets) catch
+    driver.init(gpa, source, targets) catch
         return @intFromEnum(LoadStatus.oom);
+    loaded = true;
     // Encode diagnostics before any teardown — 'PACD' copies messages
     // into the static zone, so the host can read them after deinit.
-    diags_len = @intCast(Abi.encodeDiags(&r, &diags_buffer).len);
+    diags_len = @intCast(Abi.encodeDiags(&driver.result, &diags_buffer).len);
 
-    if (!r.ok()) {
-        r.deinit();
+    if (!driver.result.ok()) {
+        unload();
         return @intFromEnum(LoadStatus.diagnostics);
     }
-    result = r;
-    evaluator = Eval.Evaluator.init(gpa, &result.?) catch {
-        unload();
-        return @intFromEnum(LoadStatus.oom);
-    };
     // Meta never silently truncates; a blob too big for its zone
     // (pathological scores only — see the comptime bound) degrades to
     // an absent blob, not a wrong one.
-    meta_len = if (Abi.encodeMeta(&result.?, &meta_buffer)) |m| @intCast(m.len) else |_| 0;
+    meta_len = if (Abi.encodeMeta(&driver.result, &meta_buffer)) |m| @intCast(m.len) else |_| 0;
     return @intFromEnum(LoadStatus.ok);
 }
 
+/// The armed evaluator, or null when nothing is loaded (see the
+/// `loaded` invariant: loaded ⇒ clean score ⇒ evaluator armed).
+fn liveEvaluator() ?*Eval.Evaluator {
+    if (!loaded) return null;
+    return &driver.evaluator.?;
+}
+
 export fn drv_setBpm(bpm: f64) u32 {
-    const r = if (result) |*r| r else return 1;
-    return if (r.setBpm(bpm)) 0 else 1;
+    if (!loaded) return 1;
+    return if (driver.result.setBpm(bpm)) 0 else 1;
 }
 
 export fn drv_setControl(index: u32, x: f32, y: f32, z: f32, w: f32) u32 {
-    const ev = if (evaluator) |*e| e else return 1;
+    const ev = liveEvaluator() orelse return 1;
     return if (ev.setControl(index, .{ x, y, z, w })) 0 else 1;
 }
 
 export fn drv_clearControl(index: u32) u32 {
-    const ev = if (evaluator) |*e| e else return 1;
+    const ev = liveEvaluator() orelse return 1;
     return if (ev.clearControl(index)) 0 else 1;
 }
 
 export fn drv_registerControl(target_id: u32, registry: u32, ncomp: u32) u32 {
-    const ev = if (evaluator) |*e| e else return NO_SLOT;
+    const ev = liveEvaluator() orelse return NO_SLOT;
     // Range-check before narrowing — host-glue input must not trap.
     if (target_id >= Eval.NO_TARGET or registry > 0xff or ncomp > 0xff) return NO_SLOT;
     const slot = ev.registerControl(@intCast(target_id), @intCast(registry), @intCast(ncomp)) orelse
@@ -232,7 +238,7 @@ export fn drv_registerControl(target_id: u32, registry: u32, ncomp: u32) u32 {
 }
 
 export fn drv_eval(time_s: f64) u32 {
-    const ev = if (evaluator) |*e| e else return 0;
+    const ev = liveEvaluator() orelse return 0;
     const entries = ev.evalSeconds(time_s) catch return 0;
     const out = Writes.encode(entries, &writes_buffer) catch unreachable; // WRITES_CAP = encodedLen(Eval.MAX_FRAME_ENTRIES)
     return @intCast(out.len);
@@ -240,7 +246,7 @@ export fn drv_eval(time_s: f64) u32 {
 
 /// Tick-domain twin (tests, corpus): total once loaded and in range.
 export fn drv_evalTicks(tick: i64) u32 {
-    const ev = if (evaluator) |*e| e else return 0;
+    const ev = liveEvaluator() orelse return 0;
     // The header's contract: out-of-range clocks return 0, mirroring the
     // seconds path. Gating here also upholds `evalTicks`'s precondition
     // (|t| ≤ MAX_TICK keeps its trigger/window integer math in i64).
@@ -257,18 +263,14 @@ export fn drv_evalTicks(tick: i64) u32 {
 /// evaluator (every load) resets it. The low 32 bits of the u64 counter
 /// — a probe, not a semantic counter.
 export fn drv_exprFailures() u32 {
-    const ev = if (evaluator) |*e| e else return 0;
+    const ev = liveEvaluator() orelse return 0;
     return @truncate(ev.expr_failures);
 }
 
 fn unload() void {
     meta_len = 0;
-    if (evaluator) |*ev| {
-        ev.deinit();
-        evaluator = null;
-    }
-    if (result) |*r| {
-        r.deinit();
-        result = null;
+    if (loaded) {
+        driver.deinit();
+        loaded = false;
     }
 }

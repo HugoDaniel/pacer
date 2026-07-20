@@ -244,9 +244,13 @@ pub const Diagnostic = struct {
 /// The validated tree (and its schema aggregate) ride along because
 /// expr tracks evaluate by node index against them every frame — the
 /// table alone is self-contained only for keyframe-only scores.
-/// `Eval.Evaluator` therefore borrows the WHOLE result, which must sit
-/// in its final memory location first (the struct is moved by value;
-/// interior pointers taken before the move would dangle).
+/// `Eval.Evaluator` therefore borrows the WHOLE result. Hold the pair
+/// through `Driver` (which encodes placement, no-reassign, and teardown
+/// order as structure) unless you can uphold those three rules yourself:
+/// the result must sit in its final memory location before the borrow
+/// (the struct is moved by value; interior pointers taken before the
+/// move would dangle), never be reassigned while borrowed, and outlive
+/// the evaluator.
 pub const CompileResult = struct {
     validated: Validated,
     arena: std.heap.ArenaAllocator,

@@ -88,4 +88,26 @@ reload/control-state cases — these exercise exactly the lifecycle that moved).
 
 ## Progress log
 
-(empty)
+- **2026-07-20 — Phase 1 complete (Option B, as recommended).** New
+  `src/Driver.zig` (file-as-struct, re-exported from root): in-place `init`
+  compiles into `self.result` then arms `self.evaluator` iff clean; a
+  defective score is NOT an error (evaluator null, diagnostics readable);
+  `deinit` encodes evaluator-first teardown; `result`/`evaluator` stay pub, no
+  shims. Reds: clean-arms-and-evals, defective-leaves-null, reload-in-place —
+  all under `std.testing.allocator` (order bugs = leaks). One red caught my
+  own test arithmetic (2 s at 120 bpm is beat 4, not the midpoint), fixed to
+  1.0 s. `corpus_runner` migrated (one Driver replaces the result local +
+  renderCase's evaluator; `gpaOf` deleted — `init`'s gpa is the same one).
+  Gate: `zig build test`, `zig build corpus` 26/26 byte-identical.
+- **2026-07-20 — Phase 2 complete.** `wasm_entry` migrated: the optional pair
+  became `var driver: Driver = undefined; var loaded: bool = false;` with a
+  `liveEvaluator()` helper (invariant: outside `drv_load`, loaded ⇒ clean ⇒
+  armed). Validate-before-teardown preserved verbatim; the diagnostics path
+  still encodes `'PACD'` then tears down with `diags_len` surviving (unload
+  never touches it). Behavior note: the evaluator now arms before diags
+  encoding (inside `Driver.init`) — encodeDiags doesn't read it, corpus
+  byte-identical. The four prose statements now point at the type
+  (`Compile.CompileResult` doc, `Eval.Evaluator` struct + `init` docs,
+  CLAUDE.md). Gate: `zig build verify` (26 cases), npm gate (82), and
+  `driver.test.js`'s 38 reload/control-state cases — the lifecycle that
+  moved — all green.

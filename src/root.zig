@@ -38,6 +38,9 @@ pub const Easing = @import("Easing.zig");
 pub const TrackTable = @import("TrackTable.zig");
 /// Per-frame evaluator: seconds → ticks → packed write entries.
 pub const Eval = @import("Eval.zig");
+/// The compile-result + evaluator pair with the borrow-whole lifetime
+/// encoded as structure (in-place init, ordered teardown).
+pub const Driver = @import("Driver.zig");
 /// Expr-track evaluation shared by `Compile` (t=0 dry-run) and `Eval`
 /// (frame path): the time env contract + result coercion.
 pub const ExprTrack = @import("ExprTrack.zig");
@@ -56,6 +59,7 @@ test {
     _ = Easing;
     _ = TrackTable;
     _ = Eval;
+    _ = Driver;
     _ = ExprTrack;
     _ = PatternTrack;
     _ = Writes;
