@@ -1,0 +1,25 @@
+; meter-odd: the tick grid off the common path — 7/8 meter at the
+; fractional tempo 128.5. PPC = 720720 divides 7 and 8 exactly, so
+; every beat stays an exact integer tick even here; the fractional bpm
+; moves only the seconds↔ticks seam (one mul+floor). `arc` runs a full
+; in-out-cubic rise and an out-expo fall across the two-bar loop — b
+; and bar position units mix freely. `mark`'s second key is authored in
+; SECONDS (3 s = 6.425 beats, a non-grid tick through the documented
+; seam) and still lands bit-exactly on its authored f32 (structural
+; landing: the eval-time 3.0 s clock converts through the SAME mul+
+; floor and selects the key's own segment edge). `lfo` is the classic
+; unipolar cosine off `phase`, sweeping 0→1→0 once per 7-beat bar.
+; :emit [bar phase] rides the odd grid. 128.5 bpm: 1 beat ≈ 0.46693 s,
+; 1 bar (7 beats) ≈ 3.26848 s, the 2bar loop ≈ 6.53696 s.
+(transport :bpm 128.5 :meter [7 8] :dur 2bar :end loop :emit [bar phase])
+
+(track :target arc
+  (key :at 0b :value 0.0)
+  (key :at 1bar :value 1.0 :ease in-out-cubic)
+  (key :at 2bar :value 0.0 :ease out-expo))
+
+(track :target mark
+  (key :at 0b :value 0.2)
+  (key :at 3s :value 0.8))
+
+(track :target lfo :expr (* 0.5 (- 1 (cos (* (tau) phase)))))

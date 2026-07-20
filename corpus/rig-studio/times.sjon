@@ -1,0 +1,21 @@
+; rig-studio harness. Host join ids 0..6 in flat order; the score's
+; compose-declared `lfo` appends as id 7 under registry 1 (declared
+; names never cross the wire — both runners re-derive the join). `beat`
+; (id 0) collects three writes per frame: emit, then its keyed track,
+; then depth's pin — the global order in one target.
+(target beat :registry 0)           ; id 0 — emit lane + keyed track + depth's pin
+(target phase :registry 0)          ; id 1 — emit-only lane
+(target tint :registry 0 :ncomp 3)  ; id 2 — keyed vec3, smoothstep
+(target wob :registry 0)            ; id 3 — expr: control × sin kernel
+(target steps :registry 0)          ; id 4 — pattern fastcat quarters
+(target fade :registry 0)           ; id 5 — scened keys (scene-relative)
+(target pulse :registry 0 :ncomp 4) ; id 6 — scened trigger, all four lanes
+
+(times
+  "0000000000000000" ; 0.0 s — beat 0: scene closed (fade/pulse omitted), pattern slot 0
+  "4004000000000000" ; 2.5 s — beat 5: scene-beat 1 — pulse exact-tick, fade 1/8
+  "4006000000000000" ; 2.75 s — beat 5.5: pulse mid-phase, pattern slot 1
+  "400A000000000000" ; 3.25 s — beat 6.5: scene-beat 2.5, tint mid-smoothstep
+  "401A000000000000" ; 6.5 s — beat 13: window [4b,12b) passed — scene closed again
+  "4022000000000000" ; 9.0 s — wraps to 1.0 s (beat 2): a pre-scene frame replayed
+)

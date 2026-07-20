@@ -1,0 +1,23 @@
+; tempo-live-guard: the mapped transport's live-directive and clock
+; guards. A score with a (tempo …) map REFUSES drv_setBpm — tempo truth
+; is score text (the native pin, Compile's "setBpm refuses a mapped
+; score", crossing the wire here as :ok false with the 1.0 s evals on
+; either side byte-identical: the map stood still). The clock edges pin
+; the seconds-domain wrap for MAPPED loops on inputs hold-edges only
+; pinned for constant scores: a negative clock @mod-wraps POSITIVELY
+; into the cycle — -0.5 s lands at 2.5 s, inside the LATE 240-bpm
+; segment (a tick-domain wrap would replay it at the wrong tempo) —
+; -0.0 is tick 0 exactly as +0.0, and non-finite clocks stay
+; out-of-range through the map. A huge FINITE clock (1e300 s) is the
+; sharp edge: the seconds-domain @mod runs BEFORE any conversion, so a
+; mapped loop wraps it into range — where a constant score's
+; tick-domain path overflows the ceiling (hold-edges pins that side).
+; The 1e300 float happens to be an exact multiple of 3.0, so its wrap
+; is exactly 0.0 s. 120→240 at beat 4: the 8b loop is 2.0 s + 1.0 s =
+; 3.0 s of wall-clock.
+(transport :bpm 120 :meter [4 4] :dur 8b :end loop)
+(tempo :at 4b :bpm 240)
+
+(track :target ramp
+  (key :at 0b :value 0.0)
+  (key :at 8b :value 1.0))

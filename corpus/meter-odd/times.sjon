@@ -1,0 +1,15 @@
+; meter-odd harness. Three tracks + two emitted lanes on the 7/8 grid
+; at 128.5 bpm (1 beat ≈ 0.46693 s, the 2bar loop ≈ 6.53696 s).
+(target bar :registry 0)   ; id 0 — emitted lane (fractional bars)
+(target phase :registry 0) ; id 1 — emitted lane (0..1 per 7-beat bar)
+(target arc :registry 0)   ; id 2 — keyed rise/fall, b + bar units mixed
+(target mark :registry 0)  ; id 3 — s-unit key through the mul+floor seam
+(target lfo :registry 0)   ; id 4 — expr: unipolar cosine off phase
+
+(times
+  "0000000000000000" ; 0.0 s — everything at its floor
+  "3FF0000000000000" ; 1.0 s — 2.1417 beats into bar 0, arc mid-rise
+  "4008000000000000" ; 3.0 s — mark lands 0.8 EXACTLY (structural landing)
+  "400C000000000000" ; 3.5 s — into bar 1: arc on the out-expo fall
+  "401C000000000000" ; 7.0 s — wraps past the 6.53696 s loop edge
+)

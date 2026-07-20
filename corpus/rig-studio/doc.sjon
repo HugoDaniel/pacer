@@ -1,0 +1,37 @@
+; rig-studio: the common-use integration score — every write source in
+; one frame, pinning the GLOBAL write order across the wire: emit lanes
+; land first, then tracks in document order (scened tracks included),
+; then controls. `beat` is driven three ways — the emitted lane, an
+; explicit keyed track, and a control pin — so one frame carries three
+; `beat` writes in exactly that order (in-order consumers see the pin
+; win). The scene `verse` opens [4b, 12b): its fade ramp resolves keys
+; scene-relative and its trigger folds the event grid to the window
+; start — the first scened-trigger pin across the wasm boundary. `lfo`
+; is compose-declared (:registry 1) on top of a NON-empty host join, so
+; the declared-only append path (host ids 0..6 preserved, lfo = id 7)
+; is pinned too. 120 bpm 4/4: 1 beat = 0.5 s, the 4bar loop = 8.0 s.
+(transport :bpm 120 :meter [4 4] :dur 4bar :end loop :emit [beat phase])
+
+(target :name lfo :arity 1 :registry 1)
+
+(control :id depth :target beat :min 0 :max 1 :value 0.25)
+
+(track :target beat
+  (key :at 0b :value 10.0)
+  (key :at 16b :value 20.0))
+
+(track :target tint
+  (key :at 0b :value [0.0 0.5 1.0])
+  (key :at 2bar :value [1.0 0.5 0.0] :ease smoothstep))
+
+(track :target wob :expr (* depth (sin (* (tau) phase))))
+
+(track :target steps :pattern [0.0 0.25 0.5 0.75])
+
+(track :target lfo :expr (sin (* (tau) (* 0.25 beat))))
+
+(scene :name verse :at 1bar :dur 2bar
+  (track :target fade
+    (key :at 0b :value 0.0)
+    (key :at 8b :value 1.0))
+  (trigger :target pulse :every 1b))

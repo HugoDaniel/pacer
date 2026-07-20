@@ -1,0 +1,23 @@
+; tempo-live-guard harness. One keyed ramp (0→1 over the 8b mapped
+; loop). The set-bpm directive must echo :ok false — a mapped score
+; refuses the live nudge — and the 1.0 s evals before and after it are
+; byte-identical.
+(target ramp :registry 0)   ; id 0 — keyed ramp over the mapped loop
+
+(times
+  "0000000000000000" ; 0.0 s — ramp 0
+  "3FF0000000000000" ; 1.0 s — beat 2 (segment 0, 120 bpm): ramp 0.25
+  "BFE0000000000000" ; -0.5 s — @mod-wraps to 2.5 s = beat 6 (segment 1): ramp 0.75
+  "8000000000000000" ; -0.0 s — tick 0, exactly as +0.0
+)
+
+(set-bpm :bpm "4056800000000000")  ; 90 bpm — REFUSED: tempo truth is score text
+
+(times
+  "3FF0000000000000" ; 1.0 s again — byte-identical with the pre-directive eval
+  "7FF0000000000000" ; +inf — out of range through the map too
+  "7FF8000000000000" ; NaN — out of range
+  "7E37E43C8800759C" ; 1e300 s — finite, so the seconds-domain @mod wraps it
+                     ; IN range (to exactly 0.0 s: 1e300 is a multiple of 3);
+                     ; only the constant tick-domain path overflows on this
+)
