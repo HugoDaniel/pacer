@@ -250,10 +250,12 @@ export fn drv_evalTicks(tick: i64) u32 {
     return @intCast(out.len);
 }
 
-/// Debugging probe: lifetime count of expr-track evaluations omitted for
-/// a runtime failure since the current load. 0 when nothing is loaded;
-/// a fresh evaluator (every load) resets it. The low 32 bits of the
-/// u64 counter — a probe, not a semantic counter.
+/// Debugging probe: lifetime count of frames a track's write was omitted
+/// by a runtime failure — expr AND pattern tracks both bump it (the
+/// counter outgrew the wire-frozen export name; `Eval.expr_failures`'s
+/// doc is the description of record). 0 when nothing is loaded; a fresh
+/// evaluator (every load) resets it. The low 32 bits of the u64 counter
+/// — a probe, not a semantic counter.
 export fn drv_exprFailures() u32 {
     const ev = if (evaluator) |*e| e else return 0;
     return @truncate(ev.expr_failures);

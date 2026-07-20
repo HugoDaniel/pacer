@@ -202,9 +202,9 @@ test "fuzz Abi.decodeTargets: null or in-blob, well-formed targets" {
 // ---------------------------------------------------------------------------
 // 3. Writes.decode — null, or encodedLen(count) fits the buffer.
 //
-// decode `@alignCast`s the payload to `Entry` (align 4), so the source
-// must be 4-aligned — feed a 4-aligned buffer, decode's documented
-// caller contract.
+// decode's source must be 4-aligned — a signature fact
+// (`[]align(4) const u8`), so the aligned buffer here is checked by the
+// compiler, not by discipline. The BYTES stay arbitrary.
 // ---------------------------------------------------------------------------
 
 fn fuzzWritesDecode(_: void, smith: *Smith) anyerror!void {

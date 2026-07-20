@@ -61,4 +61,16 @@ inside tsc's checked surface).
 
 ## Progress log
 
-(empty)
+- **2026-07-20 — Phase 1 complete, all four items.** (a) Ordinals removed at
+  `TrackTable.zig` ("a trigger row kind"), `Compile.zig` build comment, the
+  `buildTriggers` doc, and one test comment; the "fourth track" in the
+  expr-shape test is a literal score position and stays. (b) Both probe docs
+  widened to expr AND pattern omissions; `wasm_entry`'s doc names
+  `Eval.expr_failures` as the description of record. (c)
+  `decode(src: []align(4) const u8)` — the `@alignCast` obligation is now a
+  signature fact; module tests aligned their copies, the fuzz harness already
+  fed an aligned buffer (comment now says the compiler checks it); the doc
+  records why null-on-misalignment was rejected (address-dependent results).
+  (d) `Evaluator.push(&n, entry)` folds the seven hand-rolled appends; write
+  order untouched. Gates: `zig build verify` (corpus 25/25 byte-identical),
+  `zig build fuzz`, npm gate (81 pass).

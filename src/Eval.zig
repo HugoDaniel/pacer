@@ -310,13 +310,12 @@ pub const Evaluator = struct {
         // track (`ExprTrack.coerce`), so the two are bit-identical.
         for (table.transport.emit) |lane| {
             const v: f32 = @floatCast(ExprTrack.emitValue(&table.transport, t, lane.name));
-            self.entries[n] = .{
+            self.push(&n, .{
                 .target_id = lane.target_id,
                 .flags = lane.registry,
                 .ncomp = 1,
                 .value = .{ v, 0, 0, 0 },
-            };
-            n += 1;
+            });
         }
         for (table.tracks, 0..) |*track, i| {
             // Scene window gate: a scened track writes only while the
@@ -335,31 +334,22 @@ pub const Evaluator = struct {
                 if (t < s.start_tick or t >= s.start_tick + s.dur_ticks) continue;
             }
             switch (track.source) {
-                .keys => {
-                    self.entries[n] = evalKeyTrack(table, track, t, &self.seg_cache[i]);
-                    n += 1;
-                },
+                .keys => self.push(&n, evalKeyTrack(table, track, t, &self.seg_cache[i])),
                 .expr => |node| {
-                    if (self.evalExprTrack(track, node, t, scene)) |entry| {
-                        self.entries[n] = entry;
-                        n += 1;
-                    }
+                    if (self.evalExprTrack(track, node, t, scene)) |entry|
+                        self.push(&n, entry);
                 },
                 .trigger => |*sched| {
                     // Resolve the lanes for the current event; before the
                     // first event the write is OMITTED (like an expr-NaN /
                     // an out-of-window scene), keeping the buffer a pure
                     // function of time.
-                    if (evalTrigger(&table.transport.map, track, sched, t, &self.seg_cache[i])) |entry| {
-                        self.entries[n] = entry;
-                        n += 1;
-                    }
+                    if (evalTrigger(&table.transport.map, track, sched, t, &self.seg_cache[i])) |entry|
+                        self.push(&n, entry);
                 },
                 .pattern => |node| {
-                    if (self.evalPatternTrack(track, node, t, scene)) |entry| {
-                        self.entries[n] = entry;
-                        n += 1;
-                    }
+                    if (self.evalPatternTrack(track, node, t, scene)) |entry|
+                        self.push(&n, entry);
                 },
             }
         }
@@ -369,26 +359,33 @@ pub const Evaluator = struct {
         // dynamic slots only while held.
         for (self.slots[0..table.controls.len], table.controls) |slot, ctl| {
             if (slot.target_id == NO_TARGET) continue;
-            self.entries[n] = .{
+            self.push(&n, .{
                 .target_id = slot.target_id,
                 .flags = slot.registry,
                 .ncomp = slot.ncomp,
                 .value = slot.live orelse ctl.value,
-            };
-            n += 1;
+            });
         }
         for (self.slots[table.controls.len..][0..self.dyn_controls]) |slot| {
             const live = slot.live orelse continue;
-            self.entries[n] = .{
+            self.push(&n, .{
                 .target_id = slot.target_id,
                 .flags = slot.registry,
                 .ncomp = slot.ncomp,
                 .value = live,
-            };
-            n += 1;
+            });
         }
         std.debug.assert(n <= self.entries.len);
         return self.entries[0..n];
+    }
+
+    /// Append one entry to this frame's buffer — the only way `evalTicks`
+    /// writes `entries`. Write ORDER is the callers' contract (emit →
+    /// tracks → controls; in-order consumers depend on it) — this helper
+    /// only owns the append-and-advance.
+    fn push(self: *Evaluator, n: *usize, entry: Writes.Entry) void {
+        self.entries[n.*] = entry;
+        n.* += 1;
     }
 
     /// One `.expr` track at wrapped tick `t`, or null when the write is

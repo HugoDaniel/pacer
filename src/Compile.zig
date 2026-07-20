@@ -450,8 +450,8 @@ const Builder = struct {
         var scenes: std.ArrayList(TrackTable.Scene) = .empty;
         try self.buildScenes(ta, &transport, &scenes, &tracks, &keys, &track_spans, &key_spans);
 
-        // Triggers: build each top-level (trigger …) into the table as a
-        // third row kind. Scened triggers were already walked by
+        // Triggers: build each top-level (trigger …) into the table as
+        // trigger rows. Scened triggers were already walked by
         // buildScenes (scene start folded into their schedule). A defect
         // emits and nulls the table via the diag gate below.
         try self.buildTriggers(ta, &transport, &tracks, &track_spans);
@@ -963,7 +963,7 @@ const Builder = struct {
     /// on an event schedule that is EITHER periodic (`:every`, phased by
     /// optional `:offset`) XOR an explicit ascending `:at` list; exactly
     /// one source is required. It joins its target like a track and lands
-    /// as a third `Track` row (a `Source.trigger`, no keys), counted
+    /// as a trigger `Track` row (a `Source.trigger`, no keys), counted
     /// against `MAX_TRACKS`. Scened triggers are walked by `buildScenes`
     /// (scene start folded in); this pass handles the top-level forest.
     fn buildTriggers(
@@ -2637,8 +2637,8 @@ test "compile triggers: periodic schedule builds a table row" {
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
     const table = r.table.?;
-    // A trigger is a third table row, joined against the registry like a
-    // track, but with no keys (its lanes are eval-derived).
+    // A trigger is a table row of its own kind, joined against the
+    // registry like a track, but with no keys (its lanes are eval-derived).
     try t.expectEqual(@as(usize, 1), table.tracks.len);
     try t.expectEqual(@as(usize, 0), table.keys.len);
     const tr = table.tracks[0];

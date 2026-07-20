@@ -468,9 +468,12 @@ export class Pacer {
   }
 
   /**
-   * Lifetime count of expr-track evaluations omitted for a runtime
-   * failure (non-finite result) since the last (re)load — a debugging
-   * probe, not semantics. 0 while nothing is loaded; resets every reload.
+   * Lifetime count of frames a track's write was omitted by a runtime
+   * failure — an expr that raised or yielded the wrong shape, or a
+   * pattern whose query refused or dropped its hap — since the last
+   * (re)load (the counter predates pattern tracks; the wire-frozen name
+   * stays). A debugging probe, not semantics. 0 while nothing is loaded;
+   * resets every reload.
    *
    * @returns {number}
    */

@@ -71,8 +71,12 @@ pub fn encode(entries: []const Entry, dest: []u8) Error![]u8 {
 
 /// Decode a buffer produced by `encode` (test/host-side helper; the JS
 /// host reads the same layout with one DataView pass). Returns the
-/// entry slice aliasing `src`.
-pub fn decode(src: []const u8) ?[]const Entry {
+/// entry slice aliasing `src`. The 4-alignment lives in the signature —
+/// a compile-time fact at every call site — rather than as a
+/// null-on-misalignment: returning null there would make the result
+/// depend on the buffer's ADDRESS (same bytes, different answer), an
+/// impurity worse than the requirement.
+pub fn decode(src: []align(4) const u8) ?[]const Entry {
     if (src.len < HEADER_LEN) return null;
     if (std.mem.readInt(u32, src[0..4], .little) != MAGIC) return null;
     if (std.mem.readInt(u32, src[4..8], .little) != VERSION) return null;
@@ -92,7 +96,7 @@ test "round-trip: encode then decode preserves entries byte-exactly" {
     var buf: [encodedLen(2)]u8 align(4) = undefined;
     const out = try encode(&entries, &buf);
     try t_.expectEqual(encodedLen(2), out.len);
-    const back = decode(out).?;
+    const back = decode(buf[0..out.len]).?;
     try t_.expectEqualSlices(Entry, &entries, back);
 }
 
@@ -101,11 +105,11 @@ test "decode rejects bad magic, version, and truncation" {
     const entries = [_]Entry{.{ .target_id = 1, .flags = 0, .ncomp = 1, .value = .{ 1, 0, 0, 0 } }};
     _ = try encode(&entries, &buf);
 
-    var bad_magic = buf;
+    var bad_magic: [encodedLen(1)]u8 align(4) = buf;
     bad_magic[0] ^= 0xff;
     try t_.expectEqual(@as(?[]const Entry, null), decode(&bad_magic));
 
-    var bad_version = buf;
+    var bad_version: [encodedLen(1)]u8 align(4) = buf;
     bad_version[4] = 99;
     try t_.expectEqual(@as(?[]const Entry, null), decode(&bad_version));
 

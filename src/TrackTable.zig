@@ -131,7 +131,7 @@ pub const Trigger = union(enum) {
 
 /// A track's value source — `(key …)` children XOR `:expr` XOR
 /// `:pattern` (enforced at compile with `track_source_conflict`), or a
-/// `(trigger …)` schedule (a fourth row kind reusing this struct; its
+/// `(trigger …)` schedule (a trigger row kind reusing this struct; its
 /// lanes are computed at eval).
 pub const Source = union(enum) {
     /// Contiguous run in `keys`: `keys[start..][0..len]`, len ≥ 1,

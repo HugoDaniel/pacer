@@ -46,7 +46,7 @@ Two plans are release-relevant, the rest are quality:
 
 - [x] 01 writes-cap
 - [x] 02 meta-cap-pin
-- [ ] 07 small-accretions
+- [x] 07 small-accretions
 - [ ] 06 emit-value-switch
 - [ ] 05 builder-rows
 - [ ] 04 pattern-dry-run-budget
