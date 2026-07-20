@@ -62,3 +62,9 @@ Post-1.0 follow-on: the **demo-stack wave** lives in [`it/`](it/README.md)
 tempo-map transport, the engine-agnostic audio-host contract, exact tracker
 import, audio-bus v2. It inherits this file's execution discipline; its own
 strategy board is `it/00-strategy.md`.
+
+Quality follow-on: the **elegance wave** lives in [`elegance/`](elegance/README.md)
+(created 2026-07-20, from the elegance/purity review) — seven plans closing the
+review's findings, two of them (writes-cap, meta-cap-pin) release-relevant before
+the 0.2.0 tag. It inherits this file's execution discipline; its own ordering and
+status board are in `elegance/README.md`.
