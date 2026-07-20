@@ -750,6 +750,47 @@ test "tempo-map: :emit [bpm] steps at the boundary and matches (track :expr bpm)
     try t_.expectEqual(after[0].value[0], after[1].value[0]);
 }
 
+test "emit lanes: every EmitName matches its :expr twin bit-exactly (incl. map boundary, negative tick)" {
+    const twin_targets = [_]Compile.Target{
+        .{ .name = "beat", .ncomp = 1 },
+        .{ .name = "bar", .ncomp = 1 },
+        .{ .name = "phase", .ncomp = 1 },
+        .{ .name = "bpm", .ncomp = 1 },
+        .{ .name = "t", .ncomp = 1 },
+        .{ .name = "x-beat", .ncomp = 1 },
+        .{ .name = "x-bar", .ncomp = 1 },
+        .{ .name = "x-phase", .ncomp = 1 },
+        .{ .name = "x-bpm", .ncomp = 1 },
+        .{ .name = "x-t", .ncomp = 1 },
+    };
+    var r = try compileScoreWith(
+        \\(transport :bpm 120 :meter [4 4] :emit [beat bar phase bpm t])
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target x-beat :expr beat)
+        \\(track :target x-bar :expr bar)
+        \\(track :target x-phase :expr phase)
+        \\(track :target x-bpm :expr bpm)
+        \\(track :target x-t :expr t)
+    , &twin_targets);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    // Frame order: the five emit lanes (declaration order) then the five
+    // expr twins (document order) — twin i of lane i. Sweep the origin,
+    // both sides of the 4b tempo boundary, an off-grid late tick, and a
+    // negative tick; every lane must equal its twin BIT-exactly (the
+    // shared-formula claim `emitValue` makes).
+    const ticks = [_]Tick{ 0, 4 * 720720 - 1, 4 * 720720, 7 * 720720 + 123, -720720 };
+    for (ticks) |tk| {
+        const entries = ev.evalTicks(tk);
+        try t_.expectEqual(@as(usize, 10), entries.len);
+        for (0..5) |i| {
+            try t_.expectEqual(entries[i].value[0], entries[i + 5].value[0]);
+        }
+    }
+}
+
 test "tempo-map: a trigger's beats-since lane is tick-derived, map-unaffected" {
     var r = try compileScoreWith(
         \\(transport :bpm 120 :meter [4 4])

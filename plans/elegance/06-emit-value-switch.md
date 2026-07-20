@@ -53,4 +53,12 @@ the same formula: stop and investigate, do not regen), npm gate.
 
 ## Progress log
 
-(empty)
+- **2026-07-20 — Phase 1 complete.** Inverted red as planned: the Eval-level
+  twin sweep ("emit lanes: every EmitName matches its :expr twin bit-exactly")
+  covers all five names at the origin, both sides of a 4b tempo boundary, an
+  off-grid late tick, and a negative tick — green BEFORE the switch and green
+  across it. Comptime subset pin added (every `EmitName` ∈ `reserved_names`);
+  throwaway misspell check confirmed it breaks the build. `emitValue` is now
+  the exhaustive switch on the same `TimeMap` methods; the `MAX_BINDINGS`
+  buffer and the `unreachable` are gone. Gates: `zig build verify` — corpus
+  25/25 byte-identical (the switch IS the same formula), npm gate (81 pass).

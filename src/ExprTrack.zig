@@ -99,6 +99,14 @@ comptime {
     // break, not a Debug-only bounds trip inside `bindTime`.
     std.debug.assert(reserved_names.len == MAX_BINDINGS);
     std.debug.assert(BASE_BINDINGS < MAX_BINDINGS);
+    // Every `EmitName` is a reserved time name — appending a future
+    // variant without reserving its name is a build break, not a prose
+    // promise (`emitValue`'s totality rests on this).
+    for (@typeInfo(TrackTable.EmitName).@"enum".fields) |f| {
+        var found = false;
+        for (reserved_names) |rn| found = found or std.mem.eql(u8, rn, f.name);
+        std.debug.assert(found);
+    }
 }
 
 /// One control's binding for an evaluation: the document `:value` at
@@ -232,20 +240,23 @@ fn bindTime(transport: *const TrackTable.Transport, tick: Tick, scene: ?TrackTab
     return buf[0..n];
 }
 
-/// The f64 value of one emittable clock name at `tick`, read straight
-/// out of the env `bindTime` builds — no formula is re-derived here, so a
+/// The f64 value of one emittable clock name at `tick` — the same
+/// `TimeMap` calls `bindTime` binds, same argument, same op order, so a
 /// `(transport :emit …)` lane and an equivalent `:expr` track land
 /// bit-identically (`Eval` truncates this to f32 exactly as `coerce`
-/// does for a scalar expr). `EmitName` is a subset of the bindTime names
-/// (`beat`, `bar`, `phase`, `bpm`, `t` — all `.number`), so the lookup
-/// never misses and the value always projects to f64.
+/// does for a scalar expr; the Eval-level twin sweep pins the equality).
+/// Total by construction: the switch is exhaustive, and the comptime
+/// block above pins every `EmitName` as a reserved time name — drift now
+/// requires `bindTime` to abandon these methods, which that sweep catches.
 pub fn emitValue(transport: *const TrackTable.Transport, tick: Tick, name: TrackTable.EmitName) f64 {
-    var buf: [MAX_BINDINGS]Expr.Env.Binding = undefined;
-    const wanted = @tagName(name);
-    for (bindTime(transport, tick, null, &buf)) |b| {
-        if (std.mem.eql(u8, b.name, wanted)) return b.value.toF64().?;
-    }
-    unreachable;
+    const map = &transport.map;
+    return switch (name) {
+        .beat => map.beatOf(tick),
+        .bar => map.barOf(tick),
+        .phase => map.phaseOf(tick),
+        .bpm => map.bpmAt(tick),
+        .t => map.secondsFromTick(tick),
+    };
 }
 
 /// Apply the result contract: number / ncomp-vector, all components
