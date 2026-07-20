@@ -411,6 +411,28 @@ const Builder = struct {
     key_spans: std.ArrayList(Ast.Span) = .empty,
     scenes: std.ArrayList(TrackTable.Scene) = .empty,
 
+    /// Dry-run scratch: the dry-runs evaluate under exactly the resources
+    /// the frame path will have (`ExprTrack.SCRATCH_BYTES` /
+    /// `PatternTrack.SCRATCH_BYTES`), fronted by a `FixedBufferAllocator`
+    /// over this buffer — one code path, one resource model. Lazily
+    /// gpa-allocated on first dry-run (grown if a pattern follows an
+    /// expr) and freed at the end of `build()` — NOT table-arena backed:
+    /// the table arena lives as long as the result, and a build-scoped
+    /// megabyte must not pin itself to every loaded pattern score.
+    dry_scratch: []u8 = &.{},
+
+    /// The lazily-grown `dry_scratch`, at least `need` bytes. Allocation
+    /// failure here is a REAL compile-aborting OOM (the host's memory,
+    /// not the frame budget).
+    fn dryScratch(self: *Builder, need: usize) Error![]u8 {
+        if (self.dry_scratch.len < need) {
+            self.gpa.free(self.dry_scratch);
+            self.dry_scratch = &.{};
+            self.dry_scratch = self.gpa.alloc(u8, need) catch return error.OutOfMemory;
+        }
+        return self.dry_scratch;
+    }
+
     /// `buildTrackForm`'s walk verdict.
     const Walk = enum {
         /// This form was handled (built, or skipped with its diagnostic
@@ -453,6 +475,11 @@ const Builder = struct {
         errdefer table_arena.deinit();
         const ta = table_arena.allocator();
         self.ta = ta;
+        // The dry-run scratch is build-scoped by nature (see its doc).
+        defer {
+            self.gpa.free(self.dry_scratch);
+            self.dry_scratch = &.{};
+        }
 
         const before_diags = self.diags.items.len;
         // Linear has no params to validate — this cannot fail.
@@ -1110,8 +1137,18 @@ const Builder = struct {
     fn dryRunExpr(self: *Builder, transport: *const TrackTable.Transport, expr_node: NodeIndex, ncomp: u8, scene: ?TrackTable.Scene) Error!bool {
         const controls = self.ctl_bindings[0..self.ctl_count];
         const dry_tick: TrackTable.Tick = if (scene) |s| s.start_tick else 0;
-        _ = ExprTrack.evalAt(self.gpa, self.tree, self.schema, transport, controls, expr_node, dry_tick, scene, ncomp) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
+        // The frame path's own fixed budget fronts the eval (see
+        // `dryRunPattern` — same doctrine: a dry-run evaluates under
+        // exactly the resources the frame will have), so `OutOfMemory`
+        // can ONLY mean the budget. In practice Expr's own step/memory
+        // ceilings trip first and surface as `expr_eval_failed` below —
+        // the FBA is the resource-model tie, not a new rejection.
+        var fba = std.heap.FixedBufferAllocator.init(try self.dryScratch(ExprTrack.SCRATCH_BYTES));
+        _ = ExprTrack.evalAt(fba.allocator(), self.tree, self.schema, transport, controls, expr_node, dry_tick, scene, ncomp) catch |err| switch (err) {
+            error.OutOfMemory => {
+                try self.emit(.expr_eval_failed, self.tree.spanOf(expr_node), "expression exceeds the {d}-KiB frame evaluation budget at the dry-run tick", .{ExprTrack.SCRATCH_BYTES / 1024});
+                return false;
+            },
             error.ResultShape => {
                 // A misspelled function name lands here too: a head
                 // that resolves to no expr-func evaluates to a form
@@ -1155,8 +1192,16 @@ const Builder = struct {
         const dry_tick: TrackTable.Tick = if (scene) |s| s.start_tick else 0;
         var env_storage: ExprTrack.EnvStorage = undefined;
         const env = ExprTrack.buildEnv(&env_storage, transport, self.ctl_bindings[0..self.ctl_count], dry_tick, scene);
-        var result = PatternTrack.queryCycle(self.gpa, self.tree, self.schema, pattern_node, dry_tick, env) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
+        // Front the query with the frame path's own fixed budget
+        // (`Eval.evalPatternTrack`'s exact shape): the query allocates
+        // solely from the handed-in allocator, so `OutOfMemory` here can
+        // ONLY mean the budget — a diagnostic, not a compile abort.
+        var fba = std.heap.FixedBufferAllocator.init(try self.dryScratch(PatternTrack.SCRATCH_BYTES));
+        var result = PatternTrack.queryCycle(fba.allocator(), self.tree, self.schema, pattern_node, dry_tick, env) catch |err| switch (err) {
+            error.OutOfMemory => {
+                try self.emit(.pattern_eval_failed, self.tree.spanOf(pattern_node), "pattern exceeds the {d}-KiB frame evaluation budget in the dry-run cycle", .{PatternTrack.SCRATCH_BYTES / 1024});
+                return false;
+            },
             // The engine's deterministic ceilings (depth / hap / byte
             // budgets, tick overflow) — same outcome on every host.
             else => {
@@ -1967,6 +2012,52 @@ test "compile diagnostics: pattern dry-run — a malformed combinator fails at l
     const diag = r.findDiag(.pattern_eval_failed).?;
     const start = r.validated.userOffset(diag.span.start);
     try t.expectEqualStrings("fast", source[start..r.validated.userOffset(diag.span.end)]);
+}
+
+test "compile diagnostics: pattern dry-run runs under the frame budget — over-budget cycle 0 fails at load" {
+    // The dry-run queries cycle 0 under the SAME fixed scratch the frame
+    // path evaluates with (`PatternTrack.SCRATCH_BYTES`), so "compiles
+    // clean" implies "plays at cycle 0" — no silent every-frame omission
+    // for a load-accepted pattern. FBA exhaustion is deterministic (same
+    // allocation sequence on every host), so acceptance stays a pure
+    // function of the document.
+    const source: [:0]const u8 =
+        \\(transport :bpm 120)
+        \\(track :target circle-radius :pattern (fast 8000 (pure 1)))
+    ;
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    const diag = r.findDiag(.pattern_eval_failed).?;
+    try t.expect(std.mem.indexOf(u8, diag.message, "budget") != null);
+    // The span lands on the `:pattern` value node.
+    const start = r.validated.userOffset(diag.span.start);
+    try t.expect(std.mem.indexOf(u8, source[start..r.validated.userOffset(diag.span.end)], "fast 8000") != null);
+
+    // Guard against over-tightening: a comfortably-dense-but-fitting
+    // pattern must still load.
+    var dense = try compile(t.allocator,
+        \\(transport :bpm 120)
+        \\(track :target circle-radius :pattern (fast 64 (pure 1)))
+    , &test_targets);
+    defer dense.deinit();
+    for (dense.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(dense.ok());
+}
+
+test "compile diagnostics: expr dry-run runs under the frame budget — over-budget expr fails at load" {
+    // PROBE (plan elegance/04 Phase 2): whether an expr can out-allocate
+    // `ExprTrack.SCRATCH_BYTES` below SJON Expr's own ceilings
+    // (`MAX_EVAL_BYTES` is 64 MiB, so the byte ceiling does not trip
+    // first). A wide sum allocates one arena `Value` per literal.
+    const wide = "(+ " ++ ("1.5 " ** 20000) ++ ")";
+    const source: [:0]const u8 =
+        "(transport :bpm 120)\n(track :target circle-radius :expr " ++ wide ++ ")";
+    var r = try compile(t.allocator, source, &test_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+    const diag = r.findDiag(.expr_eval_failed).?;
+    try t.expect(std.mem.indexOf(u8, diag.message, "budget") != null);
 }
 
 test "compile diagnostics: pattern payloads must be finite numbers — pattern_result_invalid" {

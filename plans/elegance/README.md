@@ -49,5 +49,5 @@ Two plans are release-relevant, the rest are quality:
 - [x] 07 small-accretions
 - [x] 06 emit-value-switch
 - [x] 05 builder-rows
-- [ ] 04 pattern-dry-run-budget
+- [x] 04 pattern-dry-run-budget
 - [ ] 03 driver-pinning

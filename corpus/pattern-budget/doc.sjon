@@ -1,0 +1,9 @@
+; pattern-budget: the dry-run queries cycle 0 under the frame path's own
+; fixed scratch (PatternTrack.SCRATCH_BYTES, 1 MiB), so a pattern whose
+; dry-run cycle out-allocates that budget is a LOAD diagnostic — never a
+; silent every-frame runtime omission ("compiles clean" implies "plays at
+; cycle 0"). FBA exhaustion is deterministic, so acceptance stays a pure
+; function of the document. Pins the stricter acceptance (plans/elegance/04)
+; with its code + budget message across native == wasm.
+(transport :bpm 120)
+(track :target radius :pattern (fast 8000 (pure 1)))

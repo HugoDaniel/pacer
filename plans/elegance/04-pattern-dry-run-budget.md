@@ -77,4 +77,27 @@ appear), npm gate.
 
 ## Progress log
 
-(empty)
+- **2026-07-20 — Phase 1 complete (pattern budget).** Red first:
+  `(fast 8000 (pure 1))` loaded clean on the gpa dry-run, exactly the finding.
+  Green: `Builder.dry_scratch` (lazily gpa-allocated, grown on demand, freed by
+  a `defer` at the top of `build()` — build-scoped, never table-arena pinned);
+  `dryRunPattern` fronts `queryCycle` with an FBA over it, and `OutOfMemory`
+  now emits `pattern_eval_failed` "exceeds the 1024-KiB frame evaluation
+  budget" at the `:pattern` span instead of aborting the compile. The
+  over-tightening guard (`(fast 64 (pure 1))` still loads) passed.
+  `PatternTrack.SCRATCH_BYTES`'s "MORE permissive" paragraph flipped to the
+  load-acceptance-⊆-runtime-capability statement (residual: later cycles, time
+  not resources). Gate: `zig build test`, audit 31/31 unchanged.
+- **2026-07-20 — Phase 2 complete (expr budget + corpus pin).** Probe result:
+  the over-budget expr IS constructible below Expr's ceilings
+  (`MAX_EVAL_BYTES` is 64 MiB, so the engine's byte ceiling never trips
+  first) — a 20000-term wide sum out-allocates the 256 KiB scratch and now
+  fails at load with the budget message; the probe stays as the red. One
+  sharing note: `dry_scratch` grows to the max need seen, so an expr
+  dry-running AFTER a pattern gets the 1 MiB buffer — exactly mirroring
+  `Evaluator.init`'s shared max-sized scratch (and the strict direction,
+  expr-before-pattern, is dry-run-stricter, which preserves acceptance ⊆
+  capability). New corpus case `pattern-budget` pins `(load :ok false)` +
+  code 27 + the budget message; regen touched ONLY the new case (25 goldens
+  byte-identical). Gate: `zig build verify` (26 cases), npm gate — the JS
+  parity walk now runs 82 tests (the new case included).

@@ -57,15 +57,17 @@ pub const SEED: i64 = 0;
 /// comfortably past realistic patterns (dozens–hundreds of haps/cycle),
 /// allocated once per evaluator only when a pattern track is present.
 ///
-/// It is NOT sized for a pathologically dense cycle: SJON's `MAX_HAPS` is
-/// 64k (~8 MiB of haps), and the load-time dry-run queries with the real
-/// gpa (SJON's 64 MiB `MAX_QUERY_BYTES` budget), so it is MORE permissive
-/// than this buffer — a thousands-of-haps pattern (or one dense only on a
-/// cycle past the dry-run's) can load yet exhaust this buffer at runtime.
-/// Exhaustion stays a deterministic, counted omission — never a process
-/// OOM, never nondeterminism — so the byte-identical claim holds; the write
-/// is simply dropped. Raise this (or bound the dry-run to match) if silent
-/// runtime omission of a load-accepted dense pattern becomes a problem.
+/// It is NOT sized for a pathologically dense cycle (SJON's `MAX_HAPS` is
+/// 64k, ~8 MiB of haps) — and the load-time dry-run runs under this SAME
+/// budget (`Compile.dryRunPattern` fronts its query with an FBA this
+/// large), so load acceptance ⊆ dry-run-cycle runtime capability: a
+/// pattern whose dry-run cycle exhausts this buffer is a load diagnostic,
+/// not a silent every-frame omission. The honest residual is time, not
+/// resources — a pattern dense only on a cycle PAST the dry-run's can
+/// still load and exhaust this buffer there. That exhaustion stays a
+/// deterministic, counted omission — never a process OOM, never
+/// nondeterminism — so the byte-identical claim holds; the write is
+/// simply dropped.
 pub const SCRATCH_BYTES: usize = 1024 * 1024;
 
 /// The engine's deterministic outcome set (depth / hap / byte ceilings,
