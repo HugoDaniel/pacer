@@ -1144,9 +1144,10 @@ const Builder = struct {
         // The frame path's own fixed budget fronts the eval (see
         // `dryRunPattern` — same doctrine: a dry-run evaluates under
         // exactly the resources the frame will have), so `OutOfMemory`
-        // can ONLY mean the budget. In practice Expr's own step/memory
-        // ceilings trip first and surface as `expr_eval_failed` below —
-        // the FBA is the resource-model tie, not a new rejection.
+        // can ONLY mean the budget. Reachable: Expr's own byte ceiling
+        // (`MAX_EVAL_BYTES`, 64 MiB) sits far above this scratch, so an
+        // allocation-heavy expr lands here first — the wide-sum
+        // diagnostic test pins it.
         var fba = std.heap.FixedBufferAllocator.init(try self.dryScratch(ExprTrack.SCRATCH_BYTES));
         _ = ExprTrack.evalAt(fba.allocator(), self.tree, self.schema, transport, controls, expr_node, dry_tick, scene, ncomp) catch |err| switch (err) {
             error.OutOfMemory => {
