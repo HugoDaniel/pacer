@@ -4,8 +4,8 @@
 ; moves only the seconds↔ticks seam (one mul+floor). `arc` runs a full
 ; in-out-cubic rise and an out-expo fall across the two-bar loop — b
 ; and bar position units mix freely. `mark`'s second key is authored in
-; SECONDS (3 s = 6.425 beats, a non-grid tick through the documented
-; seam) and still lands bit-exactly on its authored f32 (structural
+; SECONDS (3 s = 6.425 beats — off the BEAT grid, reached through the
+; documented seam) and still lands bit-exactly on its authored f32 (structural
 ; landing: the eval-time 3.0 s clock converts through the SAME mul+
 ; floor and selects the key's own segment edge). `lfo` is the classic
 ; unipolar cosine off `phase`, sweeping 0→1→0 once per 7-beat bar.
