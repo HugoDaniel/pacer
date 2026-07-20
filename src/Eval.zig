@@ -1044,6 +1044,76 @@ test "dynamic control slots write only while held" {
     try t_.expectEqual(@as(usize, 1), ev.evalTicks(0).len);
 }
 
+test "full-house frame: every source saturated lands exactly MAX_FRAME_ENTRIES" {
+    // The cap is EXACT, not merely safe: all emit lanes + MAX_TRACKS
+    // single-key tracks + MAX_CONTROLS targeted pins + every dynamic slot
+    // held live produce one write each, and the tight wasm writes zone
+    // (`Writes.encodedLen(MAX_FRAME_ENTRIES)`) fits the frame with zero
+    // slack — one byte less is BufferTooSmall.
+    var arena_state = std.heap.ArenaAllocator.init(t_.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const emit_fields = @typeInfo(TrackTable.EmitName).@"enum".fields;
+    var tgts: std.ArrayList(Compile.Target) = .empty;
+    var src: std.ArrayList(u8) = .empty;
+
+    try src.appendSlice(arena, "(transport :bpm 120 :meter [4 4] :emit [");
+    inline for (emit_fields) |f| {
+        try tgts.append(arena, .{ .name = f.name, .ncomp = 1 });
+        try src.appendSlice(arena, f.name);
+        try src.append(arena, ' ');
+    }
+    try src.appendSlice(arena, "])\n");
+    for (0..TrackTable.MAX_TRACKS) |i| {
+        const name = try std.fmt.allocPrint(arena, "k{d:0>3}", .{i});
+        try tgts.append(arena, .{ .name = name, .ncomp = 1 });
+        try src.appendSlice(arena, try std.fmt.allocPrint(
+            arena,
+            "(track :target {s} (key :at 0b :value 0.5))\n",
+            .{name},
+        ));
+    }
+    for (0..TrackTable.MAX_CONTROLS) |i| {
+        const name = try std.fmt.allocPrint(arena, "c{d:0>2}", .{i});
+        try tgts.append(arena, .{ .name = name, .ncomp = 1 });
+        try src.appendSlice(arena, try std.fmt.allocPrint(
+            arena,
+            "(control :id v{d:0>2} :target {s} :value 0.25)\n",
+            .{ i, name },
+        ));
+    }
+    const dyn_base: u16 = @intCast(tgts.items.len);
+    for (0..MAX_DYNAMIC_CONTROLS) |i| {
+        const name = try std.fmt.allocPrint(arena, "d{d:0>2}", .{i});
+        try tgts.append(arena, .{ .name = name, .ncomp = 1 });
+    }
+
+    var r = try compileScoreWith(try arena.dupeZ(u8, src.items), tgts.items);
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+
+    // Idle dynamic slots are silent: emit + tracks + document controls.
+    const static_count = emit_fields.len + TrackTable.MAX_TRACKS + TrackTable.MAX_CONTROLS;
+    try t_.expectEqual(static_count, ev.evalTicks(0).len);
+
+    // Register and hold every dynamic slot; the 65th registration is refused.
+    for (0..MAX_DYNAMIC_CONTROLS) |i| {
+        const slot = ev.registerControl(dyn_base + @as(u16, @intCast(i)), 0, 1).?;
+        try t_.expect(ev.setControl(slot, .{ 0.75, 0, 0, 0 }));
+    }
+    try t_.expectEqual(@as(?usize, null), ev.registerControl(dyn_base, 0, 1));
+
+    const full = ev.evalTicks(0);
+    try t_.expectEqual(@as(usize, MAX_FRAME_ENTRIES), full.len);
+
+    var buf: [Writes.encodedLen(MAX_FRAME_ENTRIES)]u8 = undefined;
+    const encoded = try Writes.encode(full, &buf);
+    try t_.expectEqual(buf.len, encoded.len);
+    try t_.expectError(error.BufferTooSmall, Writes.encode(full, buf[0 .. buf.len - 1]));
+}
+
 test "setControl rejects bad indices and non-finite values" {
     var r = try compileScore(
         \\(transport :bpm 120)
