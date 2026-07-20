@@ -55,4 +55,15 @@ wasm rebuild sanity).
 
 ## Progress log
 
-(empty)
+- **2026-07-20 — Phase 1 complete.** Pure refactor under continuous green (the
+  planned deviation from reds-first: the untouched tests ARE the red/green).
+  `ta` + the five lists moved onto the Builder; `appendRow`/`appendKey` are now
+  the only append sites (lockstep by construction; end-of-walk asserts kept as
+  documentation of the guarantee); `buildTracks`/`buildScenes`/`buildTriggers`
+  take only `transport`, `buildTrackForm`/`buildTriggerForm` only
+  `(transport, idx, scene_win, scene_index)`; the bool became
+  `Walk { keep_walking, stop_walk }` with the key-cap meaning on the variant.
+  `buildControls`/`buildTransport`/`buildAtList` untouched (their state is
+  build-local, not the six-list threading). Gates: `zig build verify` corpus
+  25/25 byte-identical, `zig build audit-diagnostics` 31/31 unchanged, npm
+  gate (81 pass).
