@@ -84,6 +84,15 @@ pub const MAX_DYNAMIC_CONTROLS = 64;
 /// Sentinel target id of an env-only document control (writes nothing).
 pub const NO_TARGET: u16 = std.math.maxInt(u16);
 
+/// The most entries one frame can produce: every emit lane, every track,
+/// every document control, and every dynamic slot writing at once. The
+/// lane ceiling is `EmitName`'s field count (compile rejects duplicate
+/// lanes), so appending a variant grows this automatically. `Evaluator.init`
+/// sizes (and asserts) against it; the wasm writes zone is
+/// `Writes.encodedLen(MAX_FRAME_ENTRIES)` — one derivation, no mirrored sum.
+pub const MAX_FRAME_ENTRIES = @typeInfo(TrackTable.EmitName).@"enum".fields.len +
+    TrackTable.MAX_TRACKS + TrackTable.MAX_CONTROLS + MAX_DYNAMIC_CONTROLS;
+
 /// Runtime state of one control. The index space is document controls
 /// first (table order), then dynamic slots in registration order.
 const ControlSlot = struct {
@@ -145,14 +154,17 @@ pub const Evaluator = struct {
         std.debug.assert(result.table != null); // compile succeeded
         const table = &result.table.?;
         std.debug.assert(table.tracks.len <= TrackTable.MAX_TRACKS);
+        // Compile enforces lane uniqueness, so the enum's field count is
+        // the lane ceiling — the invariant MAX_FRAME_ENTRIES rests on.
+        std.debug.assert(table.transport.emit.len <= @typeInfo(TrackTable.EmitName).@"enum".fields.len);
         var arena = std.heap.ArenaAllocator.init(gpa);
         errdefer arena.deinit();
         const seg_cache = try arena.allocator().alloc(u32, table.tracks.len);
         @memset(seg_cache, 0);
-        const entries = try arena.allocator().alloc(
-            Writes.Entry,
-            table.transport.emit.len + table.tracks.len + table.controls.len + MAX_DYNAMIC_CONTROLS,
-        );
+        const entry_count =
+            table.transport.emit.len + table.tracks.len + table.controls.len + MAX_DYNAMIC_CONTROLS;
+        std.debug.assert(entry_count <= MAX_FRAME_ENTRIES);
+        const entries = try arena.allocator().alloc(Writes.Entry, entry_count);
         // Frame scratch fronts every expr / pattern eval so the hot path
         // never touches the gpa; size it to the largest consumer present.
         // A pattern query needs materially more than an expr — SJON's own

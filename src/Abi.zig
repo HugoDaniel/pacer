@@ -57,7 +57,10 @@
 //! fixed order; a section is OMITTED when its count is 0 (an empty and an
 //! absent section are equivalent to a decoder), keeping a no-section blob
 //! byte-stable. Payload shape is the section's own business — the house
-//! pattern is `[count u32][fixed extern-struct record × count]`. Defined:
+//! pattern is `[count u32][fixed extern-struct record × count]`. A new
+//! section adds its `metaWorstCase` term in the same commit that defines
+//! its records — the worst-case sum lives beside the constants below and
+//! must keep restating this spec. Defined:
 //!
 //!     'SCEN' scenes — [count u32] then count × 24 {
 //!         start_tick i64, dur_ticks i64,
@@ -149,6 +152,24 @@ pub const META_EASE_OP_LEN: usize = 20;
 pub const META_EASE_STAGE_LEN: usize = 96;
 /// Bytes per program record inside the `'EASE'` payload.
 pub const META_EASE_PROGRAM_LEN: usize = 772;
+
+/// Worst-case `'PACM'` blob size at every cap — term by term in wire
+/// order, ending with the section stream. `id_allowance` is caller
+/// policy: the format itself lets a control id run to 64 KiB; a zone
+/// sizer picks its own per-control budget. CONVENTION: a new TLV section
+/// adds its term HERE, in the same commit that defines its records —
+/// this sum is the header's wire spec restated as arithmetic, and the
+/// zone assert in `wasm_entry` calls it rather than re-spelling it.
+pub fn metaWorstCase(comptime id_allowance: usize) usize {
+    return META_HEADER_LEN +
+        TrackTable.MAX_TRACKS * META_TRACK_LEN +
+        TrackTable.MAX_KEYS * META_KEY_LEN +
+        TrackTable.MAX_CONTROLS * (META_CONTROL_LEN + id_allowance) +
+        META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_SCENES * SCENE_REC_LEN + // 'SCEN'
+        META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_EASE_PROGRAMS * META_EASE_PROGRAM_LEN +
+        4 + TrackTable.MAX_KEYS * 2 + // 'EASE' (programs + per-key ease_refs)
+        META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_TEMPO_SEGMENTS * TEMPO_REC_LEN; // 'TMPO'
+}
 
 /// Most registries any host may join at load. Generous: pngine uniform
 /// tables run tens of fields, not hundreds.

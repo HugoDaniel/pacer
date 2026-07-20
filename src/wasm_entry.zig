@@ -71,11 +71,11 @@ const MAX_DOC_SIZE: usize = 256 * 1024;
 const MAX_TARGETS_BLOB: usize = 64 * 1024;
 const DIAGS_CAP: usize = 64 * 1024;
 const META_CAP: usize = 320 * 1024;
-/// Sized for a full house: every track, every document control, and
-/// every dynamic slot writing on one frame.
-const WRITES_CAP: usize = Writes.encodedLen(
-    TrackTable.MAX_TRACKS + TrackTable.MAX_CONTROLS + Eval.MAX_DYNAMIC_CONTROLS,
-);
+/// Sized for the true full house — every emit lane, track, document
+/// control, and dynamic slot writing on one frame. Derived from
+/// `Eval.MAX_FRAME_ENTRIES` (the same constant `Evaluator.init` sizes
+/// against), so the `catch unreachable` on encode holds by construction.
+const WRITES_CAP: usize = Writes.encodedLen(Eval.MAX_FRAME_ENTRIES);
 
 /// `drv_registerControl` failure sentinel.
 const NO_SLOT: u32 = 0xffff_ffff;
@@ -85,16 +85,12 @@ comptime {
     std.debug.assert(MAX_DOC_SIZE + Compile.manifest_src.len + 2 <= sjon.Binary.MAX_FILE_SIZE);
     // A full diag buffer still fits useful records (16-byte fixed part).
     std.debug.assert(DIAGS_CAP >= Abi.DIAGS_HEADER_LEN + 64 * (Abi.DIAG_RECORD_LEN + 256));
-    // Meta at the caps fits with a generous control-id allowance, plus a
-    // full 'SCEN' section and a full 'EASE' section (every program maximal,
-    // one ease_ref per key).
-    std.debug.assert(META_CAP >= Abi.META_HEADER_LEN +
-        TrackTable.MAX_TRACKS * Abi.META_TRACK_LEN +
-        TrackTable.MAX_KEYS * Abi.META_KEY_LEN +
-        TrackTable.MAX_CONTROLS * (Abi.META_CONTROL_LEN + 256) +
-        Abi.META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_SCENES * Abi.SCENE_REC_LEN +
-        Abi.META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_EASE_PROGRAMS * Abi.META_EASE_PROGRAM_LEN +
-        4 + TrackTable.MAX_KEYS * 2);
+    // Meta at the caps fits — every record and every section at its
+    // worst, summed where the format lives (`Abi.metaWorstCase`, which a
+    // new section must extend). 256 is this zone's per-control id
+    // allowance (the format allows 64 KiB ids; that generosity is not
+    // worth zone bytes here).
+    std.debug.assert(META_CAP >= Abi.metaWorstCase(256));
     // A registered slot index always fits the u32 return.
     std.debug.assert(TrackTable.MAX_CONTROLS + Eval.MAX_DYNAMIC_CONTROLS < NO_SLOT);
 }
@@ -238,7 +234,7 @@ export fn drv_registerControl(target_id: u32, registry: u32, ncomp: u32) u32 {
 export fn drv_eval(time_s: f64) u32 {
     const ev = if (evaluator) |*e| e else return 0;
     const entries = ev.evalSeconds(time_s) catch return 0;
-    const out = Writes.encode(entries, &writes_buffer) catch unreachable; // WRITES_CAP is full-house sized
+    const out = Writes.encode(entries, &writes_buffer) catch unreachable; // WRITES_CAP = encodedLen(Eval.MAX_FRAME_ENTRIES)
     return @intCast(out.len);
 }
 
@@ -250,7 +246,7 @@ export fn drv_evalTicks(tick: i64) u32 {
     // (|t| ≤ MAX_TICK keeps its trigger/window integer math in i64).
     if (tick > sjon.Pattern.MAX_TICK or tick < -sjon.Pattern.MAX_TICK) return 0;
     const entries = ev.evalTicks(tick);
-    const out = Writes.encode(entries, &writes_buffer) catch unreachable; // WRITES_CAP is full-house sized
+    const out = Writes.encode(entries, &writes_buffer) catch unreachable; // WRITES_CAP = encodedLen(Eval.MAX_FRAME_ENTRIES)
     return @intCast(out.len);
 }
 
