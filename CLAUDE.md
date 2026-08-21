@@ -257,8 +257,14 @@ a schema, with the shape/sequence split pinned by test; and
 `docs/score-language.md` is rendered from the manifest and drift-gated by
 `verify`. One stated win was rejected on structure — harness files do not join
 the LSP's coverage, because one project file means one composed vocabulary and
-both manifests declare a `target` form. Wave D (examples) remains open. No
-wire surface moved in any wave.
+both manifests declare a `target` form. Wave D (examples) is CLOSED, which
+closes the plan: `examples/demoscene.score.sjon` is the flagship the pngine
+document's header always promised, `examples/starter.score.sjon` is the browser
+demo's editor text extracted into a real file, and both are pinned by the
+corpus through SYMLINKED `doc.sjon`s (`corpus/examples-demoscene`,
+`corpus/examples-starter`) — the example that ships is the example the gate
+compiles. `examples/README.md` says which repo owns which file. No wire surface
+moved in any wave.
 
 ## Code style
 

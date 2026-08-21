@@ -674,6 +674,55 @@ pngine document living here for reference), and how to run the demo.
   wasm parity, 213 Zig tests, npm 90, score-docs current), `zig build fuzz`
   green, `audit-diagnostics` 31/31, `zig fmt --check` clean.
 
+- 2026-08-21 — **Wave D landed (D1 the missing sibling score, D2 the demo page,
+  D3 the README).** Durable facts: (1) **A symlink is what makes an example a
+  corpus case.** `corpus/examples-demoscene/doc.sjon` and
+  `corpus/examples-starter/doc.sjon` are symlinks to `examples/*.score.sjon`;
+  both runners follow them transparently (Zig's `Io.Dir` open, node's
+  `readFileSync`) and only the case DIRECTORY has to be real, so the file that
+  ships IS the file the gate compiles — zero drift, no copy to keep in step.
+  Corpus 34 → 36; not one existing golden moved. (2) **The plan's D2 was
+  widened on the same reasoning.** `index.html`'s score was a string baked
+  into the page: unverifiable, unreachable by `sjon-lsp`, and exactly the rot
+  D1 exists to repair. It is now `examples/starter.score.sjon`, fetched into
+  the textarea, covered by `sjon-project.sjon`'s `examples/*.score.sjon` glob
+  and pinned as `examples-starter`. (3) **The demo page did not run.**
+  `syncControls()` was called immediately after the awaited `Pacer.load` while
+  `swayEl` was still in its `const` temporal dead zone — an uncaught
+  `ReferenceError` at module evaluation, so the page had been blank since the
+  control landed. All element lookups now sit above the await, and the same
+  ordering bug is why the new click renderer is declared before it. Verified
+  live in Chrome: load, live edit, a deliberate `unknown target` with its span,
+  recovery, and the audio handoff. (4) **`spinAt`'s hand-rolled cubic IS a CSS
+  bezier.** `(cubic-bezier :p [0.3 0.4 0.4 1])` has initial slope y1/x1 = 4/3,
+  which over the 4-beat decel segment is exactly τ/4 rad per beat — the
+  free-spin rate, so there is no stall at 141 — and y2 = 1 leaves it at rest.
+  Structural landing puts the last key on 18 × 4π (`436231D6`) bit-exactly, so
+  the cube stops face-on. (5) **The demo's click track is rendered from the
+  score, not from a grid.** The page walks `t`, watches the `click` trigger's
+  `count` lane, bisects each boundary to ~1e-13 s, and reads the loop length
+  off the count's reset — 7.0 s, not `:dur ÷ bpm`, because `(tempo :at 8b :bpm
+  160)` shortens the last two bars. Deliberately no PPC arithmetic in JS: the
+  tick math stays in the driver, so the page asks questions instead of
+  becoming a second determinism seam. ~3.5k evals, 17 ms, inside the 150 ms
+  edit debounce. (6) Every landmark in `demoscene.score.sjon` is quoted from
+  `impulsos_camaradas.sjon`'s own `const B_…` values (`B_PULSE` 32, `STOP_B`
+  145, `B_FIST` 200, `B_SILENCE` 384, the 400-beat loop), including fs4's
+  comment naming the chroma keys — "up 135→142, down 145→149" — that the
+  pixelation envelope was built to mirror. Gate: `zig build verify` green
+  (corpus 36/36 native + wasm parity, npm 92), `zig build fuzz` green,
+  `audit-diagnostics` 31/31, `zig fmt --check` clean, npm lint + typecheck
+  clean. No wire surface touched.
+
+**Wave D is closed.** The flagship example exists and is gated (D1), the demo
+page runs again and tours every form landed since it was written (D2), and
+`examples/README.md` says which repo owns which file (D3). Two things landed
+that the plan did not ask for and that the phase needed: the starter score
+became a real file so it could be linted and pinned like the flagship, and the
+page's load-order crash was fixed. **`plans/12-sjon-alignment.md` is closed** —
+Waves A, B, C and D have all landed, no wire surface moved in any of them
+(`drv_abiVersion` still 1), and the corpus grew 29 → 36 cases.
+
 **Wave C is closed.** The project file gives scores editor support and is
 tested against the compiler's own vocabulary (C1); the corpus harness has a
 schema, and the split between what SJON refuses and what the runner refuses is
