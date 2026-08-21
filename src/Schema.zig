@@ -119,3 +119,16 @@ test "Schema: the score vocabulary is reachable through the bundle" {
         try t_.expect(schema.preloaded.schema.lookupForm(head, null) == .found);
     }
 }
+
+test "Schema: the manifest declares no :version — one spelling of the version, not two" {
+    // `:version` exists to be pinned by a `(use-plugin … :version …)` in a
+    // document; pacer's scores never write one (the schema is preloaded, not
+    // referenced by name), so a number here is read by nobody and drifts from
+    // the real triple — package.json / build.zig.zon / src/root.zig, which
+    // `npm/pacer/test/exports.test.js` keeps in lockstep. It drifted: the
+    // manifest said 0.1.0 while the package said 0.2.0.
+    var schema = try load(t_.allocator);
+    defer schema.deinit();
+
+    try t_.expectEqualStrings("", schema.preloaded.plugins[0].version);
+}

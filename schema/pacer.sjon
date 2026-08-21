@@ -3,16 +3,22 @@
 ; `:pattern` value sources ride as track keys, `:emit` clock lanes as a
 ; transport key.
 ;
-; Single source of truth for what a pacer score may contain. The compiler
-; (`src/Compile.zig`) prepends this manifest to the user source and runs
-; `sjon.validateDocument`, so the data forms below are validated against
-; this plugin with no filesystem (works on wasm32-freestanding). It is
-; `@embedFile`'d via the `pacer_schema` build import — the pngine
-; precedent (`pngine/schema/pngine.sjon`).
+; Single source of truth for what a pacer score may contain. It is
+; `@embedFile`'d via the `pacer_schema` build import (the pngine precedent,
+; `pngine/schema/pngine.sjon`) and PRELOADED once per host by
+; `src/Schema.zig`, which hands the bundle to every `sjon.validateDocument`
+; through `HostOptions.preloaded`. So the data forms below are validated
+; against this plugin with no filesystem (works on wasm32-freestanding),
+; and every diagnostic span is a score coordinate by construction — the
+; document is parsed on its own.
+;
+; No `:version`: the key exists to be pinned by a `(use-plugin …)` a score
+; never writes, and pacer's version lives in exactly three places
+; (package.json / build.zig.zon / src/root.zig), kept in lockstep by test.
 ;
 ; All score forms are now present: the compose-mode `(target …)`
 ; declaration form (below) closed the last roadmapped omission.
-(plugin :name pacer :version "0.1.0"
+(plugin :name pacer
 
   ; ---- numeric / time value kinds ----
   ; Score positions are numbers with a REQUIRED unit so positions read
