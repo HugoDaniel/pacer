@@ -1697,6 +1697,40 @@ test "unknown form head is rejected" {
     try t.expect(v.hasErrors());
 }
 
+test "(key …) is local to (track …) — a stray one at the top level is unknown" {
+    // `key` is declared inside `(form :name track …)`, reachable only through
+    // the `key-section` head-set on track's positional slot. At the top level
+    // it resolves against nothing.
+    var v = try validate(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(key :at 0b :value 1)
+    );
+    defer v.deinit();
+    try t.expect(v.hasErrors());
+}
+
+test "(stage …) is local to (seq …) — a stray one at the top level is unknown" {
+    var v = try validate(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(stage :ease linear :t 1 :v 1)
+    );
+    defer v.deinit();
+    try t.expect(v.hasErrors());
+}
+
+test "the locals stay reachable where they belong — keys in a track, stages in a seq" {
+    var v = try validate(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(track :target x
+        \\  (key :at 0b :value 0)
+        \\  (key :at 2b :value 1 :ease (seq
+        \\    (stage :ease out-quad :t 1 :v 1.2)
+        \\    (stage :ease in-quad :t 1 :v -0.2))))
+    );
+    defer v.deinit();
+    try t.expect(!v.hasErrors());
+}
+
 test "diagnostic spans map back into user source" {
     const bad_source: [:0]const u8 =
         \\(transport :bpm 120)

@@ -411,3 +411,27 @@ pngine document living here for reference), and how to run the demo.
   corpus 29/29 native + wasm parity, npm 85), `zig build fuzz` green, `zig build
   audit-diagnostics` 31/31, `zig fmt --check` clean. No wire change: `drv_abiVersion`
   stays 1 and all four blob `VERSION`s are untouched.
+
+- 2026-08-21 — **B1 (drop `:version`) + B2 (`key`/`stage` become slot-local).**
+  B1: `(plugin :name pacer :version "0.1.0")` lost its version — the key is only
+  ever matched against a `(use-plugin … :version …)` pin no pacer score writes,
+  and it had already drifted from the package's 0.2.0. A `Schema` test pins the
+  absence so it cannot return as a fourth spelling of the version. The manifest
+  header also lost its last "prepends this manifest" sentence (an A3 leftover).
+  B2: the §5.2 closed-positional-set recipe — `key` is declared INSIDE
+  `(form :name track …)` and `stage` inside `(form :name seq …)`, each still
+  gated by its existing head-set value kind (`key-section` / `stage-section`),
+  and both global declarations are gone. Durable facts: (1) pacer reads heads by
+  TEXT (`std.mem.eql(u8, hdr.head, "key")`), never by schema lookup, so the whole
+  compiler is indifferent to where the body is declared — not one line of
+  `Compile.zig` changed. (2) A local form's own positional policy is still
+  `.none` (omitted `:positional`); the implied-`.any` rule in §5.2 is about the
+  PARENT that declares locals, and `track`/`seq` both declare an explicit
+  `:positional`, so nothing loosened. (3) The standing "`key` collides with the
+  meta-schema's own `(key …)`" comment is retired — with the head narrowed the
+  question stops being askable. (4) New golden `diag-stray-key` pins the
+  narrowing on the wire: a top-level `(key …)` is now `'PACD'` source=sjon
+  code 1 `unknown form \`key\`` where it used to validate clean. No existing
+  golden changed (29 → 30 cases). Gate: `zig build verify` green (corpus 30/30
+  native + wasm parity, npm 86), `zig build fuzz` green, `audit-diagnostics`
+  31/31, `zig fmt --check` clean.

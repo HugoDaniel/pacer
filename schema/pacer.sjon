@@ -198,10 +198,10 @@
     :unit (unit-shape :reject true))
 
   ; ---- positional head-sets ----
-  ; Head-set entries text-match the document's head as written
-  ; (`Validator.zig` matchTyped), so `key` is bare here even though the
-  ; meta-schema also declares a `key` form — no ambiguity arises because
-  ; heads are compared, not resolved.
+  ; Each of these narrows a positional slot to a closed head set; the
+  ; bodies for `key` and `stage` are declared LOCAL to their parent form
+  ; (the §5.2 closed-positional-set recipe), so those two heads exist
+  ; nowhere but inside a (track …) / (seq …).
   (value-kind :name key-section
     :description "Keyframe children of (track …)."
     :underlying form
@@ -268,6 +268,16 @@
   (form :name track
     :description "One animated target with exactly one value source: keyframe children interpolated with easing programs, XOR an :expr evaluated every frame, XOR a :pattern queried on the bar grid. Hosts receive final values and never interpolate."
     :positional key-section
+    ; Slot-local: a keyframe is only ever a child of a track, so its body
+    ; is declared here rather than promoted to a plugin-global head.
+    (form :name key
+      :description "A keyframe. Before the first key a track holds its first value; after the last, its last."
+      (key :name at :type time-pos
+        :description "Position on the shared tick grid; beats/bars convert exactly, seconds via one documented mul+floor.")
+      (key :name value :type key-value
+        :description "Value reached exactly at :at.")
+      (key :name ease :type ease-spec :optional true
+        :description "Easing applied over the segment ENDING at this key; defaults to linear."))
     (key :name target :type target-name
       :description "Resolved at load() against the ordered host registries; unresolved names are a load diagnostic, not a schema error.")
     ; :walk-opaque — the validator never descends into the expression;
@@ -280,15 +290,6 @@
     ; compile-time dry-run (spans on failure), not by this schema.
     (key :name pattern :type any :optional true :walk-opaque true
       :description "Pattern queried each frame on the shared tick grid, 1 cycle = 1 bar. At tick T the hap active at T with the latest onset supplies the value; no active hap omits the write. Exclusive with (key …) children and :expr."))
-
-  (form :name key
-    :description "A keyframe. Before the first key a track holds its first value; after the last, its last."
-    (key :name at :type time-pos
-      :description "Position on the shared tick grid; beats/bars convert exactly, seconds via one documented mul+floor.")
-    (key :name value :type key-value
-      :description "Value reached exactly at :at.")
-    (key :name ease :type ease-spec :optional true
-      :description "Easing applied over the segment ENDING at this key; defaults to linear."))
 
   (form :name trigger
     :description "An event lane. At each frame it finds the last scheduled event <= the playhead and writes (phase, count, gate, beats-since) lanes truncated to the target's ncomp. The schedule is EITHER periodic (:every, phased by optional :offset) XOR an explicit ascending :at list — both keys are schema-optional so a missing/duplicated source, a non-positive :every, or an empty/unsorted :at surface as a pacer trigger_invalid diagnostic (with a span), not a bare SJON error."
@@ -319,16 +320,16 @@
   ; ---- easing combinator forms ----
   (form :name seq
     :description "Stages concatenated in time and value acting as one easing: :t/:v weights are normalized at compile so the program still lands exactly on the key value."
-    :positional stage-section)
-
-  (form :name stage
-    :description "One (seq …) stage."
-    (key :name ease :type ease-spec
-      :description "Easing shaping this stage (nesting depth is capped at compile).")
-    (key :name t :type stage-weight
-      :description "Relative time weight.")
-    (key :name v :type plain-number
-      :description "Relative value span; may be negative (the pull-back of a bounce)."))
+    :positional stage-section
+    ; Slot-local, like (track …)'s (key …): a stage exists only inside a seq.
+    (form :name stage
+      :description "One (seq …) stage."
+      (key :name ease :type ease-spec
+        :description "Easing shaping this stage (nesting depth is capped at compile).")
+      (key :name t :type stage-weight
+        :description "Relative time weight.")
+      (key :name v :type plain-number
+        :description "Relative value span; may be negative (the pull-back of a bounce).")))
 
   (form :name chain
     :description "Function composition: (chain E1 E2) evaluates E2(E1(u)). For shaping, e.g. quantizing a spring through steps."

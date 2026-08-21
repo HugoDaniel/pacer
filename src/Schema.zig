@@ -115,8 +115,14 @@ test "Schema: the score vocabulary is reachable through the bundle" {
     var schema = try load(t_.allocator);
     defer schema.deinit();
 
-    for ([_][]const u8{ "transport", "track", "key", "scene", "trigger", "control", "tempo", "target" }) |head| {
+    for ([_][]const u8{ "transport", "track", "scene", "trigger", "control", "tempo", "target" }) |head| {
         try t_.expect(schema.preloaded.schema.lookupForm(head, null) == .found);
+    }
+    // …and `key` / `stage` are NOT among them: they are slot-local to
+    // (track …) / (seq …), so the only way to reach one is through its
+    // parent's positional head-set.
+    for ([_][]const u8{ "key", "stage" }) |head| {
+        try t_.expect(schema.preloaded.schema.lookupForm(head, null) != .found);
     }
 }
 

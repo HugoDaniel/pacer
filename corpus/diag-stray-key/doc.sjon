@@ -1,0 +1,7 @@
+; `key` is SLOT-LOCAL to (track …) — declared inside the track form and
+; reachable only through the `key-section` head-set on its positional
+; slot. A stray one at the top level therefore resolves against nothing
+; and diagnoses; it used to be a plugin-global head and validated clean.
+(transport :bpm 120)
+
+(key :at 0b :value 1)
