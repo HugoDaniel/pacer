@@ -1,0 +1,25 @@
+; examples-demoscene harness. `doc.sjon` is a SYMLINK to
+; `examples/demoscene.score.sjon` — the flagship example IS the pinned
+; case, so the shipped file cannot drift from the gate.
+;
+; No (target …) forms: the host registry is EMPTY and the score's own
+; compose-mode declarations supply the whole join, in declaration order —
+; sceneMix 0, spin 1, chromaAmt 2, beat 3. That also proves `:emit [beat]`
+; resolves its lane against the MERGED registry, not just a host-provided
+; one.
+;
+; 128 bpm 4/4: 1 beat = 0.46875 s exactly (dyadic, so every time below is
+; an exact f64), 1 bar = 1.875 s, :dur 100bar = 187.5 s = 400 beats. The
+; walk visits the score's own landmarks:
+(times
+  "0000000000000000" ; 0.0 s      beat 0     — score top: cloud scene, spin 0
+  "403C200000000000" ; 28.125 s   beat 60    — mid free spin (τ/4 per beat)
+  "404F2C0000000000" ; 62.34375 s beat 133   — cloud → cube-reveal handoff tick
+  "40502C0000000000" ; 64.6875 s  beat 138   — sceneMix crossfade completes
+  "4050A40000000000" ; 66.5625 s  beat 142   — chroma at its 1.8 plateau
+  "4050D10000000000" ; 67.265625  beat 143.5 — off-key: the decel bezier mid-segment
+  "4050FE0000000000" ; 67.96875 s beat 145   — STOP_B: spin lands on 18×4π, chroma falls
+  "4051760000000000" ; 69.84375 s beat 149   — cube-reveal → grid handoff tick
+  "4066800000000000" ; 180.0 s    beat 384   — B_SILENCE: every lane held
+  "4067700000000000" ; 187.5 s    = :dur     — wraps to tick 0, back into cloud
+)

@@ -1,0 +1,103 @@
+; demoscene.score.sjon — the motion track for `impulsos_camaradas.sjon`.
+;
+; That file is a **pngine** document (it lives here for reference; pngine owns
+; it). It builds the deferred SDF pipeline, the instanced halftone dot layer
+; and the cube-canvas grid, and reads all of its motion out of a dedicated
+; 16-byte `motion` uniform buffer whose four bare f32 fields THIS score drives
+; by name:
+;
+;   sceneMix   0 → 1   crossfade from the dot-cloud scene into the raymarched
+;                      cube (fs3's closing `mix(col, cubeCol, sceneMix)`)
+;   spin               cube yaw/pitch in radians — free spin, then a face-on stop
+;   chromaAmt  0 → 2   strength of fs4's chroma-shift post pass; the pixelation
+;                      envelope is built to ride the same rise and fall
+;   beat               the musical beat, and the master clock everything else in
+;                      the WGSL derives from (`motion.beat`)
+;
+; The score is written in COMPOSE MODE: the four `(target …)` forms below
+; declare the property space, so it compiles, evaluates and lints with no host
+; attached — it is corpus case `examples-demoscene`, gated like every other
+; score in the repo. A real host (pngine's uniform reflection table) supplies
+; the same four names; a declared name the host also provides is
+; host-authoritative and the arities must agree.
+;
+; 100 bars of 4/4 at 128 bpm — 400 beats, 3 min 07.5 s — and it loops. Every
+; landmark beat below is one the WGSL names as a `const B_…`, quoted in the
+; comment that uses it, so the two files can be diffed by eye.
+
+(target :name sceneMix  :arity 1 :registry 0)
+(target :name spin      :arity 1 :registry 0)
+(target :name chromaAmt :arity 1 :registry 0)
+(target :name beat      :arity 1 :registry 0)
+
+; `:emit [beat]` broadcasts the transport's own beat straight onto the target
+; of that exact name — no track, no keyframes. It is the whole reason the score
+; is small: `beat` is the one lane the shaders actually need, and the pulses,
+; sweeps, icon swaps, letter reveals and the fist are all `fract(beat)` and
+; `step(B_…, beat)` inside the WGSL.
+;
+; One tempo for the whole track, so this stays on the constant transport path.
+(transport :bpm 128 :meter [4 4] :dur 100bar :end loop :emit [beat])
+
+; ── the cube's rotation ──────────────────────────────────────────────────────
+; One revolution every 4 beats (τ/4 rad per beat) from the top of the score,
+; then a 4-beat deceleration into the next face-on orientation, held from
+; STOP_B = 145 to the loop. The landing angle is 18 × 4π: a whole number of
+; yaw AND pitch turns, which is what makes the box read axis-aligned.
+;
+; The decel ease is `spinAt`'s own cubic spelled as a CSS bezier — y1/x1 = 4/3
+; enters the segment at exactly the free-spin rate (no stall at 141), y2 = 1
+; leaves it at rest. Top-level, not scened: it runs the whole score.
+;
+; cs1 and cs2 currently recompute this angle from `motion.beat` themselves, so
+; the two compute passes cannot drift by a frame; the lane is written anyway,
+; and a host that binds `spin` directly gets the identical curve.
+(track :target spin
+  (key :at 0b   :value 0)
+  (key :at 141b :value 221.482282)
+  (key :at 145b :value 226.194671 :ease (cubic-bezier :p [0.3 0.4 0.4 1])))
+
+; ── Act 1 — the halftone cloud · bars 1‥34 ───────────────────────────────────
+; Dots only. The diagonal sample-reveal sweep, the cloud locking on at
+; B_PULSE = 32, the "and of 2" tap, the snare cell from beat 65, scene two's
+; cube-shaped dots from 72, the tunnel forming at B_TUNNEL = 148 — every one of
+; those is derived from `beat` inside fs3. The only lanes this window owns are
+; the two post-chain neutrals: the cube stays hidden and the chroma is off.
+(scene :name cloud :at 0b :dur 133b
+  (track :target sceneMix  (key :at 0b :value 0))
+  (track :target chromaAmt (key :at 0b :value 0)))
+
+; ── Act 2 — the cube reveal and the white-out · beats 133‥149 ────────────────
+; Scene-relative: beat 0 here is beat 133 of the transport, so the act moves as
+; one number. This is the only window with any authored shape in it.
+(scene :name cube-reveal :at 133b :dur 16b
+  ; The cube fades up as scene two's dots fade out — fs3 fades those with
+  ; `1 - smoothstep(130, 138, beat)`, so the crossfade completes at 138 and
+  ; holds through the white-out.
+  (track :target sceneMix
+    (key :at 0b :value 0)
+    (key :at 5b :value 1 :ease smoothstep))
+
+  ; fs4's own comment names these keys — "the envelope mirrors the chroma keys
+  ; (up 135→142, down 145→149)" — because the pixelation block size is built
+  ; from `smoothstep(135,142) * (1 - smoothstep(145,149))`. The peak sits just
+  ; under the shader's `clamp(chromaAmt, 0, 2)` ceiling. The fall lands on 0 at
+  ; the scene's exclusive end, which is exactly where `grid` takes the lane.
+  (track :target chromaAmt
+    (key :at 0b  :value 0)
+    (key :at 2b  :value 0)
+    (key :at 9b  :value 1.8 :ease smoothstep)
+    (key :at 12b :value 1.8)
+    (key :at 16b :value 0   :ease smoothstep)))
+
+; ── Act 3 — the dot grid, CAMARADAS, the fist · beats 149‥400 ────────────────
+; The instanced dot layer owns the screen from here: the single beating dot
+; splits (B_SPLIT = 154), fans into the 20×20 grid (B_HORZ = 157), strobes one
+; icon per beat (B_SHAPES = 162), contracts to 14×14 (B_CONTRACT = 186), spells
+; the word (B_WORD = 190), and lands the fist (B_FIST = 200). The score holds
+; the white square under it and keeps the post pass clean; the last sound is
+; the lone bass hit at B_SILENCE = 384 and beats 385‥400 are the silent tail
+; before the wrap.
+(scene :name grid :at 149b :dur 251b
+  (track :target sceneMix  (key :at 0b :value 1))
+  (track :target chromaAmt (key :at 0b :value 0)))
