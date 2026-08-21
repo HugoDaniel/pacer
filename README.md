@@ -36,6 +36,7 @@ registries at all.
 |---|---|
 | `src/` | the Zig driver — compile, eval, easing, tick math, WASM entry + boundary blobs |
 | `schema/pacer.sjon` | the score schema (embedded, validates on wasm32-freestanding) |
+| `sjon-project.sjon` | the workspace project file — what `sjon-lsp` reads to give scores editor support |
 | `corpus/` | golden determinism cases — `doc.sjon` + `times.sjon` + generated `expected.sjon` |
 | `npm/pacer/` | the ESM JS glue around `pacer.wasm` (published package) |
 | `examples/` | a browser demo (live editor → canvas + audio) |
@@ -61,6 +62,17 @@ Run the browser demo (serve from the repo root so the paths resolve):
 zig build wasm
 python3 -m http.server   # then open /examples/
 ```
+
+## Editing scores
+
+Scores get diagnostics, hover, completion and did-you-mean from SJON's
+language server. `sjon-project.sjon` at the repo root is what points it at
+`schema/pacer.sjon`, so the vocabulary is live for every `corpus/*/doc.sjon`
+and every example with no `(use-plugin …)` line in the score. Build the server
+out of the sibling checkout (`cd ../SJON && zig build lsp`), put
+`../SJON/zig-out/bin` on your `PATH`, and follow your editor's block in
+[SJON's tooling guide](../SJON/docs/TOOLING.md) — the server attaches to
+`*.sjon` and finds the project file on its own.
 
 ## Using it from JS
 

@@ -193,6 +193,19 @@ pacer translates no spans anywhere. (It used to prepend the manifest text to
 each score and subtract the prefix; SJON's `Host.zig` header names that
 pattern as the one preload replaces.)
 
+`sjon-project.sjon` at the repo root is the *editor's* copy of that wiring:
+`sjon-lsp` composes its `:plugins` into one ambient schema, so every
+`corpus/*/doc.sjon` and every example resolves the score vocabulary with no
+`(use-plugin …)` line — which matches how pacer itself consumes the manifest.
+The two routes are kept in lockstep by a `Schema` test that runs the real
+`sjon.loadProject` over the repo root and compares its composed vocabulary
+against the preloaded one head for head; a renamed manifest or a stale
+`:plugins` path fails there rather than silently costing every score its
+diagnostics. Note the asymmetry the file's header spells out: the LSP composes
+project plugins ambiently, the `sjon` CLI resolves each document's own
+`(use-plugin …)` directives instead — so `sjon check` is not a gate for pacer
+scores.
+
 ## Roadmap
 
 All roadmapped score forms have landed — `(scene …)` windows and compose-mode

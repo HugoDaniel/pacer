@@ -46,6 +46,15 @@ pub fn build(b: *std.Build) void {
     test_mod.addAnonymousImport("pacer_schema", .{
         .root_source_file = b.path("schema/pacer.sjon"),
     });
+    // The repo root, handed to the test binaries as an absolute path so the
+    // `sjon-project.sjon` test can load the workspace the way `sjon-lsp`
+    // does. A cwd-relative path would depend on where `zig build` was
+    // invoked from; this does not. Both test roots below (`src/root.zig`
+    // and `src/fuzz.zig`) reach `Schema`'s tests, so both need the module.
+    const build_options = b.addOptions();
+    build_options.addOptionPath("repo_root", b.path("."));
+    const build_options_mod = build_options.createModule();
+    test_mod.addImport("build_options", build_options_mod);
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
     test_step.dependOn(&run_tests.step);
@@ -149,6 +158,7 @@ pub fn build(b: *std.Build) void {
     fuzz_mod.addAnonymousImport("pacer_schema", .{
         .root_source_file = b.path("schema/pacer.sjon"),
     });
+    fuzz_mod.addImport("build_options", build_options_mod);
     const fuzz_test = b.addTest(.{ .root_module = fuzz_mod });
     const run_fuzz = b.addRunArtifact(fuzz_test);
     const fuzz_step = b.step("fuzz", "Run never-panic fuzz harnesses");

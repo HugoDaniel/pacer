@@ -559,6 +559,42 @@ pngine document living here for reference), and how to run the demo.
   Gate: `zig build verify` green, `zig build fuzz` green, `zig fmt --check`
   clean.
 
+- 2026-08-21 — **C1 landed: `sjon-project.sjon` at the repo root.** One
+  `(project :name pacer :plugins ["./schema/pacer.sjon"] :documents […])`,
+  plus the test that makes it load-bearing. Durable facts: (1) **The LSP and
+  the CLI consume the same project file two different ways, and only one of
+  them is ambient.** `lsp/Handler.loadProject` sets the handler's schema to
+  `Schema.init(project.plugins)` — every `**/*.sjon` under the workspace root
+  resolves the score vocabulary with no `(use-plugin …)` line, which is what
+  C1 wanted. The `sjon` CLI's project check (`Cli.validateOneDoc`) instead
+  calls `validateDocument` with a *resolver*, so a document's plugins come
+  from its own `(use-plugin …)` directives; `sjon check` over `:documents`
+  therefore reports `unknown_form` on every pacer score. Not a gate, and the
+  project file's header says so. (2) `:documents` is read by the CLI walk
+  ONLY — the LSP's `workspace_scan.collect` enumerates every `.sjon` under
+  the root and never consults it (same for `:ignore`). The plan's C1 text had
+  this backwards; the file's header carries the corrected statement.
+  (3) The gate is a `Schema` test that runs the real `sjon.loadProject` over
+  the repo root and asserts zero project diagnostics, `plugins = [core,
+  pacer]`, and — head for head — that every form the compiler preloads
+  resolves through the workspace schema. Shown to bite: pointing `:plugins`
+  at a moved path fails it. The repo root reaches the test binary as an
+  absolute path through a new `build_options` module (`addOptionPath`),
+  shared by BOTH test roots — `src/fuzz.zig` reaches `Schema`'s tests through
+  `test_support.zig`, so `zig build fuzz` needs the same import.
+  (4) No `:version` in the project file, for B1's reason exactly: a fourth
+  spelling of a version that lives in three places would only drift.
+  (5) `examples/*.score.sjon` matches nothing until D1 writes it — harmless
+  here (`loadProject` expands no globs; only the CLI walk emits
+  `glob_no_matches`). (6) **Unverified end-to-end, and not pacer's to fix:**
+  `sjon-lsp` built from the sibling checkout panics during `initialize` —
+  lsp-kit (a path dep on `../wgslender/external/lsp-kit`) now treats
+  `inlayHint/resolve` as required by SJON's `.inlayHintProvider = true`.
+  A live editor session is blocked on that pair, not on this file. Gate:
+  `zig build verify` green (corpus 34/34 + wasm parity, npm 90), `zig build
+  fuzz` green, `audit-diagnostics` 31/31, `zig fmt --check` clean; no golden
+  moved and no wire surface touched.
+
 **Wave B is closed.** All eight phases landed: `:version` dropped (B1),
 `key`/`stage` slot-local (B2), seven `:default`s declared and six read back
 through `EffectiveView` (B3), `:requires [every]` (B4), two exclusive groups

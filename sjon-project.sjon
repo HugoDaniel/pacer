@@ -1,0 +1,35 @@
+; pacer — the SJON workspace project file.
+;
+; `sjon-lsp` discovers the nearest `sjon-project.sjon` at or above the file
+; being edited and composes its `:plugins` into ONE ambient schema
+; (`lsp/Handler.loadProject` → `Schema.init(project.plugins)`). That is what
+; gives every corpus score and every example diagnostics, hover (the
+; manifest's own `:description`s), form-head and key completion, and
+; did-you-mean — with no `(use-plugin …)` line in the scores themselves,
+; which is right: pacer PRELOADS the manifest rather than resolving it by
+; name (see `src/Schema.zig`).
+;
+; `./schema/pacer.sjon` is the same file `build.zig` hands to `@embedFile`
+; as `pacer_schema`. The two are kept honest by a test in `src/Schema.zig`
+; that loads this project the way the language server does and compares its
+; composed vocabulary against the preloaded one, head for head.
+;
+; No `:version`: same reason the manifest declares none — pacer's version
+; lives in exactly three places (package.json / build.zig.zon /
+; src/root.zig) and a fourth spelling would only drift.
+;
+; `:documents` names the files that ARE pacer scores. It scopes the `sjon`
+; CLI's project-wide walk (`sjon check` with no file arguments); the
+; language server does not read it — that walk is every `**/*.sjon` under
+; the workspace root. Two things to know before running the CLI over this
+; list: the CLI resolves a document's plugins from its own `(use-plugin …)`
+; directives rather than composing the project's ambiently, so a pacer
+; score — which writes none — reports `unknown_form` there; and
+; `corpus/diag-*` scores are deliberately broken, their diagnostics being
+; the pinned golden. `corpus/*/times.sjon` and `corpus/*/expected.sjon` are
+; left out as harness / golden files in a vocabulary of their own (plan 12
+; phase C2 gives them a schema); `examples/*.score.sjon` is written by
+; phase D1.
+(project :name pacer
+  :plugins ["./schema/pacer.sjon"]
+  :documents ["corpus/*/doc.sjon" "examples/*.score.sjon"])

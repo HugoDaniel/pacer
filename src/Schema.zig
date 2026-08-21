@@ -138,3 +138,39 @@ test "Schema: the manifest declares no :version — one spelling of the version,
 
     try t_.expectEqualStrings("", schema.preloaded.plugins[0].version);
 }
+
+test "Schema: the workspace project file composes this same manifest" {
+    // `sjon-project.sjon` is what `sjon-lsp` and the `sjon` CLI read to
+    // learn the score vocabulary; `manifest_src` is what the compiler
+    // embeds. Nothing but this test says they are the same file — a
+    // renamed manifest, a stale `:plugins` path, or a typo'd project key
+    // costs every corpus score and every example its editor support and
+    // breaks nothing that builds.
+    //
+    // The route is the real one: `sjon.loadProject` over the repo root is
+    // precisely what `lsp/Handler.loadProject` calls.
+    const repo_root = @import("build_options").repo_root;
+
+    var project = try sjon.loadProject(t_.allocator, .{
+        .project_root = repo_root,
+        .io = t_.io,
+    });
+    defer project.deinit();
+
+    // Project-file parse failures, unknown project keys (advisory) and
+    // per-manifest load failures all land here.
+    try t_.expectEqual(@as(usize, 0), project.diagnostics.len);
+
+    // `plugins[0]` is `core`, seeded by the loader; pacer is what the
+    // project file contributed.
+    try t_.expectEqual(@as(usize, 2), project.plugins.len);
+    try t_.expectEqualStrings("pacer", project.plugins[1].name);
+
+    // Head for head: every form the compiler preloads resolves through
+    // the workspace schema an editor builds.
+    var schema = try load(t_.allocator);
+    defer schema.deinit();
+    for (schema.preloaded.plugins[0].forms) |form| {
+        try t_.expect(project.schema.lookupForm(form.name, null) == .found);
+    }
+}
