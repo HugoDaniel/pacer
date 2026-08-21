@@ -250,9 +250,15 @@ manifest now carries the score language's `:default`s (read back through
 widget-shaped keys (`(control …)` discriminated on `:type`), and slot-local
 `key` / `stage` bodies. Every rule moved into the schema deleted the pacer
 branch it subsumed — pacer voids the table on any SJON error, so a subsumed
-branch is dead code, not a second line of defence. Waves C (tooling: an LSP
-project file, a schema'd corpus harness, generated score-language docs) and D
-(examples) remain open. No wire surface moved in either wave.
+branch is dead code, not a second line of defence. Wave C (tooling) is CLOSED too:
+`sjon-project.sjon` gives scores editor support and is tested against the
+compiler's own vocabulary; `schema/pacer-corpus.sjon` gives the corpus harness
+a schema, with the shape/sequence split pinned by test; and
+`docs/score-language.md` is rendered from the manifest and drift-gated by
+`verify`. One stated win was rejected on structure — harness files do not join
+the LSP's coverage, because one project file means one composed vocabulary and
+both manifests declare a `target` form. Wave D (examples) remains open. No
+wire surface moved in any wave.
 
 ## Code style
 
