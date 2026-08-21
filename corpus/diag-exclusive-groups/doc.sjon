@@ -1,0 +1,12 @@
+; The two `(exclusive-group …)`s in the manifest own the source COUNTS:
+; a trigger needs exactly one of :every / :at, a track carries at most
+; one of :expr / :pattern. All three records are source=sjon with spans;
+; what a count cannot see (a non-positive :every, an empty :at, a track
+; with (key …) children beside a source) stays a pacer diagnostic.
+(transport :bpm 120)
+
+(trigger :target radius :every 2b :at [4b 8b])
+
+(trigger :target radius)
+
+(track :target radius :expr (+ beat 0) :pattern [0 1])

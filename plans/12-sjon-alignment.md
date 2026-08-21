@@ -474,3 +474,24 @@ pngine document living here for reference), and how to run the demo.
   wire record; `trigger-basic` did not move, and neither did any other golden
   (30 → 31 cases). Gate: `zig build verify` green, `zig build fuzz` green,
   `audit-diagnostics` 31/31, `zig fmt --check` clean.
+
+- 2026-08-21 — **B5 landed: two `(exclusive-group …)`s, and the branches they
+  subsume are gone.** `(trigger …)` declares `:cardinality exactly-one` over
+  `[every]` / `[at]`; `(track …)` declares `:cardinality at-most-one` over
+  `[expr]` / `[pattern]`. Durable facts: (1) **A subsumed pacer branch is dead
+  code, not a belt-and-braces guard** — pacer voids the table on any SJON error,
+  so the "trigger needs exactly one of :every or :at" emit and the ":expr and
+  :pattern" emit could never fire again. Both are now `std.debug.assert`s stating
+  the group they rely on, which is the house rule for a validator-gated
+  invariant. (2) The split that survives is *counts vs values*: a group counts
+  key presence, so a non-positive `:every`, an empty / unsorted / tied `:at`, the
+  two `(key …)`-children pairings and `track_empty` all stay pacer's —
+  `trigger_invalid` and `track_source_conflict` keep reachable routes and
+  `audit-diagnostics` stays 31/31. (3) `:offset :requires [every]` (B4) and
+  `every`'s membership in an exclusive group coexist: the loader's "same
+  exclusive group" rejection is about the *requiring* key sharing a group with
+  its requirement, and `:offset` is in none. (4) New golden
+  `diag-exclusive-groups` pins all three wire records in one case — SJON codes 27
+  (`mutually_exclusive_keys_present`, twice) and 29 (`required_one_of_missing`).
+  No existing golden moved; corpus 31 → 32. Gate: `zig build verify` green,
+  `zig build fuzz` green, `audit-diagnostics` 31/31, `zig fmt --check` clean.

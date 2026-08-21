@@ -829,15 +829,17 @@ const Builder = struct {
         };
 
         // Three explicit value sources — keys XOR :expr XOR :pattern.
-        // Any pairing is one `track_source_conflict` at the later-listed
-        // source's span (collection over abort: one diagnostic names the
-        // pair, the track is skipped, the walk continues).
+        // The `:expr` / `:pattern` pairing is a count over two declared
+        // keys, so the manifest's `(exclusive-group :cardinality
+        // at-most-one …)` owns it and voids the table before this walk
+        // runs (asserted below). A group counts no `(key …)` CHILDREN,
+        // though, so the two pairings involving them stay here: one
+        // `track_source_conflict` at the later-listed source's span
+        // (collection over abort — one diagnostic names the pair, the
+        // track is skipped, the walk continues).
         const expr_node = kvNode(tree, hdr.children, "expr");
         const pattern_node = kvNode(tree, hdr.children, "pattern");
-        if (expr_node != null and pattern_node != null) {
-            try self.emit(.track_source_conflict, tree.spanOf(pattern_node.?), "track `{s}` has both :expr and :pattern — exactly one value source", .{target_name});
-            return .keep_walking;
-        }
+        std.debug.assert(expr_node == null or pattern_node == null);
         if (expr_node) |node| {
             if (firstKeyChild(tree, hdr.children) != null) {
                 try self.emit(.track_source_conflict, tree.spanOf(node), "track `{s}` has both (key …) children and :expr — exactly one value source", .{target_name});
@@ -1033,12 +1035,12 @@ const Builder = struct {
 
         const every_node = kvNode(tree, children, "every");
         const at_node = kvNode(tree, children, "at");
-        // Exactly one source: `(a == null) == (b == null)` is true iff both
-        // are present or both absent.
-        if ((every_node == null) == (at_node == null)) {
-            try self.emit(.trigger_invalid, tree.spanOf(idx), "trigger needs exactly one of :every (periodic) or :at (explicit hits)", .{});
-            return;
-        }
+        // Exactly one source, counted by the manifest's `(exclusive-group
+        // :cardinality exactly-one …)`: neither is required_one_of_missing,
+        // both is mutually_exclusive_keys_present, and either voids the
+        // table before this walk runs. `(a == null) == (b == null)` is true
+        // iff both are present or both absent — so this asserts the group.
+        std.debug.assert((every_node == null) != (at_node == null));
 
         const target_node = kvNode(tree, children, "target").?;
         const target_name = tree.symbolText(target_node);
@@ -2075,6 +2077,10 @@ test "compile diagnostics: pattern XOR keys XOR expr — any pairing is a confli
     try t.expect(!with_keys.ok());
     try t.expect(with_keys.findDiag(.track_source_conflict) != null);
 
+    // :expr vs :pattern is a COUNT over two declared keys, so the
+    // manifest's `(exclusive-group :cardinality at-most-one …)` owns it —
+    // the group cannot see `(key …)` children, which is why the two
+    // pairings above stay pacer's.
     var with_expr = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius
@@ -2083,7 +2089,7 @@ test "compile diagnostics: pattern XOR keys XOR expr — any pairing is a confli
     , &test_targets);
     defer with_expr.deinit();
     try t.expect(!with_expr.ok());
-    try t.expect(with_expr.findDiag(.track_source_conflict) != null);
+    try t.expect(findCode(&with_expr.validated, .mutually_exclusive_keys_present) != null);
 }
 
 test "compile diagnostics: pattern dry-run — a malformed combinator fails at load with spans" {
@@ -2728,22 +2734,35 @@ test "compile diagnostics: scene-beat/scene-phase are unbound at the top level" 
 
 // --- triggers (plan 02 Phase 1: schema + validation) -----------------
 
-test "compile diagnostics: trigger source shape → trigger_invalid" {
-    // Exactly one of :every (periodic) / :at (explicit hits). Both keys
-    // are schema-OPTIONAL, so neither, both, and a non-positive :every all
-    // surface as a pacer trigger_invalid (with a span), not a bare SJON
-    // missing-key error — one wire-stable code per trigger-shape defect.
-    const cases = [_][:0]const u8{
-        "(transport :bpm 120)\n(trigger :target circle-radius)",
-        "(transport :bpm 120)\n(trigger :target circle-radius :every 2b :at [4b 8b])",
-        "(transport :bpm 120)\n(trigger :target circle-radius :every 0b)",
-    };
-    for (cases) |src| {
-        var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
-        defer r.deinit();
-        try t.expect(!r.ok());
-        try t.expect(r.findDiag(.trigger_invalid) != null);
-    }
+test "compile diagnostics: trigger source COUNT is the schema's, its VALUES are pacer's" {
+    // Exactly one of :every (periodic) / :at (explicit hits) — a count, so
+    // an `(exclusive-group :cardinality exactly-one …)` in the manifest
+    // owns it: neither is `required_one_of_missing`, both is
+    // `mutually_exclusive_keys_present`, each with a span.
+    var none = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(trigger :target circle-radius)
+    , &test_targets);
+    defer none.deinit();
+    try t.expect(!none.ok());
+    try t.expect(findCode(&none.validated, .required_one_of_missing) != null);
+
+    var both = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(trigger :target circle-radius :every 2b :at [4b 8b])
+    , &test_targets);
+    defer both.deinit();
+    try t.expect(!both.ok());
+    try t.expect(findCode(&both.validated, .mutually_exclusive_keys_present) != null);
+
+    // What a group cannot count — the interval's VALUE — stays pacer's.
+    var zero = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(trigger :target circle-radius :every 0b)
+    , &test_targets);
+    defer zero.deinit();
+    try t.expect(!zero.ok());
+    try t.expect(zero.findDiag(.trigger_invalid) != null);
 }
 
 test "compile diagnostics: trigger empty or unsorted :at → trigger_invalid" {

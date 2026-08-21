@@ -289,7 +289,14 @@
     ; Pattern vocabulary (euclid, fastcat, pure, …), checked by the
     ; compile-time dry-run (spans on failure), not by this schema.
     (key :name pattern :type any :optional true :walk-opaque true
-      :description "Pattern queried each frame on the shared tick grid, 1 cycle = 1 bar. At tick T the hap active at T with the latest onset supplies the value; no active hap omits the write. Exclusive with (key …) children and :expr."))
+      :description "Pattern queried each frame on the shared tick grid, 1 cycle = 1 bar. At tick T the hap active at T with the latest onset supplies the value; no active hap omits the write. Exclusive with (key …) children and :expr.")
+    ; at-most-one, not exactly-one: the THIRD source is (key …) children,
+    ; which a group counts nothing of. So keys-vs-:expr, keys-vs-:pattern
+    ; and "no source at all" stay pacer diagnostics (track_source_conflict
+    ; / track_empty); the one pairing a count can see lives here.
+    (exclusive-group :cardinality at-most-one
+      (alt :keys [expr])
+      (alt :keys [pattern])))
 
   (form :name trigger
     :description "An event lane. At each frame it finds the last scheduled event <= the playhead and writes (phase, count, gate, beats-since) lanes truncated to the target's ncomp. The schedule is EITHER periodic (:every, phased by optional :offset) XOR an explicit ascending :at list — both keys are schema-optional so a missing/duplicated source, a non-positive :every, or an empty/unsorted :at surface as a pacer trigger_invalid diagnostic (with a span), not a bare SJON error."
@@ -300,7 +307,14 @@
     (key :name offset :type time-pos :optional true :requires [every]
       :description "Phase of the periodic schedule — event k lands at :offset + k*:every; defaults to 0. That default is the one this manifest cannot declare: a :default is unit-free, and dropping the unit off a time-pos would be silent — so it lives in Compile.zig. Meaningless without :every, hence :requires — an :offset beside an explicit :at is dependent_key_missing, not a silent no-op.")
     (key :name at :type time-pos-list :optional true
-      :description "Explicit event positions, strictly ascending in time. Exclusive with :every."))
+      :description "Explicit event positions, strictly ascending in time. Exclusive with :every.")
+    ; The source COUNT is the schema's: neither is required_one_of_missing,
+    ; both is mutually_exclusive_keys_present. What a count cannot see —
+    ; a non-positive :every, an empty / unsorted / tied :at — stays a pacer
+    ; trigger_invalid.
+    (exclusive-group :cardinality exactly-one
+      (alt :keys [every])
+      (alt :keys [at])))
 
   (form :name control
     :description "A pinned editor widget — pins ARE text. :value is the document authority: written to :target every frame while the control is idle, and bound under :id in every track expression. A live drv_setControl override wins until drv_clearControl returns authority to the document. Control writes land after track writes; consumers apply entries in order, so a pin outranks a track on the same target."
