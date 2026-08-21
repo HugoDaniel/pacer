@@ -16,7 +16,10 @@ flat `TrackTable` → per-frame evaluator → packed `'PACW'` write buffer. Visu
 targets route by name into pngine uniforms (registry 0), audio targets into an
 engine's param registry (registry 1).
 
-The score language (all of it validated with spans by the embedded schema):
+The score language (all of it validated with spans by the embedded schema —
+and documented, form by form, in
+[`docs/score-language.md`](./docs/score-language.md), rendered from that same
+schema):
 keyframe tracks with composable easing (`seq`/`chain` combinators, springs,
 bezier, steps), `:expr` tracks evaluated each frame against a bound time env
 (`t`/`beat`/`bar`/`phase`/…), `:pattern` tracks driven by SJON's pattern
@@ -41,7 +44,8 @@ registries at all.
 | `corpus/` | golden determinism cases — `doc.sjon` + `times.sjon` + generated `expected.sjon` |
 | `npm/pacer/` | the ESM JS glue around `pacer.wasm` (published package) |
 | `examples/` | a browser demo (live editor → canvas + audio) |
-| `tools/` | the diagnostic-coverage audit |
+| `docs/score-language.md` | GENERATED score-language reference (`zig build score-docs`) |
+| `tools/` | the diagnostic-coverage audit and the score-docs renderer |
 
 ## Quickstart
 
@@ -54,8 +58,9 @@ zig build verify   # Zig tests + native golden corpus + node/wasm parity walk
 
 Other verbs: `zig build fuzz` (never-panic harnesses), `zig build
 audit-diagnostics` (every diagnostic code is tested), `zig build corpus --
---update` (regenerate goldens, then review the diff). See
-[`CLAUDE.md`](./CLAUDE.md) for the full conventions.
+--update` (regenerate goldens, then review the diff), `zig build score-docs`
+(re-render the score-language reference). See [`CLAUDE.md`](./CLAUDE.md) for
+the full conventions.
 
 Run the browser demo (serve from the repo root so the paths resolve):
 

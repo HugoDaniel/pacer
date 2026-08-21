@@ -165,9 +165,18 @@ would make every unqualified `(target …)` `ambiguous_form`, which is also why
 | `zig build test` | All inline Zig tests (root.zig forces submodule discovery) |
 | `zig build wasm` | Build `pacer.wasm` (freestanding, ReleaseSmall) |
 | `zig build corpus` | Native golden gate; `-- --update` regenerates |
-| `zig build verify` | test + native corpus + `node --test` (wasm parity) — the whole gate |
+| `zig build verify` | test + native corpus + `node --test` (wasm parity) + score-docs drift — the whole gate |
 | `zig build fuzz` | Never-panic fuzz harnesses (separate from `verify`) |
 | `zig build audit-diagnostics` | Every `Compile.Code` variant is tested by name |
+| `zig build score-docs` | Regenerate `docs/score-language.md` from `schema/pacer.sjon` |
+
+`docs/score-language.md` is GENERATED — `sjon export-schema --target=markdown`
+over the manifest, whose `:description`s are the score language's prose. Never
+hand-edit it; edit the `:description` and rerun the verb. `verify` re-renders
+to a temp path and diffs, so a manifest edit that never reached the page fails
+the gate. The verb builds SJON's CLI from the path dependency's source
+(`src/cli/main.zig`) — SJON wires that binary to its own `cli` step rather
+than to its install step, so it is not reachable as a dependency artifact.
 
 ## npm package
 

@@ -648,6 +648,43 @@ pngine document living here for reference), and how to run the demo.
   --check` clean, npm lint + typecheck clean. No golden moved, no wire
   surface touched.
 
+- 2026-08-21 — **C3 landed: `docs/score-language.md` is generated, and the
+  gate keeps it honest.** `zig build score-docs` renders the page from
+  `schema/pacer.sjon` through `sjon export-schema --target=markdown`, and
+  `zig build verify` re-renders to a temp path and diffs — so a `:description`
+  edit that never reached the page fails the gate. 321 lines: every form with
+  its key table (type, required, default, constraints) and every value kind,
+  all of it prose the manifest already carried. Durable facts: (1) **SJON's
+  CLI is not reachable as a dependency artifact** — its build wires `sjon` to
+  its own `cli` step, not to the install step, so `sjon_dep.artifact("sjon")`
+  panics with "unable to find artifact". pacer builds it from
+  `sjon_dep.path("src/cli/main.zig")` with the same one-module recipe SJON
+  uses; ~7s cold, cached after. (2) **`--output=-` cannot be prepended to.**
+  The CLI's stdout writer is POSITIONAL, so a header line already written to
+  a redirected stdout is overwritten from offset 0 — the render silently
+  replaced it and the sizes matched exactly. `tools/score_docs.sh` renders
+  into a temp DIRECTORY (`--output=DIR` writes `schema.md`) and concatenates
+  the GENERATED banner in front. Worth remembering for any future
+  shell-prepend against a Zig CLI. (3) One script serves both legs —
+  `--update` writes, no argument diffs — so the gate compares exactly what the
+  verb produces, the `audit_diagnostic_coverage.sh` precedent. (4) The
+  exporter narrates its lossy JSON-Schema mappings on stderr as `[info …]`
+  lines (17 of them); the script swallows them unless the render fails, so a
+  clean `verify` stays quiet. Gate: `zig build verify` green (corpus 34/34 +
+  wasm parity, 213 Zig tests, npm 90, score-docs current), `zig build fuzz`
+  green, `audit-diagnostics` 31/31, `zig fmt --check` clean.
+
+**Wave C is closed.** The project file gives scores editor support and is
+tested against the compiler's own vocabulary (C1); the corpus harness has a
+schema, and the split between what SJON refuses and what the runner refuses is
+pinned by test (C2); the score-language reference is generated from the
+manifest and drift-gated by `verify` (C3). One of the plan's stated wins was
+rejected on structure — harness files do not join the LSP's coverage, because
+one project file means one composed vocabulary and both manifests declare a
+`target` form. Two things landed that the plan did not ask for and that were
+needed: the corpus runner has unit tests for the first time (`root.zig`
+discovers it), and `docs/` exists. Next: Wave D (examples).
+
 **Wave B is closed.** All eight phases landed: `:version` dropped (B1),
 `key`/`stage` slot-local (B2), seven `:default`s declared and six read back
 through `EffectiveView` (B3), `:requires [every]` (B4), two exclusive groups

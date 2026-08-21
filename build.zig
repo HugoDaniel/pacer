@@ -170,6 +170,36 @@ pub fn build(b: *std.Build) void {
     const fuzz_step = b.step("fuzz", "Run never-panic fuzz harnesses");
     fuzz_step.dependOn(&run_fuzz.step);
 
+    // `zig build score-docs` — render `docs/score-language.md` from the
+    // manifest's own `:description`s, so the score language's prose has one
+    // source rather than two. SJON's CLI is not exposed as a dependency
+    // artifact (its build wires `sjon` to its own `cli` step, not to the
+    // install step), so pacer builds it from the dependency's source with
+    // the same recipe SJON uses — one module, one import.
+    const sjon_cli = b.addExecutable(.{
+        .name = "sjon",
+        .root_module = b.createModule(.{
+            .root_source_file = sjon_dep.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "sjon", .module = sjon_mod }},
+        }),
+    });
+    const score_docs = b.addSystemCommand(&.{"tools/score_docs.sh"});
+    score_docs.setCwd(b.path("."));
+    score_docs.addArtifactArg(sjon_cli);
+    score_docs.addArg("--update");
+    score_docs.has_side_effects = true;
+    const score_docs_step = b.step("score-docs", "Regenerate docs/score-language.md from schema/pacer.sjon");
+    score_docs_step.dependOn(&score_docs.step);
+
+    // …and the drift leg of the same script, folded into `verify`: a
+    // manifest edit that never reached the page fails the gate.
+    const score_docs_check = b.addSystemCommand(&.{"tools/score_docs.sh"});
+    score_docs_check.setCwd(b.path("."));
+    score_docs_check.addArtifactArg(sjon_cli);
+    verify_step.dependOn(&score_docs_check.step);
+
     // `zig build audit-diagnostics` — assert every `Compile.Code` variant
     // is exercised by name in some `test {}` body (corpus goldens carry
     // numeric codes, so they can't satisfy the check). Keeps a new code
