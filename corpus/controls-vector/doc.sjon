@@ -1,11 +1,13 @@
 ; controls-vector: xy + color control types under the corpus gate. pan
 ; is an xy widget (ncomp 2) with [-1,1] rails on both lanes; tint is a
-; color widget (ncomp 3) with [0,1] rails. Both target a host registry
-; slot, so each document :value writes every idle frame and a live
-; drv_setControl vector override wins until cleared — pinning vector
-; control set/clear across the wasm boundary and the :type / :min / :max
-; echo through 'PACM' for the non-scalar control kinds.
+; color widget (ncomp 3), which carries NO rails — `(control …)` is
+; discriminated on :type and the range keys live in the variant slider
+; and xy select, so `:min` on a colour picker is unknown_key. Both target
+; a host registry slot, so each document :value writes every idle frame
+; and a live drv_setControl vector override wins until cleared — pinning
+; vector control set/clear across the wasm boundary and the :type /
+; :min / :max echo through 'PACM' for the non-scalar control kinds.
 (transport :bpm 120 :meter [4 4])
 
-(control :id pan  :type xy    :target pan-out  :min [-1 -1] :max [1 1]   :value [0.25 0.5])
-(control :id tint :type color :target tint-out :min [0 0 0] :max [1 1 1] :value [0.2 0.4 0.6])
+(control :id pan  :type xy    :target pan-out  :min [-1 -1] :max [1 1] :value [0.25 0.5])
+(control :id tint :type color :target tint-out :value [0.2 0.4 0.6])

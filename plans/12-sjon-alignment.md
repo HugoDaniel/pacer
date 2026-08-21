@@ -516,3 +516,27 @@ pngine document living here for reference), and how to run the demo.
   existing golden moved, every corpus value being far inside f32. Corpus
   32 → 33. Gate: `zig build verify` green, `zig build fuzz` green,
   `audit-diagnostics` 31/31, `zig fmt --check` clean.
+
+- 2026-08-21 — **B7 landed: `(control …)` is discriminated on `:type`.** `:min` /
+  `:max` moved into `(variant :when [slider xy] …)`, so a range on a `color`
+  control is `unknown_key` instead of validating clean and riding into `'PACM'`
+  as noise. Durable facts: (1) **B3 and B7 are load-bearing for each other.** The
+  common spelling `(control :id k :min 0 :max 1 :value …)` — no `:type` at all —
+  keeps working only because `:type` carries `:default slider` and the validator
+  resolves the discriminant from a materialized default (effective axis D). B3
+  before B7 is not an ordering preference; it is the precondition. (2) **An
+  explicit `:type` must precede the range keys.** SJON selects the variant as
+  the walk reaches the discriminant kvpair, so `(control :id k :min 0 :type
+  slider …)` makes `:min` `unknown_key` while the same keys swapped validate
+  (portable-manifest §5.3). Pinned as a characterization test and written into
+  the `:type` key's `:description`; the omitted-`:type` case is unaffected,
+  the default applying form-wide. (3) One golden moved, as the plan predicted:
+  `controls-vector`'s `tint` was a `color` control WITH rails — the exact
+  spelling this phase outlaws. It now carries none and the golden reads
+  `:min none :max none`, which the `'PACM'` control record already had a
+  presence flag for. `pan` (xy, ranged) keeps the ranged half of the case.
+  (4) `control_invalid` keeps both routes — a reserved `:id`, and a `:min`
+  arity that disagrees with `:value` (`diag-controls` exercises the latter
+  through the defaulted-slider path, unchanged). Gate: `zig build verify` green
+  (corpus 33/33 + wasm parity), `zig build fuzz` green, `audit-diagnostics`
+  31/31, `zig fmt --check` clean.

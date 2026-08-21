@@ -2397,6 +2397,66 @@ test "compile builds vector controls and joins their arity" {
     try t.expectEqual(@as(f32, 0), ctl.value[3]); // zero lane
 }
 
+test "control: :min/:max exist for slider and xy, not for color" {
+    // `:min`/`:max` are editor RANGE metadata — meaningful for a slider
+    // and an xy pad, meaningless for a colour picker. `:discriminant type`
+    // plus one `(variant :when [slider xy] …)` says so in the manifest, so
+    // a range on a colour control is `unknown_key` instead of validating
+    // clean and riding into 'PACM' as noise.
+    var color = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(control :id tint-pick :type color :target tint :min [0 0 0] :value [1 0 0])
+    , &test_targets);
+    defer color.deinit();
+    try t.expect(!color.ok());
+    try t.expect(findCode(&color.validated, .unknown_key) != null);
+
+    // Both selected values keep their ranges…
+    var ranged = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(control :id knob :type slider :min 0 :max 1 :value 0.25)
+        \\(control :id pad :type xy :min [-1 -1] :max [1 1] :value [0 0])
+    , &test_targets);
+    defer ranged.deinit();
+    for (ranged.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(ranged.ok());
+
+    // …and so does a control with no :type at all: the discriminant
+    // resolves from the manifest's `:default slider` (effective axis D),
+    // which is why B3's default and this variant have to land together.
+    var defaulted = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(control :id knob :min 0 :max 1 :value 0.25)
+    , &test_targets);
+    defer defaulted.deinit();
+    for (defaulted.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(defaulted.ok());
+    try t.expectEqual(TrackTable.ControlType.slider, defaulted.table.?.controls[0].kind);
+}
+
+test "control: a variant key written BEFORE the discriminant is unknown" {
+    // SJON resolves the variant from the discriminant kvpair as the walk
+    // reaches it, so `:min` ahead of an explicit `:type` is `unknown_key`
+    // — the same text with the keys swapped validates. Characterization:
+    // the rule is SJON's (portable-manifest §5.3), and the manifest's
+    // `:description` tells authors to put `:type` first. Omitting `:type`
+    // entirely is unaffected — the default applies to the whole form.
+    var before = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(control :id knob :min 0 :type slider :value 0.25)
+    , &test_targets);
+    defer before.deinit();
+    try t.expect(!before.ok());
+    try t.expect(findCode(&before.validated, .unknown_key) != null);
+
+    var after = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(control :id knob :type slider :min 0 :value 0.25)
+    , &test_targets);
+    defer after.deinit();
+    try t.expect(after.ok());
+}
+
 test "compile diagnostics: control defects" {
     var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)

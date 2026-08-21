@@ -323,18 +323,28 @@
       (alt :keys [every])
       (alt :keys [at])))
 
-  (form :name control
+  ; Discriminated on :type — the widget decides which keys EXIST. A range
+  ; is meaningful for a slider and an xy pad and meaningless for a colour
+  ; picker, so `:min`/`:max` live in the variant those two values select;
+  ; on a `color` control they are unknown_key rather than 'PACM' noise.
+  ; An omitted :type resolves through its `:default slider` (effective
+  ; axis D), so the common spelling `(control :id k :min 0 :max 1 :value
+  ; …)` keeps working — but an EXPLICIT :type must be written before the
+  ; range keys, since the validator selects the variant as it reaches the
+  ; discriminant kvpair.
+  (form :name control :discriminant type
     :description "A pinned editor widget — pins ARE text. :value is the document authority: written to :target every frame while the control is idle, and bound under :id in every track expression. A live drv_setControl override wins until drv_clearControl returns authority to the document. Control writes land after track writes; consumers apply entries in order, so a pin outranks a track on the same target."
     (key :name id :type control-id
       :description "Binding name in the expression environment.")
     (key :name type :type control-type :optional true :default slider
-      :description "Editor widget hint.")
+      :description "Editor widget hint, and the discriminant: slider and xy carry :min/:max, color does not. Write it BEFORE :min/:max — a variant key ahead of its discriminant is unknown_key.")
     (key :name target :type target-name :optional true
       :description "Optional write target, resolved like a track's. Without one the control only feeds expressions (a virtual knob).")
-    (key :name min :type key-value :optional true
-      :description "Widget range floor — editor metadata; the driver never clamps. Arity must match :value.")
-    (key :name max :type key-value :optional true
-      :description "Widget range ceiling — editor metadata; the driver never clamps. Arity must match :value.")
+    (variant :when [slider xy]
+      (key :name min :type key-value :optional true
+        :description "Widget range floor — editor metadata; the driver never clamps. Arity must match :value.")
+      (key :name max :type key-value :optional true
+        :description "Widget range ceiling — editor metadata; the driver never clamps. Arity must match :value."))
     (key :name value :type key-value
       :description "Document value: scalar or 1-4 component vector. Its byte span rides in drv_meta so the editor can commit a drag back to text."))
 
