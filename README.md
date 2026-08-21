@@ -36,6 +36,7 @@ registries at all.
 |---|---|
 | `src/` | the Zig driver — compile, eval, easing, tick math, WASM entry + boundary blobs |
 | `schema/pacer.sjon` | the score schema (embedded, validates on wasm32-freestanding) |
+| `schema/pacer-corpus.sjon` | the corpus harness schema (embedded; validates every `times.sjon`) |
 | `sjon-project.sjon` | the workspace project file — what `sjon-lsp` reads to give scores editor support |
 | `corpus/` | golden determinism cases — `doc.sjon` + `times.sjon` + generated `expected.sjon` |
 | `npm/pacer/` | the ESM JS glue around `pacer.wasm` (published package) |

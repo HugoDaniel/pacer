@@ -26,10 +26,15 @@
 ; directives rather than composing the project's ambiently, so a pacer
 ; score — which writes none — reports `unknown_form` there; and
 ; `corpus/diag-*` scores are deliberately broken, their diagnostics being
-; the pinned golden. `corpus/*/times.sjon` and `corpus/*/expected.sjon` are
-; left out as harness / golden files in a vocabulary of their own (plan 12
-; phase C2 gives them a schema); `examples/*.score.sjon` is written by
-; phase D1.
+; the pinned golden. `examples/*.score.sjon` is written by phase D1.
+;
+; `corpus/*/times.sjon` has a schema of its own — `schema/pacer-corpus.sjon`,
+; which `src/corpus_runner.zig` preloads — but it is deliberately NOT listed
+; in `:plugins` here. A project file composes every plugin it names into ONE
+; ambient schema, and both manifests declare a `target` form: composing them
+; would make every unqualified `(target …)` `ambiguous_form` in scores AND in
+; harness files. One project, one vocabulary; the harness files trade editor
+; support for the score's.
 (project :name pacer
   :plugins ["./schema/pacer.sjon"]
   :documents ["corpus/*/doc.sjon" "examples/*.score.sjon"])

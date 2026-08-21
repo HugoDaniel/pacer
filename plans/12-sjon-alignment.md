@@ -378,6 +378,15 @@ pngine document living here for reference), and how to run the demo.
   (`variant_key_collision`), so it cannot be both a common key and variant-required.
   `loop_requires_dur` stays a pacer diagnostic.
 - **Hex bit patterns in goldens** — see C2.
+- **Composing the harness vocabulary into `sjon-project.sjon`** (C2's second
+  win). A project file composes every plugin it names into ONE ambient schema,
+  and `schema/pacer.sjon` and `schema/pacer-corpus.sjon` both declare a
+  `target` form — so listing both would make every unqualified `(target …)`
+  `ambiguous_form` in scores and harness files alike. A `corpus/`-local
+  project file inverts the loss (nearest-project-wins would cost `doc.sjon`
+  the score vocabulary). Renaming the harness form or qualifying every head
+  churns 34 hand-authored files plus the JS runner for an editor feature.
+  Harness files keep their schema and forgo LSP coverage.
 - **A `ms` unit on `time-pos`.** The 1.2.0 unit-alphabet widening makes it spellable,
   but `s` already covers it and a new unit is a new conversion path through the one
   documented `mul + floor` seam. Not worth a determinism seam for sugar.
@@ -594,6 +603,50 @@ pngine document living here for reference), and how to run the demo.
   `zig build verify` green (corpus 34/34 + wasm parity, npm 90), `zig build
   fuzz` green, `audit-diagnostics` 31/31, `zig fmt --check` clean; no golden
   moved and no wire surface touched.
+
+- 2026-08-21 — **C2 landed: the corpus harness has a schema.**
+  `schema/pacer-corpus.sjon` is a second embedded manifest (the
+  `pacer_corpus_schema` build import) declaring the six harness forms —
+  `target` / `times` / `set-control` / `clear-control` / `set-bpm` /
+  `register-control` — and `src/corpus_runner.zig` preloads it once for the
+  whole walk through a new `Schema.loadChecked`, then validates every
+  `times.sjon` before reading a field. Durable facts: (1) **The split is
+  shape vs sequence-and-value.** Nine bespoke `corpus: …` lines pointing at
+  nothing became SJON diagnostics carrying spans (`number_above_max`,
+  `number_below_min`, `number_not_integer`, `wrong_underlying`,
+  `missing_required_key`, `vector_length_mismatch`, `unknown_key`,
+  `unknown_form`); what stayed is what a form-at-a-time schema cannot see —
+  document order (targets precede the script), the non-decreasing registry
+  rule the JS runner's regrouping depends on, `Abi.MAX_TARGETS`, "at least
+  one script form", the hex WIDTHS, and an unoccupied `:positional` slot
+  (`:positional <kind>` types a slot but cannot demand it be filled). Two
+  tests pin WHICH layer refuses, by diagnostic code and by the report's
+  absence — so a runner check quietly taking a refusal back fails.
+  (2) **`:default` came with it:** `:registry 0` / `:ncomp 1` are declared in
+  the manifest and read back through `EffectiveView`, B3's rule applied to
+  the harness. `readSmallInt` / `readU32` are gone; `effInt` replaced both.
+  (3) **The plan's second win is REJECTED, and the reason is structural.**
+  Harness files do NOT join C1's LSP coverage: a project file composes every
+  plugin it names into one ambient schema, and both manifests declare a
+  `target` form, so listing the corpus manifest in `sjon-project.sjon` would
+  make every unqualified `(target …)` `ambiguous_form` in scores AND harness
+  files. A `corpus/sjon-project.sjon` does not help — nearest-project-wins
+  would then cost `doc.sjon` the score vocabulary. The escapes (rename the
+  harness form; qualify every head as `pacer-corpus/target`) both churn 34
+  hand-authored files plus the JS runner to buy an editor feature, and were
+  not taken. (4) **The golden forms are not declared either** — `(load …)` /
+  `(meta …)` / `(mtrack …)` / … would be manifest surface for nobody: the
+  runner never parses `expected.sjon` (it compares text byte-equal, which
+  already catches any hand-edit), and without LSP coverage there is no second
+  reader. (5) The runner's own tests now run: `root.zig`'s test block
+  discovers `corpus_runner.zig` (it is its own executable root, outside the
+  `pacer` module), giving the corpus authority unit coverage for the first
+  time. Its `//!` header also lost a wrong example — `:value ["3F000000" "0"
+  "0" "0"]` was never accepted; lanes are 8 hex digits each. Gate:
+  `zig build verify` green (corpus 34/34 native + wasm parity, 213 Zig tests,
+  npm 90), `zig build fuzz` green, `audit-diagnostics` 31/31, `zig fmt
+  --check` clean, npm lint + typecheck clean. No golden moved, no wire
+  surface touched.
 
 **Wave B is closed.** All eight phases landed: `:version` dropped (B1),
 `key`/`stage` slot-local (B2), seven `:default`s declared and six read back

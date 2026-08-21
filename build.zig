@@ -46,6 +46,9 @@ pub fn build(b: *std.Build) void {
     test_mod.addAnonymousImport("pacer_schema", .{
         .root_source_file = b.path("schema/pacer.sjon"),
     });
+    test_mod.addAnonymousImport("pacer_corpus_schema", .{
+        .root_source_file = b.path("schema/pacer-corpus.sjon"),
+    });
     // The repo root, handed to the test binaries as an absolute path so the
     // `sjon-project.sjon` test can load the workspace the way `sjon-lsp`
     // does. A cwd-relative path would depend on where `zig build` was
@@ -110,6 +113,9 @@ pub fn build(b: *std.Build) void {
     });
     corpus_mod.addAnonymousImport("pacer_schema", .{
         .root_source_file = b.path("schema/pacer.sjon"),
+    });
+    corpus_mod.addAnonymousImport("pacer_corpus_schema", .{
+        .root_source_file = b.path("schema/pacer-corpus.sjon"),
     });
     const corpus_runner = b.addExecutable(.{
         .name = "corpus-runner",

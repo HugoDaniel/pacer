@@ -62,14 +62,24 @@ preloaded: sjon.Host.PreloadedSchema,
 /// assert is non-vacuous — `loadSource` on a broken manifest is what the
 /// test below feeds it.
 pub fn load(gpa: Allocator) Error!Schema {
-    var self = try loadSource(gpa, manifest_src);
+    return loadChecked(gpa, manifest_src);
+}
+
+/// `load` over an arbitrary EMBEDDED manifest — same build invariant, same
+/// assert. The corpus runner preloads its harness vocabulary
+/// (`schema/pacer-corpus.sjon`) through here: a second repo-owned manifest,
+/// deliberately NOT composed with the score schema (both declare a `target`
+/// form, and one schema holding two would make every unqualified
+/// `(target …)` `ambiguous_form`).
+pub fn loadChecked(gpa: Allocator, source: [:0]const u8) Error!Schema {
+    var self = try loadSource(gpa, source);
     errdefer self.deinit();
     std.debug.assert(self.preloaded.diagnostics.len == 0);
     return self;
 }
 
-/// `load` without the assert, over an arbitrary manifest source. Exists so
-/// the assert can be shown to bite; production code calls `load`.
+/// `loadChecked` without the assert. Exists so the assert can be shown to
+/// bite; production code calls `load` / `loadChecked`.
 pub fn loadSource(gpa: Allocator, source: [:0]const u8) Error!Schema {
     const sources = [_][:0]const u8{source};
     return .{ .preloaded = try sjon.Host.preloadSchema(gpa, &sources) };

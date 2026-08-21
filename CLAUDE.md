@@ -148,6 +148,16 @@ the `(meta …)` block and the control / tempo directive echoes too. Regenerate
 with `zig build corpus -- --update` and REVIEW the diff — never hand-edit a
 golden. The runner's `//!` header is the format's documentation of record.
 
+`times.sjon` has a schema too — `schema/pacer-corpus.sjon`, a second embedded
+manifest the runner preloads once per walk. It owns the harness's SHAPE (a bad
+`:ncomp`, a missing `:index`, a three-lane `:value`, a bare-number time, an
+unknown head — each an SJON diagnostic with a span); the runner keeps what a
+form-at-a-time schema cannot see: document order, the non-decreasing registry
+rule, the hex WIDTHS, the target ceiling. The two vocabularies are never
+composed into one bundle — both declare a `target` form, so a shared schema
+would make every unqualified `(target …)` `ambiguous_form`, which is also why
+`sjon-project.sjon` lists only the score manifest.
+
 ## Build verbs
 
 | Command | Purpose |

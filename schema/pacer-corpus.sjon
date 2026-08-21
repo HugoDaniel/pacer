@@ -1,0 +1,98 @@
+; pacer corpus harness schema — the vocabulary of `corpus/<case>/times.sjon`.
+;
+; A harness file is NOT a score: it is the flat target join the host would
+; supply, plus an ordered script of driver calls. `src/corpus_runner.zig`
+; embeds this manifest via the `pacer_corpus_schema` build import and
+; PRELOADS it once for the whole walk, exactly as `src/Schema.zig` preloads
+; the score schema — two disjoint vocabularies, two bundles, never composed
+; into one (both declare a `target` form and a shared schema would make
+; every unqualified `(target …)` `ambiguous_form`).
+;
+; What lives here is SHAPE. What stays in the runner is everything a schema
+; cannot see: document order (`(target …)` forms precede the script), the
+; non-decreasing registry rule the JS runner's regrouping depends on, the
+; `Abi.MAX_TARGETS` ceiling, "at least one script form", and the WIDTH of
+; every hex bit pattern — 16 digits for an f64, 8 for an f32. The bit
+; patterns are strings on purpose: `sjon fmt` rewrites a hex *literal* to
+; decimal (LANGUAGE.md §4.2), so `0x3FE0000000000000` in a harness file is
+; one formatter pass from destruction, while a string is inert under it and
+; carries its own width.
+;
+; No `:version`, for the same reason `schema/pacer.sjon` declares none.
+(plugin :name pacer-corpus
+
+  ; ---- value kinds ----
+  (value-kind :name target-name
+    :description "Flat-join target name, positional in (target …) — flat order IS the target_id space."
+    :underlying symbol)
+
+  (value-kind :name f64-bits
+    :description "Raw f64 bit pattern as 16 hex digits, e.g. \"3FE0000000000000\". A string, not a literal: it survives `sjon fmt` and carries its width. The runner checks the width."
+    :underlying string)
+
+  (value-kind :name f32-bits
+    :description "Raw f32 bit pattern as 8 hex digits, e.g. \"3F000000\". Same reasoning as f64-bits."
+    :underlying string)
+
+  (value-kind :name f32-lane4
+    :description "A control value: four f32 bit patterns, one per component lane, so a case can pin NaN, ±inf, or any tie-break without a float parser in the loop."
+    :underlying vector
+    :vector (vector-shape :len 4 :element f32-bits))
+
+  (value-kind :name comp-count
+    :description "Component count of a target: integer 1..4."
+    :underlying number
+    :numeric (numeric-bounds :min 1 :max 4 :integer true)
+    :unit (unit-shape :reject true))
+
+  (value-kind :name registry-index
+    :description "Host registry a target routes to: 0 = visual uniforms, 1 = audio params, …"
+    :underlying number
+    :numeric (numeric-bounds :min 0 :max 255 :integer true)
+    :unit (unit-shape :reject true))
+
+  (value-kind :name control-index
+    :description "Index into the score's (control …) list, as the host addresses it."
+    :underlying number
+    :numeric (numeric-bounds :min 0 :max 4294967295 :integer true)
+    :unit (unit-shape :reject true))
+
+  (value-kind :name target-id-value
+    :description "A target_id in the flat join — the u16 the write buffer carries."
+    :underlying number
+    :numeric (numeric-bounds :min 0 :max 65535 :integer true)
+    :unit (unit-shape :reject true))
+
+  ; ---- the flat target join ----
+  ; These come FIRST in a harness file; flat order is the target_id space
+  ; and registry indices must be non-decreasing (the runner enforces both —
+  ; a schema sees one form at a time, never the sequence).
+  (form :name target
+    :description "One host target in the flat join: (target circle-radius :registry 0 :ncomp 3)."
+    :positional target-name
+    (key :name registry :type registry-index :optional true :default 0)
+    (key :name ncomp :type comp-count :optional true :default 1))
+
+  ; ---- the script, executed in document order ----
+  (form :name times
+    :description "One eval per positional f64-bits string. May repeat and interleave with the other script forms."
+    :positional f64-bits)
+
+  (form :name set-control
+    :description "Hold a live control value, overriding the document until cleared."
+    (key :name index :type control-index)
+    (key :name value :type f32-lane4))
+
+  (form :name clear-control
+    :description "Return a control to document authority."
+    (key :name index :type control-index))
+
+  (form :name set-bpm
+    :description "Live tempo nudge. Carries f64 bits so a case can pin NaN rejection."
+    (key :name bpm :type f64-bits))
+
+  (form :name register-control
+    :description "Lift a dynamic control slot for a target the score does not pin."
+    (key :name target-id :type target-id-value)
+    (key :name registry :type registry-index :optional true :default 0)
+    (key :name ncomp :type comp-count :optional true :default 1)))

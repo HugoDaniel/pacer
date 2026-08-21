@@ -68,6 +68,10 @@ test {
     _ = PatternTrack;
     _ = Writes;
     _ = Abi;
+    // Not part of the `pacer` module — the corpus runner is its own
+    // executable root — but its harness vocabulary earns the same
+    // discovery as everything else.
+    _ = @import("corpus_runner.zig");
 }
 
 test "sjon dependency wiring: tick grid + trig kernels reachable" {
