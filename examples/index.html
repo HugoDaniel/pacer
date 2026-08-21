@@ -15,6 +15,13 @@
   diagnostics appear under the editor with spans in the score's own
   coordinates; the last good table keeps animating until the text is
   clean again.
+
+  The starting text is `starter.score.sjon` next to this file, fetched
+  into the editor rather than inlined here: it is a real score, so the
+  language server reads it through `sjon-project.sjon` and the golden
+  corpus compiles it (case `examples-starter`, whose `doc.sjon` is a
+  symlink to it). `demoscene.score.sjon` is the full-size counterpart —
+  100 bars driving the pngine document `impulsos_camaradas.sjon`.
 -->
 <html lang="en">
 <head>
@@ -38,39 +45,7 @@
 <body>
   <div id="left">
     <h1>pacer <small>— the score is the UI; edit it</small></h1>
-    <textarea id="score" spellcheck="false">(transport :bpm 120 :meter [4 4] :dur 4bar :end loop)
-
-(track :target circle-radius
-  (key :at 0b  :value 30)
-  (key :at 8b  :value 110 :ease out-cubic)
-  (key :at 16b :value 30  :ease smoothstep))
-
-(track :target circle-y
-  (key :at 0b :value 0.72)
-  (key :at 4b :value 0.30
-    :ease (seq (stage :ease out-cubic   :t 0.4  :v 1.15)
-               (stage :ease in-out-quad :t 0.35 :v -0.18)
-               (stage :ease out-quad    :t 0.25 :v 0.03)))
-  (key :at 8b :value 0.72 :ease (spring :damping 0.45 :periods 3)))
-
-(track :target tint
-  (key :at 0b  :value [0.25 0.55 0.95])
-  (key :at 8b  :value [0.95 0.35 0.45] :ease in-out-sine)
-  (key :at 16b :value [0.25 0.55 0.95] :ease in-out-sine))
-
-; an expression instead of keyframes: gentle sway, one cycle per bar.
-; sway-amt is a pinned widget; the pin IS text. Drag the slider below
-; to hold a live override, edit the :value here to commit one.
-(control :id sway-amt :type slider :min 0 :max 0.3 :value 0.12)
-(track :target circle-x
-  :expr (+ 0.5 (* sway-amt (sin (* (tau) bar)))))
-
-; the audio bus: the same score conducts the music's master gain
-; (registry 1). Big circle, loud click.
-(track :target master-gain
-  (key :at 0b  :value 0.05)
-  (key :at 8b  :value 0.40 :ease out-cubic)
-  (key :at 16b :value 0.05 :ease smoothstep))</textarea>
+    <textarea id="score" spellcheck="false" placeholder="loading starter.score.sjon…"></textarea>
     <pre id="diags"></pre>
     <div class="controls">
       <span>sway-amt</span>
@@ -90,55 +65,80 @@
     import { toUniforms } from '../npm/pacer/src/route.js';
     import { sointuHost, paramRegistry, applyParams } from '../npm/pacer/src/audio.js';
 
+    // Every element up front: the load below is `await`ed, so anything a
+    // post-load call touches must already be initialized.
     const scoreEl = document.getElementById('score');
     const diagsEl = document.getElementById('diags');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
+    const swayEl = document.getElementById('sway');
+    const swayClearEl = document.getElementById('sway-clear');
+    const audioToggleEl = document.getElementById('audio-toggle');
+    const clockSourceEl = document.getElementById('clock-source');
 
-    // A stand-in for a Sointu song: a synthesized 4-bar click loop
-    // behind the exact player surface pngine's createAudioPlayer
-    // exposes (currentTime/playing getters, play/pause) — so the clock
-    // rides the real sointuHost adapter. One extension beyond Sointu:
-    // a master gain node the score drives through the audio bus.
+    // A stand-in for a Sointu song: a synthesized click loop behind the
+    // exact player surface pngine's createAudioPlayer exposes
+    // (currentTime/playing getters, play/pause) — so the clock rides the
+    // real sointuHost adapter. Two extensions beyond Sointu: a master
+    // gain node the score drives through the audio bus, and a `render`
+    // seam, because this song's clicks are not a fixed grid — they are
+    // rendered from the score (see renderClickTrack below).
     function clickLoop() {
       let actx = null, gain = null, source = null, buffer = null;
       let startedAt = 0, pauseOffset = 0, playing = false;
       let gainValue = 0.05;
-      const dur = 8; // 4 bars at 120 bpm
+      let dur = 1; // loop length in seconds — the score's, once rendered
 
       function ensure() {
         if (actx) return;
-        actx = new AudioContext();
+        actx = new AudioContext(); // starts suspended until play() resumes it
         gain = actx.createGain();
         gain.gain.value = gainValue;
         gain.connect(actx.destination);
-        const sr = actx.sampleRate;
-        buffer = actx.createBuffer(1, sr * dur, sr);
-        const d = buffer.getChannelData(0);
-        for (let beat = 0; beat < 16; beat++) {
-          const hz = beat % 4 === 0 ? 220 : 440; // accent on bar starts
-          const at = Math.floor(beat * 0.5 * sr);
-          for (let i = 0; i < sr * 0.1; i++) {
-            d[at + i] += Math.sin((2 * Math.PI * hz * i) / sr) * Math.exp(-i / (sr * 0.02)) * 0.8;
-          }
-        }
       }
+
+      function startSource(offset) {
+        source = actx.createBufferSource();
+        source.buffer = buffer;
+        source.loop = true;
+        source.connect(gain);
+        source.start(0, offset % dur);
+      }
+
       return {
         get playing() { return playing; },
         get currentTime() {
           if (!playing || !actx) return pauseOffset;
           return actx.currentTime - startedAt;
         },
-        play() {
-          if (playing) return;
+        // Rebuild the loop from an onset list in seconds. Called on load
+        // and after every clean recompile, so retiming the score retimes
+        // the music — including while it plays: the song position is
+        // preserved and only the buffer under it is swapped.
+        render(onsets, loopSeconds) {
           ensure();
+          dur = loopSeconds;
+          const sr = actx.sampleRate;
+          buffer = actx.createBuffer(1, Math.max(1, Math.round(sr * dur)), sr);
+          const d = buffer.getChannelData(0);
+          for (const { seconds, count } of onsets) {
+            const hz = count % 4 === 0 ? 220 : 440; // accent every 4th event
+            const at = Math.floor(seconds * sr);
+            for (let i = 0; i < sr * 0.1 && at + i < d.length; i++) {
+              d[at + i] += Math.sin((2 * Math.PI * hz * i) / sr) * Math.exp(-i / (sr * 0.02)) * 0.8;
+            }
+          }
+          if (playing) {
+            const at = actx.currentTime - startedAt;
+            source.stop();
+            startSource(at);
+          }
+        },
+        play() {
+          if (playing || !buffer) return;
           if (actx.state === 'suspended') actx.resume();
-          source = actx.createBufferSource();
-          source.buffer = buffer;
-          source.loop = true;
-          source.connect(gain);
           startedAt = actx.currentTime - pauseOffset;
-          source.start(0, pauseOffset % dur);
+          startSource(pauseOffset);
           playing = true;
         },
         pause() {
@@ -158,7 +158,13 @@
     const player = clickLoop();
     const audioHost = {
       ...sointuHost(player), // the clock — Sointu's exact role
-      params: () => [{ name: 'master-gain', min: 0, max: 1, default: 0.05 }],
+      // `click` is an ncomp-4 param so a (trigger …) can target it and
+      // get all four lanes. It is read at RENDER time, not applied live —
+      // setParam ignores it, the way a prerendered host ignores every param.
+      params: () => [
+        { name: 'master-gain', min: 0, max: 1, default: 0.05 },
+        { name: 'click', ncomp: 4 },
+      ],
       setParam: (name, v) => { if (name === 'master-gain') player.setGain(v); },
     };
 
@@ -171,12 +177,78 @@
       { name: 'circle-x' },
       { name: 'circle-y' },
       { name: 'tint', ncomp: 3 },
+      { name: 'flash', ncomp: 4 },  // a trigger's phase/count/gate/beats-since
+      { name: 'spark' },            // a pattern lane — its rests write nothing
     ], paramRegistry(audioHost)];
+
+    // ── the click track is RENDERED FROM THE SCORE ───────────────────
+    // pacer is a pure function of time, so the music can be produced the
+    // same way the picture is: walk t and watch the `click` trigger's
+    // `count` lane. Every step of that count is an event the score
+    // scheduled; where it falls back the transport has wrapped, and that
+    // instant is the loop length in seconds — which the (tempo …) map
+    // makes something other than :dur ÷ bpm. Each boundary is then
+    // bisected, because the driver answers at any f64: precision costs a
+    // handful of extra evals rather than a finer scan.
+    //
+    // None of this is a determinism seam. The tick math stays inside the
+    // driver; this only asks it questions.
+    const SCAN_STEP = 0.002;   // seconds between probes
+    const SCAN_LIMIT = 30;     // give up past here (an :end hold score never wraps)
+
+    // The `count` lane, -1 before the trigger's first event, null if the
+    // score is broken (drv_eval declines) — those two must not be confused.
+    function clickCount(t) {
+      const entries = driver.eval(t);
+      if (!entries) return null;
+      for (const e of entries) {
+        if (e.registry === 1 && e.name === 'click') return e.value[1];
+      }
+      return -1;
+    }
+
+    // The earliest t in (lo, hi] whose count differs from lo's.
+    function bisectOnset(lo, hi) {
+      const before = clickCount(lo);
+      for (let i = 0; i < 32; i++) {
+        const mid = (lo + hi) / 2;
+        if (clickCount(mid) === before) lo = mid;
+        else hi = mid;
+      }
+      return hi;
+    }
+
+    function renderClickTrack() {
+      const onsets = [];
+      let prev = clickCount(0);
+      if (prev === null) return; // broken text — the last good track plays on
+      if (prev >= 0) onsets.push({ seconds: 0, count: prev });
+      for (let t = SCAN_STEP; t < SCAN_LIMIT; t += SCAN_STEP) {
+        const now = clickCount(t);
+        if (now === null) return;
+        if (now === prev) continue;
+        const at = bisectOnset(t - SCAN_STEP, t);
+        if (now < prev) { // the count reset: this is the loop point
+          if (onsets.length > 0) player.render(onsets, at);
+          return;
+        }
+        onsets.push({ seconds: at, count: now });
+        prev = now;
+      }
+      // Fell out of the scan: no `click` trigger, or a score that holds
+      // instead of looping. Leave whatever is already loaded alone.
+    }
+
+    // The editor's starting text is a real score file, not a string
+    // baked into this page: `sjon-project.sjon` gives it language-server
+    // diagnostics and the golden corpus compiles it as `examples-starter`.
+    scoreEl.value = await fetch('./starter.score.sjon').then((r) => r.text());
 
     const wasmBytes = await fetch('../zig-out/bin/pacer.wasm').then((r) => r.arrayBuffer());
     const driver = await Pacer.load(wasmBytes, scoreEl.value, { registries });
     showDiags();
     syncControls();
+    renderClickTrack();
 
     let debounce;
     scoreEl.addEventListener('input', () => {
@@ -184,6 +256,7 @@
       debounce = setTimeout(() => {
         driver.reload(scoreEl.value);
         showDiags();
+        renderClickTrack();
         // A reload tears down held overrides — the text is the
         // authority again, so the slider re-reads it from meta.
         syncControls();
@@ -192,8 +265,6 @@
 
     // The slider is the editor-widget shape in miniature: drag = live
     // drv_setControl override (no recompile), clear = back to the text.
-    const swayEl = document.getElementById('sway');
-    const swayClearEl = document.getElementById('sway-clear');
     swayEl.addEventListener('input', () => driver.setControl('sway-amt', +swayEl.value));
     swayClearEl.addEventListener('click', () => {
       driver.clearControl('sway-amt');
@@ -215,8 +286,6 @@
     // Play/pause hands the master clock to the audio transport and
     // back — the handoff is continuous, so the circle never jumps on
     // pause (starting playback snaps to the song position, by design).
-    const audioToggleEl = document.getElementById('audio-toggle');
-    const clockSourceEl = document.getElementById('clock-source');
     audioToggleEl.addEventListener('click', () => {
       if (player.playing) player.pause();
       else player.play();
@@ -225,6 +294,7 @@
 
     const clock = masterClock(audioHost);
     let uniforms = { 'circle-radius': 30, 'circle-x': 0.5, 'circle-y': 0.72, tint: [0.25, 0.55, 0.95] };
+    let sparkOn = false;
 
     function frame() {
       // eval returns null while the score text is broken — the last
@@ -233,15 +303,47 @@
       if (entries) {
         uniforms = toUniforms(entries, 0);
         applyParams(entries, audioHost);
+        // A pattern REST omits the write rather than writing a zero, so
+        // the signal is PRESENCE — which a name→value map cannot show.
+        // Read it off the entries instead.
+        sparkOn = entries.some((e) => e.registry === 0 && e.name === 'spark');
       }
       clockSourceEl.textContent = player.playing ? '♪ audio clock masters' : 'perf clock';
 
       const { width: w, height: h } = canvas;
       ctx.clearRect(0, 0, w, h);
-      const [r, g, b] = uniforms.tint;
-      ctx.fillStyle = `rgb(${r * 255} ${g * 255} ${b * 255})`;
+      const [r, g, b] = uniforms.tint ?? [0.25, 0.55, 0.95];
+      const rgb = `${r * 255} ${g * 255} ${b * 255}`;
+      const cx = (uniforms['circle-x'] ?? 0.5) * w;
+      const cy = (uniforms['circle-y'] ?? 0.5) * h;
+      const radius = uniforms['circle-radius'] ?? 30;
+
+      // The trigger lane: one ring per event, expanding and fading over
+      // `phase` (0 at the onset, 1 by the next one). No keyframes are
+      // involved — the schedule is the score's, sampled like everything else.
+      const flash = uniforms.flash;
+      if (Array.isArray(flash)) {
+        const decay = (1 - flash[0]) ** 2;
+        ctx.strokeStyle = `rgb(${rgb} / ${decay})`;
+        ctx.lineWidth = 1 + 5 * decay;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius + 10 + flash[0] * 110, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // The pattern lane: three marks that are simply ABSENT on the
+      // tresillo's rests, because those frames produced no write at all.
+      if (sparkOn) {
+        const v = uniforms.spark ?? 1;
+        ctx.fillStyle = `rgb(${rgb} / ${v})`;
+        for (let i = 0; i < 3; i++) {
+          ctx.fillRect(w / 2 - 46 + i * 40, 28, 12, 12);
+        }
+      }
+
+      ctx.fillStyle = `rgb(${rgb})`;
       ctx.beginPath();
-      ctx.arc(uniforms['circle-x'] * w, uniforms['circle-y'] * h, uniforms['circle-radius'], 0, Math.PI * 2);
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.fill();
       requestAnimationFrame(frame);
     }

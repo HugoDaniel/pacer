@@ -26,7 +26,9 @@
 ; directives rather than composing the project's ambiently, so a pacer
 ; score — which writes none — reports `unknown_form` there; and
 ; `corpus/diag-*` scores are deliberately broken, their diagnostics being
-; the pinned golden. `examples/*.score.sjon` is written by phase D1.
+; the pinned golden. The two globs also overlap by design:
+; `corpus/examples-*/doc.sjon` are SYMLINKS to `examples/*.score.sjon`, so
+; the shipped examples are the pinned cases and a walk visits each twice.
 ;
 ; `corpus/*/times.sjon` has a schema of its own — `schema/pacer-corpus.sjon`,
 ; which `src/corpus_runner.zig` preloads — but it is deliberately NOT listed

@@ -1,0 +1,74 @@
+; starter.score.sjon — the score `examples/index.html` loads into its editor.
+;
+; A tour of the language rather than a piece: every track source, every clock
+; feature, one of each easing combinator. The full-size counterpart is
+; `demoscene.score.sjon`, which drives the pngine document next to it.
+;
+; The page's host registries are the property space. Registry 0 is the visual
+; bus — circle-radius, circle-x, circle-y, tint (3), flash (4), spark — and
+; registry 1 is the audio host's declared params, master-gain and click (4).
+; Retarget a track at a name neither registry holds and the diagnostic appears
+; under the editor with a span into this text.
+
+(transport :bpm 120 :meter [4 4] :dur 4bar :end loop)
+
+; the drop pushes: from beat 8 the transport runs at 160, so the loop is 7 s
+; of wall-clock, not 8. The click track is rendered by SAMPLING this score, so
+; retuning this line retunes the music with the picture.
+(tempo :at 8b :bpm 160)
+
+(track :target circle-radius
+  (key :at 0b  :value 30)
+  (key :at 8b  :value 110 :ease out-cubic)
+  (key :at 16b :value 30  :ease smoothstep))
+
+(track :target circle-y
+  (key :at 0b :value 0.72)
+  (key :at 4b :value 0.30
+    :ease (seq (stage :ease out-cubic   :t 0.4  :v 1.15)
+               (stage :ease in-out-quad :t 0.35 :v -0.18)
+               (stage :ease out-quad    :t 0.25 :v 0.03)))
+  (key :at 8b :value 0.72 :ease (spring :damping 0.45 :periods 3)))
+
+(track :target tint
+  (key :at 0b  :value [0.25 0.55 0.95])
+  (key :at 8b  :value [0.95 0.35 0.45] :ease in-out-sine)
+  (key :at 16b :value [0.25 0.55 0.95] :ease in-out-sine))
+
+; an expression instead of keyframes: gentle sway, one cycle per bar.
+; sway-amt is a pinned widget; the pin IS text. Drag the slider below
+; to hold a live override, edit the :value here to commit one.
+(control :id sway-amt :type slider :min 0 :max 0.3 :value 0.12)
+(track :target circle-x
+  :expr (+ 0.5 (* sway-amt (sin (* (tau) bar)))))
+
+; a pattern — the third track source, queried on the bar grid (1 cycle = 1
+; bar). E(3,8) is the tresillo: onsets in eighth-note slots 0, 3 and 6, and
+; the five rests OMIT the write entirely rather than writing a zero. That is
+; what makes the sparks blink out instead of fading.
+(track :target spark :pattern (euclid 3 8 0.9))
+
+; triggers — event lanes, not curves. An ncomp-4 target receives all four
+; lanes (phase, count, gate, beats-since), so the ring reads `phase` to decay
+; and the renderer reads `count` to find the onsets. `click` is the audio
+; bus's copy of the same schedule.
+(trigger :target flash :every 1b)
+(trigger :target click :every 1b)
+
+; a scene — a named window on the transport grid whose children position
+; themselves scene-relative, so the whole act moves by editing :at. `drop`
+; owns the last two bars and takes circle-radius OVER from the score-level
+; track above: both write the lane, the later one in document order wins, and
+; consumers apply entries in order.
+(scene :name drop :at 2bar :dur 2bar
+  (track :target circle-radius
+    (key :at 0b :value 30)
+    (key :at 4b :value 140 :ease (steps :n 8))
+    (key :at 8b :value 30  :ease out-quart)))
+
+; the audio bus: the same score conducts the music's master gain
+; (registry 1). Big circle, loud click.
+(track :target master-gain
+  (key :at 0b  :value 0.05)
+  (key :at 8b  :value 0.40 :ease out-cubic)
+  (key :at 16b :value 0.05 :ease smoothstep))

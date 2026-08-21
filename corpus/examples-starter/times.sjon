@@ -1,0 +1,32 @@
+; examples-starter harness. `doc.sjon` is a SYMLINK to
+; `examples/starter.score.sjon` — the score the browser demo loads into
+; its editor is the score the gate compiles, so the page cannot rot the
+; way the flagship example did.
+;
+; The targets mirror `examples/index.html`'s host registries exactly:
+; registry 0 is the page's 2D-canvas bus, registry 1 the audio host's
+; declared params. A rename on either side fails here.
+(target circle-radius :registry 0)          ; id 0
+(target circle-x :registry 0)               ; id 1
+(target circle-y :registry 0)               ; id 2
+(target tint :registry 0 :ncomp 3)          ; id 3
+(target flash :registry 0 :ncomp 4)         ; id 4 — trigger, all four lanes
+(target spark :registry 0)                  ; id 5 — pattern; rests OMIT the write
+(target master-gain :registry 1)            ; id 6
+(target click :registry 1 :ncomp 4)         ; id 7 — the audio bus's event lane
+
+; The tempo map makes the 4-bar loop 7.0 s of wall-clock, not 8.0:
+; beats 0‥8 at 120 bpm are 4.0 s, beats 8‥16 at 160 bpm are 3.0 s. Every
+; boundary below is exact — 180180 ticks/beat over 360360 then 480480
+; ticks/s, both integer divisions.
+(times
+  "0000000000000000" ; 0.0 s   beat 0    — top: tresillo slot 0, both triggers fire
+  "3FE8000000000000" ; 0.75 s  beat 1.5  — eighth slot 3: the tresillo's second onset
+  "3FF0000000000000" ; 1.0 s   beat 2    — slot 4: a REST — spark's write is omitted
+  "4008000000000000" ; 3.0 s   beat 6    — still bar 2, 120 bpm, no scene yet
+  "4010000000000000" ; 4.0 s   beat 8    — the tempo boundary AND `drop` opening
+  "4016000000000000" ; 5.5 s   beat 12   — scene-relative beat 4: the stepped peak
+  "401A800000000000" ; 6.625 s beat 15   — last beat of the loop, inside the scene
+  "401C000000000000" ; 7.0 s   = :dur    — wraps in SECONDS back to tick 0
+  "401D800000000000" ; 7.375 s beat 1    — loop re-entry at the map's first segment
+)
