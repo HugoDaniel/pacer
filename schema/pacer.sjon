@@ -225,19 +225,19 @@
       :description "Target identifier, joined by name against the host registries.")
     (key :name arity :type target-arity :optional true
       :description "Component count (1..4); must match the host's if the host also provides this name.")
-    (key :name registry :type registry-index :optional true
-      :description "Registry index for a declared-only target; defaults to 0. Ignored for a name the host already provides (host-authoritative)."))
+    (key :name registry :type registry-index :optional true :default 0
+      :description "Registry index for a declared-only target. Ignored for a name the host already provides (host-authoritative)."))
 
   (form :name transport
     :description "Global clock: tempo, meter, duration, end behavior. One per score."
     (key :name bpm :type bpm-value
       :description "Beats per minute.")
-    (key :name meter :type meter-pair :optional true
-      :description "Time signature; defaults to [4 4]. One bar = one tick-grid cycle.")
+    (key :name meter :type meter-pair :optional true :default [4 4]
+      :description "Time signature. One bar = one tick-grid cycle.")
     (key :name dur :type time-pos :optional true
       :description "Score length. Required when :end is loop.")
-    (key :name end :type end-behavior :optional true
-      :description "Playhead behavior past :dur; defaults to hold.")
+    (key :name end :type end-behavior :optional true :default hold
+      :description "Playhead behavior past :dur.")
     (key :name emit :type emit-lanes :optional true
       :description "Reserved time names (beat, bar, phase, bpm, t) broadcast as write lanes, each resolved against the host registries by that exact name. Emitted lanes land before track writes, so an explicit (track …) on the same target overrides an emitted lane; controls still land last."))
 
@@ -276,8 +276,8 @@
         :description "Position on the shared tick grid; beats/bars convert exactly, seconds via one documented mul+floor.")
       (key :name value :type key-value
         :description "Value reached exactly at :at.")
-      (key :name ease :type ease-spec :optional true
-        :description "Easing applied over the segment ENDING at this key; defaults to linear."))
+      (key :name ease :type ease-spec :optional true :default linear
+        :description "Easing applied over the segment ENDING at this key."))
     (key :name target :type target-name
       :description "Resolved at load() against the ordered host registries; unresolved names are a load diagnostic, not a schema error.")
     ; :walk-opaque — the validator never descends into the expression;
@@ -298,7 +298,7 @@
     (key :name every :type time-pos :optional true
       :description "Periodic interval between events; must be > 0 ticks. Exclusive with :at.")
     (key :name offset :type time-pos :optional true
-      :description "Phase of the periodic schedule — event k lands at :offset + k*:every; defaults to 0. Ignored without :every.")
+      :description "Phase of the periodic schedule — event k lands at :offset + k*:every; defaults to 0. That default is the one this manifest cannot declare: a :default is unit-free, and dropping the unit off a time-pos would be silent — so it lives in Compile.zig. Ignored without :every.")
     (key :name at :type time-pos-list :optional true
       :description "Explicit event positions, strictly ascending in time. Exclusive with :every."))
 
@@ -306,8 +306,8 @@
     :description "A pinned editor widget — pins ARE text. :value is the document authority: written to :target every frame while the control is idle, and bound under :id in every track expression. A live drv_setControl override wins until drv_clearControl returns authority to the document. Control writes land after track writes; consumers apply entries in order, so a pin outranks a track on the same target."
     (key :name id :type control-id
       :description "Binding name in the expression environment.")
-    (key :name type :type control-type :optional true
-      :description "Editor widget hint; defaults to slider.")
+    (key :name type :type control-type :optional true :default slider
+      :description "Editor widget hint.")
     (key :name target :type target-name :optional true
       :description "Optional write target, resolved like a track's. Without one the control only feeds expressions (a virtual knob).")
     (key :name min :type key-value :optional true
@@ -338,8 +338,8 @@
   (form :name steps
     :description "Stair-step easing."
     (key :name n :type step-count)
-    (key :name jump :type jump-mode :optional true
-      :description "Defaults to end."))
+    (key :name jump :type jump-mode :optional true :default end
+      :description "Which end of the tread jumps."))
 
   (form :name cubic-bezier
     :description "CSS cubic-bezier(): solved by fixed-count bisection (bit-exact, no epsilon early-exit)."
@@ -348,6 +348,6 @@
   (form :name spring
     :description "Closed-form damped cosine settling exactly on the key value at u=1."
     (key :name damping :type damping-ratio)
-    (key :name periods :type period-count :optional true
-      :description "Defaults to 3."))
+    (key :name periods :type period-count :optional true :default 3
+      :description "Oscillation count over the segment."))
 )

@@ -342,6 +342,7 @@ pub fn compile(gpa: Allocator, schema: *const Schema, source: [:0]const u8, targ
         .tree = &v.result.tree,
         .forest = v.result.data_forest,
         .schema = eval_schema,
+        .view = .init(&v.result.tree, &v.result.materialized_defaults),
         .targets = targets,
         .merged_targets = targets,
         .diags = .empty,
@@ -372,6 +373,14 @@ const Builder = struct {
     /// Core-prepended eval schema (`CompileResult.eval_schema`) —
     /// resolves the expr-func vocabulary for the expr-track dry-run.
     schema: sjon.Schema.Schema,
+    /// Author-value-first view over the tree and SJON's materialized
+    /// `:default` overlay. Every default the score-language declares is
+    /// spelled ONCE, in `schema/pacer.sjon`, and read back through here —
+    /// `effNumber` / `effSymbol` / `effVecNumber` below. The one exception
+    /// is `(key :ease)`, whose default is structural (see `build`'s
+    /// `programs[0]` seed); the overlay is keyed by a GLOBAL form lookup,
+    /// so slot-local forms like `key` never receive entries.
+    view: sjon.EffectiveView.EffectiveView,
     /// Active join for `resolveTarget`: the host list until `buildTargetJoin`
     /// merges the compose-mode `(target …)` declarations, then the merged
     /// list (host indices preserved, declared-only names appended).
@@ -477,6 +486,12 @@ const Builder = struct {
 
         const before_diags = self.diags.items.len;
         // Linear has no params to validate — this cannot fail.
+        // Slot 0 IS `(key :ease)`'s schema default made structural: an
+        // omitted `:ease` refs it instead of interning a program. The
+        // overlay could not supply it anyway — it is keyed by a GLOBAL form
+        // lookup and `key` is slot-local to `(track …)`. The
+        // "omitted-key table matches what the manifest declares" test pins
+        // this slot against the manifest's `:default linear`.
         self.programs[0] = Easing.primitive(.{ .code = .linear }) catch unreachable;
         self.programs_len = 1;
 
@@ -585,11 +600,8 @@ const Builder = struct {
             target = .{ .id = tg.id, .registry = tg.registry };
         }
 
-        var kind: TrackTable.ControlType = .slider;
-        if (kvNode(tree, children, "type")) |type_node| {
-            // Member-set-validated symbol; the names match the enum.
-            kind = std.meta.stringToEnum(TrackTable.ControlType, tree.symbolText(type_node)).?;
-        }
+        // Member-set-validated symbol; the names match the enum.
+        const kind = std.meta.stringToEnum(TrackTable.ControlType, self.effSymbol(idx, "type").?).?;
 
         var bounds_ok = true;
         const min = try self.readBound(children, "min", val.ncomp, &bounds_ok);
@@ -642,12 +654,7 @@ const Builder = struct {
         // guarantees presence + shape here.
         const bpm = readNumber(tree, kvNode(tree, children, "bpm").?).?;
 
-        var beats_per_bar: i64 = 4;
-        if (kvNode(tree, children, "meter")) |meter_node| {
-            const elems = tree.vectorElements(meter_node);
-            std.debug.assert(elems.len == 2); // vector-shape :len 2
-            beats_per_bar = @intFromFloat(readNumber(tree, elems[0]).?);
-        }
+        const beats_per_bar: i64 = @intFromFloat(self.effVecNumber(idx, "meter", 0).?);
         var map = TimeMap.init(bpm, beats_per_bar);
 
         // `(tempo …)` segments attach BEFORE any position conversion, so
@@ -674,11 +681,8 @@ const Builder = struct {
             }
         }
 
-        var end: TrackTable.EndBehavior = .hold;
-        if (kvNode(tree, children, "end")) |end_node| {
-            const text = tree.symbolText(end_node);
-            end = if (std.mem.eql(u8, text, "loop")) .loop else .hold;
-        }
+        // Member-set-validated symbol; the names match the enum.
+        const end = std.meta.stringToEnum(TrackTable.EndBehavior, self.effSymbol(idx, "end").?).?;
         if (end == .loop and dur == null) {
             try self.emit(.loop_requires_dur, tree.spanOf(idx), ":end loop requires :dur", .{});
         }
@@ -1054,11 +1058,18 @@ const Builder = struct {
                 try self.emit(.trigger_invalid, tree.spanOf(en), ":every must be a positive interval", .{});
                 return;
             }
-            // :offset defaults to 0; the scene start folds in. A top-level
-            // offset never overflows (offset is 0 and the local tick is a
-            // valid grid position), exactly like buildKey's scene fold — so
-            // the overflow below is reachable only with :offset present, and
-            // the span points at that value.
+            // :offset's zero is the ONE default the manifest cannot carry
+            // (every other one is `:default` there, read through
+            // `effNumber`/`effSymbol`): `Plugin.KeySpec.Default` has a
+            // `number: f64` variant and no unit variant, so a `:default 0b`
+            // on a `time-pos` key would silently drop its unit. Zero ticks
+            // is unit-free and exact, so it lives here instead.
+            //
+            // The scene start folds in. A top-level offset never overflows
+            // (offset is 0 and the local tick is a valid grid position),
+            // exactly like buildKey's scene fold — so the overflow below is
+            // reachable only with :offset present, and the span points at
+            // that value.
             var offset_local: TrackTable.Tick = 0;
             var offset_span = tree.spanOf(idx);
             if (kvNode(tree, children, "offset")) |on| {
@@ -1251,7 +1262,7 @@ const Builder = struct {
             return null;
         }
 
-        var ease_ref: u16 = 0; // linear default
+        var ease_ref: u16 = 0; // programs[0] — the manifest's `:default linear`
         if (kvNode(tree, children, "ease")) |ease_node| {
             ease_ref = try self.buildEase(ease_node);
         }
@@ -1294,6 +1305,56 @@ const Builder = struct {
         return converted catch {
             try self.emit(.tick_overflow, self.tree.spanOf(node), "position overflows the tick grid", .{});
             return null;
+        };
+    }
+
+    // ---- effective values (author kvpair, else the schema's :default) ----
+
+    /// The effective `:key` on `form` as a number. The author's literal
+    /// when written, else the manifest's `:default` — never a constant
+    /// restated here. Null only when the key is absent from both, which
+    /// for a defaulted key the validator has already ruled out.
+    fn effNumber(self: *const Builder, form: NodeIndex, key: []const u8) ?f64 {
+        const ev = self.view.getEffectiveValue(form, key) orelse return null;
+        return switch (ev) {
+            .author => |node| readNumber(self.tree, node),
+            .default => |entry| switch (entry.value) {
+                .number => |x| x,
+                else => null,
+            },
+        };
+    }
+
+    /// The effective `:key` on `form` as a symbol name. Member-set typed
+    /// in every current use, so callers map the text to their enum.
+    /// (The overlay normalizes a `:default` symbol to `Expr.Value.keyword`
+    /// — `MaterializedDefaults.literalToValue`'s documented rule.)
+    fn effSymbol(self: *const Builder, form: NodeIndex, key: []const u8) ?[]const u8 {
+        const ev = self.view.getEffectiveValue(form, key) orelse return null;
+        return switch (ev) {
+            .author => |node| self.tree.symbolText(node),
+            .default => |entry| switch (entry.value) {
+                .keyword => |k| k,
+                .string => |str| str,
+                else => null,
+            },
+        };
+    }
+
+    /// Component `i` of the effective vector-valued `:key` on `form`.
+    /// Element count is manifest-guaranteed on both arms (`vector-shape`
+    /// on the author's, the loader's literal type-check on the default's).
+    fn effVecNumber(self: *const Builder, form: NodeIndex, key: []const u8, i: usize) ?f64 {
+        const ev = self.view.getEffectiveValue(form, key) orelse return null;
+        return switch (ev) {
+            .author => |node| readNumber(self.tree, self.tree.vectorElements(node)[i]),
+            .default => |entry| switch (entry.value) {
+                .vector => |elems| switch (elems[i]) {
+                    .number => |x| x,
+                    else => null,
+                },
+                else => null,
+            },
         };
     }
 
@@ -1381,10 +1442,10 @@ const Builder = struct {
         }
         if (std.mem.eql(u8, head, "steps")) {
             const n_val = readNumber(tree, kvNode(tree, hdr.children, "n").?).?;
-            var code: Easing.Op = .steps_end;
-            if (kvNode(tree, hdr.children, "jump")) |jn| {
-                if (std.mem.eql(u8, tree.symbolText(jn), "start")) code = .steps_start;
-            }
+            const code: Easing.Op = if (std.mem.eql(u8, self.effSymbol(node, "jump").?, "start"))
+                .steps_start
+            else
+                .steps_end;
             return self.pushOp(buf, len, .{ .code = code, .params = .{ n_val, 0, 0, 0 } }, span);
         }
         if (std.mem.eql(u8, head, "cubic-bezier")) {
@@ -1399,7 +1460,7 @@ const Builder = struct {
         }
         std.debug.assert(std.mem.eql(u8, head, "spring")); // head-set closed
         const damping = readNumber(tree, kvNode(tree, hdr.children, "damping").?).?;
-        const periods = if (kvNode(tree, hdr.children, "periods")) |pn| readNumber(tree, pn).? else 3;
+        const periods = self.effNumber(node, "periods").?;
         return self.pushOp(buf, len, .{ .code = .spring, .params = .{ damping, periods, 0, 0 } }, span);
     }
 
@@ -1480,8 +1541,7 @@ const Builder = struct {
             const name = tree.symbolText(name_node.?);
             // :arity / :registry are manifest-bounded integers (1..4 / 0..255).
             const arity: u8 = @intFromFloat(readNumber(tree, arity_node.?).?);
-            var registry: u8 = 0;
-            if (kvNode(tree, children, "registry")) |rn| registry = @intFromFloat(readNumber(tree, rn).?);
+            const registry: u8 = @intFromFloat(self.effNumber(idx, "registry").?);
 
             // A name declared twice in the score is a defect regardless of
             // whether the host also provides it.
@@ -3107,4 +3167,115 @@ test "tempo-map: a (tempo …) with no (transport …) is still transport_missin
     defer r.deinit();
     try t.expect(!r.ok());
     try t.expect(r.findDiag(.transport_missing) != null);
+}
+
+// ---------------------------------------------------------------------------
+// Tests — the schema's `:default` is the source, the compiler is the mirror
+// ---------------------------------------------------------------------------
+
+/// The `KeySpec` the manifest declares for `<form>`'s `:<key>`, searching
+/// slot-local forms too (`key` lives inside `track`, `stage` inside `seq`).
+fn schemaKey(form_name: []const u8, key_name: []const u8) ?sjon.Plugin.KeySpec {
+    return findSchemaKey(test_support.schema().preloaded.plugins[0].forms, form_name, key_name);
+}
+
+fn findSchemaKey(forms: []const sjon.Plugin.FormSpec, form_name: []const u8, key_name: []const u8) ?sjon.Plugin.KeySpec {
+    for (forms) |f| {
+        if (std.mem.eql(u8, f.name, form_name)) {
+            for (f.keys) |k| {
+                if (std.mem.eql(u8, k.name, key_name)) return k;
+            }
+        }
+        if (findSchemaKey(f.local_forms, form_name, key_name)) |k| return k;
+    }
+    return null;
+}
+
+/// Every default this schema declares, so a new one cannot be added
+/// without deciding where the compiler reads it.
+const declared_defaults = [_]struct { form: []const u8, key: []const u8 }{
+    .{ .form = "transport", .key = "meter" },
+    .{ .form = "transport", .key = "end" },
+    .{ .form = "control", .key = "type" },
+    .{ .form = "target", .key = "registry" },
+    .{ .form = "steps", .key = "jump" },
+    .{ .form = "spring", .key = "periods" },
+    .{ .form = "key", .key = "ease" },
+};
+
+test "defaults: every one is declared in the manifest, not only in prose" {
+    for (declared_defaults) |d| {
+        const k = schemaKey(d.form, d.key) orelse {
+            std.debug.print("no such schema key: ({s} :{s})\n", .{ d.form, d.key });
+            return error.TestUnexpectedResult;
+        };
+        if (k.default == null) {
+            std.debug.print("({s} :{s}) declares no :default\n", .{ d.form, d.key });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "defaults: the omitted-key table matches what the manifest declares" {
+    // The drift gate the two-source arrangement never had: compile a score
+    // that omits every defaulted key, then compare the resulting table
+    // against the schema's OWN declared default — not against a literal
+    // repeated here.
+    var r = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(target :name glow :arity 1)
+        \\(control :id knob :value 0.5)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0)
+        \\  (key :at 1b :value 1))
+        \\(track :target tint
+        \\  (key :at 0b :value [0 0 0])
+        \\  (key :at 1b :value [1 1 1] :ease (chain (steps :n 4) (spring :damping 1))))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const table = r.table.?;
+
+    // (transport :meter [4 4]) — the bar length.
+    const meter = schemaKey("transport", "meter").?.default.?;
+    try t.expectEqual(meter.vector[0].number, @as(f64, @floatFromInt(table.transport.map.beats_per_bar)));
+
+    // (transport :end hold)
+    const end = schemaKey("transport", "end").?.default.?;
+    try t.expectEqualStrings(end.symbol, @tagName(table.transport.end));
+
+    // (control :type slider)
+    const ctype = schemaKey("control", "type").?.default.?;
+    try t.expectEqualStrings(ctype.symbol, @tagName(table.controls[0].kind));
+
+    // (target :registry 0) — `glow` is declared-only, so its registry is
+    // the declaration's, appended past the three host entries.
+    const reg = schemaKey("target", "registry").?.default.?;
+    try t.expectEqualStrings("glow", r.targets[3].name);
+    try t.expectEqual(reg.number, @as(f64, @floatFromInt(r.targets[3].registry)));
+
+    // (steps :jump end) and (spring :periods 3) — read back off the
+    // compiled program of the last key's chain.
+    const run = table.tracks[1].source.keys;
+    const chain = table.programs[table.keys[run.start + 1].ease_ref];
+    const jump = schemaKey("steps", "jump").?.default.?;
+    var jump_buf: [32]u8 = undefined;
+    try t.expectEqualStrings(
+        try std.fmt.bufPrint(&jump_buf, "steps_{s}", .{jump.symbol}),
+        @tagName(chain.stages[0].ops[0].code),
+    );
+    // A spring's compiled params are (lambda, omega); omega = 2π × periods.
+    const periods = schemaKey("spring", "periods").?.default.?;
+    try t.expectEqual(Easing.Op.spring, chain.stages[0].ops[1].code);
+    try t.expectEqual(
+        @as(f32, @floatCast(2.0 * std.math.pi * periods.number)),
+        chain.stages[0].ops[1].params[1],
+    );
+
+    // (key :ease linear) — `programs[0]` IS the schema's default made
+    // structural, and an omitted `:ease` refs it.
+    const ease = schemaKey("key", "ease").?.default.?;
+    try t.expectEqual(@as(u16, 0), table.keys[0].ease_ref);
+    try t.expectEqual(Easing.op_names.get(ease.symbol).?, table.programs[0].stages[0].ops[0].code);
 }

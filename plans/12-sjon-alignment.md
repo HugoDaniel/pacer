@@ -435,3 +435,30 @@ pngine document living here for reference), and how to run the demo.
   golden changed (29 → 30 cases). Gate: `zig build verify` green (corpus 30/30
   native + wasm parity, npm 86), `zig build fuzz` green, `audit-diagnostics`
   31/31, `zig fmt --check` clean.
+
+- 2026-08-21 — **B3 landed: seven `:default`s in the manifest, six read back through
+  `EffectiveView`.** `transport :meter`/`:end`, `control :type`, `target :registry`,
+  `steps :jump`, `spring :periods` and `key :ease` are declared in
+  `schema/pacer.sjon`; the prose "defaults to X" in their `:description`s is gone
+  (the declaration says it). `Builder` gained a `view: sjon.EffectiveView` plus
+  three typed readers — `effNumber` / `effSymbol` / `effVecNumber` — and every
+  `if (kvNode(…)) |n| … else <constant>` fallback for those six is now a single
+  `self.effX(form, key).?`. Durable facts: (1) **`key :ease` cannot come through
+  the overlay.** `MaterializedDefaults.materializeForForm` resolves a form via
+  `schema.lookupForm(head, ns)` — a GLOBAL lookup — so B2's slot-local `key` /
+  `stage` never receive overlay entries. `:ease`'s default is structural instead:
+  `programs[0]` IS linear (`TrackTable`'s own invariant), an omitted `:ease` refs
+  slot 0, and the drift test pins that slot against the manifest's
+  `:default linear`. Nested GLOBAL forms are fine — `steps`/`spring` sit under an
+  `:ease` kvpair and the materializer's worklist descends kvpair values. (2) The
+  compiled `(spring …)` params are `(lambda, omega)`, not `(damping, periods)` —
+  `omega = 2π × periods`, so the drift test compares through that formula.
+  (3) `trigger :offset` stays hand-coded, as planned: `KeySpec.Default` has a
+  `number: f64` variant and no unit variant, so `:default 0b` would silently drop
+  its unit. Both the manifest `:description` and the `Compile.zig` site now say so.
+  (4) The drift gate reads the manifest at test time (`schemaKey` walks
+  `plugins[0].forms` and their `local_forms`) and compares the compiled table
+  against the schema's own default — never against a literal restated in the test.
+  Goldens unchanged, exactly as predicted: same values by construction. Gate:
+  `zig build verify` green (corpus 30/30 + wasm parity, npm 86), `zig build fuzz`
+  green, `audit-diagnostics` 31/31, `zig fmt --check` clean.
