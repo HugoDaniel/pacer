@@ -495,3 +495,24 @@ pngine document living here for reference), and how to run the demo.
   (`mutually_exclusive_keys_present`, twice) and 29 (`required_one_of_missing`).
   No existing golden moved; corpus 31 → 32. Gate: `zig build verify` green,
   `zig build fuzz` green, `audit-diagnostics` 31/31, `zig fmt --check` clean.
+
+- 2026-08-21 — **B6 landed: `(repr-shape :type f32)` on the kinds that narrow.**
+  `plain-number` and `stage-weight` now declare the machine type the emitter
+  encodes them as, so a literal that does not FIT is refused at compile instead
+  of reaching the write buffer as ±inf (`:value 1e39` used to compile clean).
+  Durable facts: (1) **The code depends on the slot, and that is SJON's rule.** A
+  hand-written union names its alternatives and forwards no branch's private
+  cause (portable-manifest §4.9), so every slot typed by the `key-value` UNION —
+  `(key :value)`, `(control :value)`, `:min`/`:max` — reports
+  `union_no_branch_matched` (code 38), while slots typed by a bare kind —
+  `(stage :t)`, `(stage :v)`, a `(cubic-bezier :p)` element — report
+  `repr_out_of_range` (code 114). Both refuse, both carry a span on the literal;
+  only the message differs. Pinning both shapes in one golden
+  (`diag-repr-f32`) is what makes that visible. (2) Range-only is the right
+  strictness and is now written into `CLAUDE.md`'s determinism-seam bullet:
+  precision loss (16777217 losing its low bit) stays the emitter's accepted
+  step; magnitude does not. (3) The largest f32 (3.4028234663852886e38) still
+  compiles — the bound is the type's, not a hand-picked ceiling — and no
+  existing golden moved, every corpus value being far inside f32. Corpus
+  32 → 33. Gate: `zig build verify` green, `zig build fuzz` green,
+  `audit-diagnostics` 31/31, `zig fmt --check` clean.

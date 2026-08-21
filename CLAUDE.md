@@ -103,7 +103,10 @@ with a corpus regen and a diff review:
 - **Pinned `sjon.trig` kernels** — sin / cos / exp / pow route through SJON's
   deterministic kernels, not libm.
 - **Single f64→f32 truncation at emission** — evaluation is f64; the one
-  narrowing to f32 happens at write-buffer encode.
+  narrowing to f32 happens at write-buffer encode. The value must FIT: the
+  narrowing kinds carry `(repr-shape :type f32)` in `schema/pacer.sjon`, so an
+  out-of-range literal is refused at compile with a span rather than encoded as
+  ±inf. Range-only — precision loss is the accepted step, magnitude is not.
 - **Structural landing** — key ticks select segments structurally, so a key
   value lands bit-exactly on its authored f32.
 - **NaN rejection at the expr boundary** — a non-finite expr result omits that

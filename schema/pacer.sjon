@@ -66,10 +66,16 @@
     :vector (vector-shape :element symbol))
 
   ; ---- key values ----
+  ; :repr — the ONE place the f64→f32 truncation at emission is checked.
+  ; Range-only, which is exactly right: precision loss is the emitter's
+  ; accepted step (the determinism seam), but a value that does not FIT
+  ; would reach the write buffer as ±inf. A breach is repr_out_of_range
+  ; with a span, at compile, before the narrowing.
   (value-kind :name plain-number
-    :description "Unitless number."
+    :description "Unitless number. Narrowed to f32 at write-buffer encode, so it must fit that range."
     :underlying number
-    :unit (unit-shape :reject true))
+    :unit (unit-shape :reject true)
+    :repr (repr-shape :type f32))
   (value-kind :name vec-value
     :description "Vector of 1-4 numbers (vec2/vec3/vec4 targets)."
     :underlying vector
@@ -167,10 +173,11 @@
     :union (union-shape :alternatives [ease-name ease-form]))
 
   (value-kind :name stage-weight
-    :description "Relative weight (normalized once at compile, fixed op order)."
+    :description "Relative weight (normalized once at compile, fixed op order). Lands in the f32 program table."
     :underlying number
     :numeric (numeric-bounds :min 0)
-    :unit (unit-shape :reject true))
+    :unit (unit-shape :reject true)
+    :repr (repr-shape :type f32))
   (value-kind :name step-count
     :description "Stair-step count."
     :underlying number

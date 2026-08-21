@@ -1,0 +1,12 @@
+; Evaluation is f64 and the ONE narrowing to f32 happens at write-buffer
+; encode — so a value that does not fit f32 would land as ±inf. The
+; `(repr-shape :type f32)` on the kinds that narrow refuses it at
+; compile: `:value` is typed by the `key-value` UNION, so its record is
+; union_no_branch_matched (a union forwards no branch's private cause);
+; `:t` is typed by the bare `stage-weight`, so its record is
+; repr_out_of_range. Both carry a span on the offending literal.
+(transport :bpm 120)
+
+(track :target radius
+  (key :at 0b :value 1e39)
+  (key :at 1b :value 1 :ease (seq (stage :ease linear :t 1e39 :v 1))))

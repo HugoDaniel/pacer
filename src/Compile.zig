@@ -2035,6 +2035,56 @@ test "compile accepts expr tracks: node recorded, keys table untouched" {
     try t.expectEqual(@as(u8, 3), table.tracks[1].ncomp);
 }
 
+test "values that narrow to f32 must FIT — 1e39 is refused, not encoded as +inf" {
+    // The determinism seam is "a single f64→f32 truncation at emission",
+    // and nothing checked that the f64 *fits*: `:value 1e39` used to
+    // compile clean and reach the write buffer as +inf. `(repr-shape :type
+    // f32)` on `plain-number` / `stage-weight` refuses it at compile, with
+    // a span. Range-only by design — precision loss (16777217 losing its
+    // low bit) stays the emitter's accepted step.
+    //
+    // The CODE differs by slot, and that is SJON's rule, not a pacer
+    // choice: a hand-written union names its alternatives and forwards no
+    // branch's private cause (portable-manifest §4.9). So every slot typed
+    // `key-value` — a union of scalar and vector — reports
+    // `union_no_branch_matched`, and only the slots typed by a bare kind
+    // report `repr_out_of_range`. Both refuse; both carry a span.
+    const cases = [_]struct { src: [:0]const u8, code: Ast.Diagnostic.Code }{
+        // …a scalar key value (union slot)…
+        .{ .src = "(transport :bpm 120)\n(track :target circle-radius (key :at 0b :value 1e39))", .code = .union_no_branch_matched },
+        // …a vector component (union slot, vector arm)…
+        .{ .src = "(transport :bpm 120)\n(track :target tint (key :at 0b :value [0 -1e39 0]))", .code = .union_no_branch_matched },
+        // …a control's document value (union slot)…
+        .{ .src = "(transport :bpm 120)\n(control :id knob :value 1e39)", .code = .union_no_branch_matched },
+        // …a seq stage's time weight and value span (bare kinds)…
+        .{ .src = "(transport :bpm 120)\n(track :target circle-radius\n  (key :at 0b :value 0)\n  (key :at 1b :value 1 :ease (seq (stage :ease linear :t 1e39 :v 1))))", .code = .repr_out_of_range },
+        .{ .src = "(transport :bpm 120)\n(track :target circle-radius\n  (key :at 0b :value 0)\n  (key :at 1b :value 1 :ease (seq (stage :ease linear :t 1 :v 1e39))))", .code = .repr_out_of_range },
+        // …and a bezier control point (vector element, bare kind).
+        .{ .src = "(transport :bpm 120)\n(track :target circle-radius\n  (key :at 0b :value 0)\n  (key :at 1b :value 1 :ease (cubic-bezier :p [0.4 1e39 0.2 1])))", .code = .repr_out_of_range },
+    };
+    for (cases) |c| {
+        var r = try compile(t.allocator, test_support.schema(), c.src, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        const d = findCode(&r.validated, c.code) orelse {
+            std.debug.print("expected {s}; got:\n", .{@tagName(c.code)});
+            for (r.validated.result.diagnostics) |got| std.debug.print("  {s}: {s}\n", .{ @tagName(got.code), got.message });
+            return error.TestUnexpectedResult;
+        };
+        // The span lands on the offending literal, in score coordinates.
+        try t.expect(std.mem.indexOf(u8, c.src[d.span.start..d.span.end], "1e39") != null);
+    }
+
+    // The largest f32 still compiles — the bound is the type's, not a
+    // hand-picked ceiling.
+    var edge = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(track :target circle-radius (key :at 0b :value 3.4028234663852886e38))
+    , &test_targets);
+    defer edge.deinit();
+    try t.expect(edge.ok());
+}
+
 test "compile diagnostics: keys XOR expr — both is a conflict" {
     var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
