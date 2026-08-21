@@ -540,3 +540,32 @@ pngine document living here for reference), and how to run the demo.
   through the defaulted-slider path, unchanged). Gate: `zig build verify` green
   (corpus 33/33 + wasm parity), `zig build fuzz` green, `audit-diagnostics`
   31/31, `zig fmt --check` clean.
+
+- 2026-08-21 — **B8 landed: hex literals pinned, no code touched.** `0x` opens an
+  integer literal as of SJON 1.2.0, and pacer inherits the meaning for free —
+  `readNumber` already accepted the integer tags, so nothing in pacer decides
+  this. That is exactly why it needed a pin: an inherited meaning can regress
+  with a dependency bump and no pacer diff. New golden `hex-literals` runs a hex
+  value through every slot that takes a number — a key `:value` (0x10 → 0x20),
+  a control's `:value` (0xFF → `437F0000` = 255), an easing parameter
+  (`:n 0x4`), and inside an `:expr` (`(* 0xFF beat)`) — and a unit test asserts
+  the same four in one compile. Durable facts: (1) `CLAUDE.md` gained a seam
+  bullet saying pacer parses no literals: number syntax is the lexer's, so a
+  meaning change there is a score-language change that arrives with no pacer
+  code. (2) The case's own header warns that `sjon fmt` rewrites hex to decimal
+  (LANGUAGE §4.2) — a formatter pass over `doc.sjon` would move spans and
+  regenerate the golden without changing a single value. That is the same
+  hazard C2 cites for keeping golden bit patterns as strings. Corpus 33 → 34.
+  Gate: `zig build verify` green, `zig build fuzz` green, `zig fmt --check`
+  clean.
+
+**Wave B is closed.** All eight phases landed: `:version` dropped (B1),
+`key`/`stage` slot-local (B2), seven `:default`s declared and six read back
+through `EffectiveView` (B3), `:requires [every]` (B4), two exclusive groups
+with their subsumed pacer branches deleted (B5), `(repr-shape :type f32)` (B6),
+`(control …)` discriminated on `:type` (B7), and the hex-literal pin (B8).
+Corpus 29 → 34 cases; `audit-diagnostics` 31/31 throughout — no `Compile.Code`
+variant lost its last reachable route, and no wire surface moved
+(`drv_abiVersion` still 1). One golden changed in the whole wave
+(`controls-vector`, whose `color` control carried the rails B7 outlaws); the
+other four regens are new cases. Next: Wave C (tooling / DX).

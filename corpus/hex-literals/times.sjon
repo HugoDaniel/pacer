@@ -1,0 +1,8 @@
+; One bar = 2.0 s at 120 bpm 4/4, so beat = t (seconds) × 2.
+(target radius :registry 0)   ; id 0 — keys 0x10 → 0x20 over 4 beats, 4 stairs
+(target gain   :registry 0)   ; id 1 — 255 × beat
+(times
+  "0000000000000000" ; 0.0 s — beat 0: radius 16,  gain 0
+  "3FF0000000000000" ; 1.0 s — beat 2: mid-ramp,   gain 510
+  "4000000000000000" ; 2.0 s — beat 4: radius 32,  gain 1020
+)

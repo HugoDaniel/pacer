@@ -1,0 +1,19 @@
+; hex-literals: `0x` opens an integer literal as of SJON 1.2.0, and pacer
+; inherits the MEANING for free — no pacer code decides it. Before that,
+; `(* 0xFF t)` parsed `0xFF` as something other than 255 and the track
+; evaluated silently wrong; this case pins the inheritance so it cannot
+; regress unnoticed. Hex is legal anywhere a number is: a key value, a
+; control's :value, an easing parameter, and inside an :expr.
+;
+; NOTE: `sjon fmt` rewrites a hex literal to decimal (LANGUAGE §4.2), so
+; a formatter pass over this document would change its bytes (spans move,
+; the golden regenerates) but never its values.
+(transport :bpm 120 :meter [4 4])
+
+(control :id mask :value 0xFF)
+
+(track :target radius
+  (key :at 0b :value 0x10)
+  (key :at 4b :value 0x20 :ease (steps :n 0x4)))
+
+(track :target gain :expr (* 0xFF beat))

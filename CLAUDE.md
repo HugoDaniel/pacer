@@ -112,6 +112,10 @@ with a corpus regen and a diff review:
 - **NaN rejection at the expr boundary** — a non-finite expr result omits that
   track's write for the frame (counted in `drv_exprFailures`); a NaN never
   reaches the buffer.
+- **Number syntax is SJON's** — pacer parses no literals; the lexer owns them,
+  `0x` hex integers included (SJON 1.2.0). A meaning change there is a meaning
+  change in the score language, inherited without a line of pacer code, so it
+  rides a corpus pin (`hex-literals`) like every other value path.
 
 ## The CompileResult borrow-whole rule
 

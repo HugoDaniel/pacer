@@ -2035,6 +2035,31 @@ test "compile accepts expr tracks: node recorded, keys table untouched" {
     try t.expectEqual(@as(u8, 3), table.tracks[1].ncomp);
 }
 
+test "hex literals reach the score language — 0xFF is 255, everywhere a number is" {
+    // SJON 1.2.0 opened `0x` as an integer literal, and pacer inherits the
+    // MEANING for free: `(* 0xFF x)` used to evaluate to 0 (an unknown
+    // symbol), silently. Nothing in pacer decides this — `readNumber`
+    // already accepted the integer tags — so the point of the test is that
+    // the inheritance cannot regress unnoticed.
+    var r = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(control :id mask :value 0xFF)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0x10)
+        \\  (key :at 1b :value 1 :ease (steps :n 0x8)))
+        \\(track :target cutoff :expr (* 0xFF 2))
+    , &test_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    const table = r.table.?;
+    try t.expectEqual(@as(f32, 255), table.controls[0].value[0]);
+    try t.expectEqual(@as(f32, 16), table.keys[0].value[0]);
+    // (steps :n 0x8) — the stair count rides the program's first param.
+    const stairs = table.programs[table.keys[1].ease_ref];
+    try t.expectEqual(@as(f32, 8), stairs.stages[0].ops[0].params[0]);
+}
+
 test "values that narrow to f32 must FIT — 1e39 is refused, not encoded as +inf" {
     // The determinism seam is "a single f64→f32 truncation at emission",
     // and nothing checked that the f64 *fits*: `:value 1e39` used to
