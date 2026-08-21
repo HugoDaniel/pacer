@@ -208,6 +208,20 @@ join natively. Wave 4 is closed (hardening P1–P5, the 1.0 review, and the
 tag prereqs — see `plans/00-strategy.md`); what remains before 1.0 are release
 calls, not open plan items: publishing 0.2.0 and cutting the tag itself.
 
+Alongside that, `plans/12-sjon-alignment.md` realigns pacer with SJON 1.1/1.2+.
+Wave A (preload — the schema is loaded once per host, spans are score
+coordinates by construction) and Wave B (schema vocabulary) are CLOSED: the
+manifest now carries the score language's `:default`s (read back through
+`sjon.EffectiveView`, so a default has one spelling), its source counts
+(`(exclusive-group …)` on `(track …)` / `(trigger …)`), its dependency
+(`trigger :offset :requires [every]`), its f32 ranges (`(repr-shape …)`), its
+widget-shaped keys (`(control …)` discriminated on `:type`), and slot-local
+`key` / `stage` bodies. Every rule moved into the schema deleted the pacer
+branch it subsumed — pacer voids the table on any SJON error, so a subsumed
+branch is dead code, not a second line of defence. Waves C (tooling: an LSP
+project file, a schema'd corpus harness, generated score-language docs) and D
+(examples) remain open. No wire surface moved in either wave.
+
 ## Code style
 
 Follows SJON's: `//!` module headers describing role + invariants; `///` on
