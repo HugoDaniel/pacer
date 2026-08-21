@@ -2764,6 +2764,32 @@ test "compile diagnostics: trigger empty or unsorted :at → trigger_invalid" {
     }
 }
 
+test "trigger: :offset without :every is dependent_key_missing, not a silent no-op" {
+    // `:offset` phases a PERIODIC schedule; with an explicit `:at` list, or
+    // with no source at all, it means nothing. It used to be documented as
+    // "ignored without :every" and quietly dropped — the one silent no-op
+    // in the score language. `:requires [every]` in the manifest makes it a
+    // diagnostic with a span (and an LSP quick-fix), from SJON's side.
+    const cases = [_][:0]const u8{
+        "(transport :bpm 120)\n(trigger :target circle-radius :offset 1b)",
+        "(transport :bpm 120)\n(trigger :target circle-radius :at [4b 8b] :offset 1b)",
+    };
+    for (cases) |src| {
+        var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(findCode(&r.validated, .dependent_key_missing) != null);
+    }
+
+    // …and the pairing that means something still compiles.
+    var ok = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(trigger :target circle-radius :every 2b :offset 1b)
+    , &test_targets);
+    defer ok.deinit();
+    try t.expect(ok.ok());
+}
+
 test "compile diagnostics: trigger unknown target → unknown_target" {
     // A trigger joins its target like a track — an unresolved name reuses
     // the existing unknown_target code (no trigger-specific target code).

@@ -1,0 +1,7 @@
+; `:offset` phases a PERIODIC schedule, so it is meaningless beside an
+; explicit `:at` list. `:requires [every]` in the manifest turns what
+; used to be a silent no-op ("ignored without :every") into a
+; source=sjon 'PACD' record with a span on the offending key.
+(transport :bpm 120)
+
+(trigger :target radius :at [4b 8b] :offset 1b)

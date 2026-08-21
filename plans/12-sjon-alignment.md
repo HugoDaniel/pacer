@@ -462,3 +462,15 @@ pngine document living here for reference), and how to run the demo.
   Goldens unchanged, exactly as predicted: same values by construction. Gate:
   `zig build verify` green (corpus 30/30 + wasm parity, npm 86), `zig build fuzz`
   green, `audit-diagnostics` 31/31, `zig fmt --check` clean.
+
+- 2026-08-21 — **B4 landed: `:requires [every]` on `trigger :offset`.** The score
+  language's last silent no-op is gone — `:offset` without `:every` (either alone
+  or beside an explicit `:at` list) is now SJON `dependent_key_missing` (code 126)
+  with a span on the offending key: *"form `trigger` keyword `:offset` requires
+  `:every`, which is absent"*. Durable facts: (1) `trigger_invalid` keeps every
+  route it had — neither source, both sources, non-positive `:every`, empty /
+  unsorted / tied `:at` — so the reachability rule holds and
+  `audit-diagnostics` stays 31/31. (2) New golden `diag-trigger-offset` pins the
+  wire record; `trigger-basic` did not move, and neither did any other golden
+  (30 → 31 cases). Gate: `zig build verify` green, `zig build fuzz` green,
+  `audit-diagnostics` 31/31, `zig fmt --check` clean.

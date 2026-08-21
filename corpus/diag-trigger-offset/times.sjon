@@ -1,0 +1,3 @@
+; load fails on SJON validation — times are never evaluated.
+(target radius :registry 0)
+(times "0000000000000000")
