@@ -52,6 +52,7 @@ surface for it — without ever pulling per-pixel work out of WGSL.
 | 09 | [studio-workflow-fixes](09-studio-workflow-fixes.md) — meter, UTF-8 spans, checkpoints | studio | — |
 | 10 | [audio-bus](10-audio-bus.md) — registry 1 wired to libopenmpt ctls | studio, pacer npm | — |
 | 11 | [hardening-1.0](11-hardening-1.0.md) — corpus pins, compose targets, easing wire | pacer | — |
+| 12 | [sjon-alignment](12-sjon-alignment.md) — preloaded schema, schema vocabulary, LSP, examples | pacer | — |
 
 Execution order, wave milestones, and the current "what's next" pointer are
 maintained in [00-strategy.md](00-strategy.md) — the "Depends on" column above only

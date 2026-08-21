@@ -22,7 +22,9 @@ struct with arena-backed `.deinit()`; the struct never retains the caller's GPA.
 Bind with `var`, `defer .deinit()`:
 
 ```zig
-var result = try Compile.compile(gpa, source, targets);
+var schema = try Schema.load(gpa);          // once per host
+defer schema.deinit();
+var result = try Compile.compile(gpa, &schema, source, targets);
 defer result.deinit();
 ```
 
@@ -120,6 +122,14 @@ no-reassign / teardown-order yourself (Eval's own tests do, on never-moved
 stack locals). `drv_load` validates its arguments BEFORE `unload`, so a bad
 call is a no-op (the live table survives).
 
+One ring further out sits `Schema` (`src/Schema.zig`) — the preloaded score
+manifest, whose arenas the result's plugins alias. The full nesting is
+`Schema ⊃ CompileResult ⊃ Evaluator`, torn down inside-out. A `Schema` is a
+HOST-level object: build one, above every `Driver`, and deinit it last
+(`wasm_entry` keeps one for the instance's life, the corpus runner one for the
+whole walk). `Driver` records the borrowed pointer so the outer ring is visible
+on the struct rather than only in prose.
+
 ## The golden corpus
 
 `corpus/<case>/{doc.sjon, times.sjon, expected.sjon}` is the determinism gate.
@@ -167,6 +177,14 @@ pngine. pacer imports it with `.@"plugin-exec" = false` (no libwasmtime; it need
 only the parser / validator / Expr / Pattern / trig surface). The score schema
 (`schema/pacer.sjon`) is `@embedFile`'d via the `pacer_schema` build import, so
 validation works on wasm32-freestanding with no filesystem.
+
+It is **preloaded**, not prepended: `Schema.load` compiles the manifest once
+through `sjon.Host.preloadSchema`, and every `validate` hands the bundle back
+via `HostOptions.preloaded`. The document is therefore parsed on its own and
+every diagnostic / metadata span is a SCORE coordinate by construction —
+pacer translates no spans anywhere. (It used to prepend the manifest text to
+each score and subtract the prefix; SJON's `Host.zig` header names that
+pattern as the one preload replaces.)
 
 ## Roadmap
 
