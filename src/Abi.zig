@@ -13,9 +13,9 @@
 //! duration of one `Compile.compile` call (the table stores ids, never
 //! names).
 //!
-//! Outbound (driver → host), `'PACD'` — load diagnostics, spans already
-//! mapped to USER source coordinates (spans inside the prepended
-//! manifest have no user coordinate and clamp to 0..0):
+//! Outbound (driver → host), `'PACD'` — load diagnostics, spans in SCORE
+//! coordinates (the schema is preloaded beside the document, never
+//! prepended to it, so no mapping happens anywhere):
 //!
 //!     [magic u32]['PACD'][version u32][count u32]
 //!     count × { source u8, severity u8, code u16, start u32, end u32,
@@ -110,6 +110,7 @@ const sjon = @import("sjon");
 const Compile = @import("Compile.zig");
 const TrackTable = @import("TrackTable.zig");
 const Easing = @import("Easing.zig");
+const test_support = @import("test_support.zig");
 
 const Ast = sjon.Ast;
 
@@ -259,12 +260,12 @@ pub fn encodeDiags(result: *const Compile.CompileResult, dest: []u8) []u8 {
             .err => 0,
             .warning => 1,
         };
-        if (!appendRecord(dest, &pos, 0, severity, @intCast(@intFromEnum(d.code)), userSpan(v, d.span), d.message)) break;
+        if (!appendRecord(dest, &pos, 0, severity, @intCast(@intFromEnum(d.code)), d.span, d.message)) break;
         count += 1;
     }
     for (result.diagnostics) |d| {
         // Pacer load diagnostics are always errors (they void the table).
-        if (!appendRecord(dest, &pos, 1, 0, @intFromEnum(d.code), userSpan(v, d.span), d.message)) break;
+        if (!appendRecord(dest, &pos, 1, 0, @intFromEnum(d.code), d.span, d.message)) break;
         count += 1;
     }
 
@@ -282,17 +283,6 @@ pub fn diagsEncodedLen(result: *const Compile.CompileResult) usize {
     for (result.validated.result.diagnostics) |d| len += DIAG_RECORD_LEN + d.message.len;
     for (result.diagnostics) |d| len += DIAG_RECORD_LEN + d.message.len;
     return len;
-}
-
-/// Map a combined-text span to user coordinates; manifest-region spans
-/// clamp to 0..0 (no user coordinate exists for them).
-fn userSpan(v: *const Compile.Validated, span: Ast.Span) Ast.Span {
-    if (span.start < v.prefix_len) return .{ .start = 0, .end = 0 };
-    std.debug.assert(span.end >= span.start);
-    return .{
-        .start = @intCast(v.userOffset(span.start)),
-        .end = @intCast(v.userOffset(span.end)),
-    };
 }
 
 fn appendRecord(dest: []u8, pos: *usize, source: u8, severity: u8, code: u16, span: Ast.Span, message: []const u8) bool {
@@ -452,16 +442,14 @@ pub fn metaEncodedLen(result: *const Compile.CompileResult) usize {
 }
 
 /// Encode the `'PACM'` blob for a successfully compiled score (asserts
-/// `result.ok()`). Spans are mapped to USER coordinates — manifest-
-/// region spans cannot occur here (every record comes from the user's
-/// data forms). Unlike diagnostics, metadata must never silently
+/// `result.ok()`). Spans are score coordinates, written through
+/// verbatim. Unlike diagnostics, metadata must never silently
 /// truncate (the editor would desync), so a short `dest` is an error.
 pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
     std.debug.assert(result.ok());
     const table = &result.table.?;
     const total = metaEncodedLen(result);
     if (dest.len < total) return error.BufferTooSmall;
-    const v = &result.validated;
     const map = &table.transport.map;
 
     std.mem.writeInt(u32, dest[0..4], META_MAGIC, .little);
@@ -480,7 +468,6 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
 
     var pos: usize = META_HEADER_LEN;
     for (table.tracks, table.track_spans) |track, span| {
-        const us = userSpan(v, span);
         const range: struct { start: u32, len: u32 } = switch (track.source) {
             .keys => |ks| .{ .start = ks.start, .len = ks.len },
             .expr, .trigger, .pattern => .{ .start = 0, .len = 0 },
@@ -499,19 +486,18 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
             },
             .key_start = range.start,
             .key_len = range.len,
-            .span_start = us.start,
-            .span_end = us.end,
+            .span_start = span.start,
+            .span_end = span.end,
         };
         @memcpy(dest[pos..][0..META_TRACK_LEN], std.mem.asBytes(&rec));
         pos += META_TRACK_LEN;
     }
     for (table.keys, table.key_spans) |key, span| {
-        const us = userSpan(v, span);
         const rec: MetaKeyRec = .{
             .at = key.at,
             .value = key.value,
-            .span_start = us.start,
-            .span_end = us.end,
+            .span_start = span.start,
+            .span_end = span.end,
         };
         @memcpy(dest[pos..][0..META_KEY_LEN], std.mem.asBytes(&rec));
         pos += META_KEY_LEN;
@@ -520,7 +506,6 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
         var cflags: u8 = 0;
         if (ctl.min != null) cflags |= 1;
         if (ctl.max != null) cflags |= 2;
-        const us = userSpan(v, ctl.value_span);
         const rec: MetaControlRec = .{
             .target_id = if (ctl.target) |tg| tg.id else META_NO_TARGET,
             .registry = if (ctl.target) |tg| tg.registry else 0,
@@ -531,8 +516,8 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
             .value = ctl.value,
             .min = ctl.min orelse .{ 0, 0, 0, 0 },
             .max = ctl.max orelse .{ 0, 0, 0, 0 },
-            .value_span_start = us.start,
-            .value_span_end = us.end,
+            .value_span_start = ctl.value_span.start,
+            .value_span_end = ctl.value_span.end,
         };
         @memcpy(dest[pos..][0..META_CONTROL_LEN], std.mem.asBytes(&rec));
         pos += META_CONTROL_LEN;
@@ -548,12 +533,11 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
         std.mem.writeInt(u32, dest[pos..][0..4], @intCast(table.scenes.len), .little);
         pos += 4;
         for (table.scenes) |scene| {
-            const us = userSpan(v, scene.name_span);
             const rec: MetaSceneRec = .{
                 .start_tick = scene.start_tick,
                 .dur_ticks = scene.dur_ticks,
-                .name_span_start = us.start,
-                .name_span_end = us.end,
+                .name_span_start = scene.name_span.start,
+                .name_span_end = scene.name_span.end,
             };
             @memcpy(dest[pos..][0..SCENE_REC_LEN], std.mem.asBytes(&rec));
             pos += SCENE_REC_LEN;
@@ -667,12 +651,12 @@ test "encodeTargets fails on a short destination" {
     try t.expectError(error.BufferTooSmall, encodeTargets(&sample_targets, &small));
 }
 
-test "encodeDiags: pacer diagnostic with a user-coordinate span" {
+test "encodeDiags: pacer diagnostic carries its score-coordinate span" {
     const source: [:0]const u8 =
         \\(transport :bpm 120)
         \\(track :target nonexistent (key :at 0b :value 1))
     ;
-    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
     defer r.deinit();
     try t.expect(!r.ok());
 
@@ -700,7 +684,7 @@ test "encodeDiags: SJON validation diagnostic rides as source 0" {
         \\(transport :bpm 120)
         \\(track :target tint (key :at 4 :value [1 1 1]))
     ;
-    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
     defer r.deinit();
     try t.expect(!r.ok());
 
@@ -714,13 +698,13 @@ test "encodeDiags: SJON validation diagnostic rides as source 0" {
         @as(u16, @intCast(@intFromEnum(Ast.Diagnostic.Code.unit_required))),
         std.mem.readInt(u16, rec[2..4], .little),
     );
-    // The span lands on the bare `4` in user coordinates.
+    // The span lands on the bare `4` in score coordinates.
     const start = std.mem.readInt(u32, rec[4..8], .little);
     try t.expectEqualStrings("4", source[start .. start + 1]);
 }
 
 test "encodeDiags: clean compile yields an empty record set" {
-    var r = try Compile.compile(t.allocator,
+    var r = try Compile.compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target tint (key :at 0b :value [1 0 0]))
     , &sample_targets);
@@ -733,7 +717,7 @@ test "encodeDiags: clean compile yields an empty record set" {
     try t.expectEqual(@as(u32, 0), std.mem.readInt(u32, encoded[8..12], .little));
 }
 
-test "encodeMeta: transport, tracks, keys, controls — spans in user coordinates" {
+test "encodeMeta: transport, tracks, keys, controls — spans in score coordinates" {
     const source: [:0]const u8 =
         \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
         \\(track :target circle-radius
@@ -742,7 +726,7 @@ test "encodeMeta: transport, tracks, keys, controls — spans in user coordinate
         \\(track :target tint :expr [1 0 0])
         \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
     ;
-    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -803,7 +787,7 @@ test "encodeMeta: transport, tracks, keys, controls — spans in user coordinate
 }
 
 test "encodeMeta: env-only control carries the no-target sentinel" {
-    var r = try Compile.compile(t.allocator,
+    var r = try Compile.compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(control :id sway :value 0.12)
     , &sample_targets);
@@ -818,7 +802,7 @@ test "encodeMeta: env-only control carries the no-target sentinel" {
 }
 
 test "encodeMeta refuses a short destination (no silent truncation)" {
-    var r = try Compile.compile(t.allocator,
+    var r = try Compile.compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target tint (key :at 0b :value [1 0 0]))
     , &sample_targets);
@@ -834,7 +818,7 @@ test "encodeDiags truncates whole records when the buffer is tight" {
         \\(track :target nope-a (key :at 0b :value 1))
         \\(track :target nope-b (key :at 0b :value 1))
     ;
-    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
     defer r.deinit();
     try t.expectEqual(@as(usize, 2), r.diagnostics.len);
 
@@ -854,7 +838,7 @@ test "encodeMeta: a scenes section rides after the controls as a 'SCEN' TLV fram
         \\(scene :name drop :at 8b :dur 4b
         \\  (track :target circle-radius (key :at 0b :value 0.9)))
     ;
-    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -896,7 +880,7 @@ test "encodeMeta: a scenes section rides after the controls as a 'SCEN' TLV fram
 }
 
 test "encodeMeta: a score with no scenes emits no 'SCEN' frame" {
-    var r = try Compile.compile(t.allocator,
+    var r = try Compile.compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius (key :at 0b :value 0.1))
     , &sample_targets);
@@ -910,7 +894,7 @@ test "encodeMeta: a score with no scenes emits no 'SCEN' frame" {
 }
 
 test "PACM section walk: an unknown-id section is skipped, scenes still decode" {
-    var r = try Compile.compile(t.allocator,
+    var r = try Compile.compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(scene :name intro :at 0b :dur 4b
         \\  (track :target circle-radius (key :at 0b :value 0.1)))
@@ -958,7 +942,7 @@ test "encodeMeta: an easing program table rides as an 'EASE' section" {
         \\  (key :at 0b :value 0)
         \\  (key :at 4b :value 1 :ease smoothstep))
     ;
-    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -1015,7 +999,7 @@ test "encodeMeta: an easing program table rides as an 'EASE' section" {
 }
 
 test "encodeMeta: a linear-only score emits no 'EASE' section" {
-    var r = try Compile.compile(t.allocator,
+    var r = try Compile.compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius
         \\  (key :at 0b :value 0)
@@ -1037,7 +1021,7 @@ test "encodeMeta: a tempo map rides as a 'TMPO' section" {
         \\(tempo :at 8b :bpm 96.5)
         \\(track :target circle-radius (key :at 0b :value 0.1))
     ;
-    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -1071,7 +1055,7 @@ test "encodeMeta: a tempo map rides as a 'TMPO' section" {
 }
 
 test "encodeMeta: a constant-tempo score emits no 'TMPO' frame" {
-    var r = try Compile.compile(t.allocator,
+    var r = try Compile.compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius (key :at 0b :value 0.1))
     , &sample_targets);
@@ -1091,7 +1075,7 @@ test "encodeMeta: 'TMPO' rides after 'EASE' in the fixed section order" {
         \\  (key :at 0b :value 0)
         \\  (key :at 4b :value 1 :ease out-cubic))
     ;
-    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -1116,7 +1100,7 @@ test "encodeMeta: 'EASE' rides after 'SCEN' when both are present" {
         \\    (key :at 0b :value 0)
         \\    (key :at 4b :value 1 :ease out-cubic)))
     ;
-    var r = try Compile.compile(t.allocator, source, &sample_targets);
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());

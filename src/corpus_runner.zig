@@ -77,6 +77,7 @@ const sjon = @import("sjon");
 const Abi = @import("Abi.zig");
 const Compile = @import("Compile.zig");
 const Driver = @import("Driver.zig");
+const Schema = @import("Schema.zig");
 const Easing = @import("Easing.zig");
 const Eval = @import("Eval.zig");
 const Writes = @import("Writes.zig");
@@ -145,10 +146,16 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     }
 
+    // One preloaded schema for the whole walk — the manifest is parsed
+    // and aggregate-validated once, not once per case. Outlives every
+    // `Driver` below (the outermost ring of the borrow nesting).
+    var schema = try Schema.load(gpa);
+    defer schema.deinit();
+
     var failed: usize = 0;
     var updated: usize = 0;
     for (names.items) |name| {
-        switch (try runCase(gpa, io, out, root, name, update)) {
+        switch (try runCase(gpa, &schema, io, out, root, name, update)) {
             .ok => {},
             .updated => updated += 1,
             .failed => failed += 1,
@@ -167,6 +174,7 @@ const Outcome = enum { ok, updated, failed };
 
 fn runCase(
     gpa: Allocator,
+    schema: *const Schema,
     io: Io,
     out: *Io.Writer,
     root: []const u8,
@@ -185,7 +193,7 @@ fn runCase(
     // The Driver owns the result/evaluator pair and its teardown order —
     // the borrow-whole rule as structure, not call-site discipline.
     var driver: Driver = undefined;
-    try driver.init(gpa, doc, harness.targets);
+    try driver.init(gpa, schema, doc, harness.targets);
     defer driver.deinit();
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
@@ -778,7 +786,7 @@ fn controlTypeName(t: u8) []const u8 {
 
 /// Render `(diag …)` lines from the `'PACD'` blob — the same encode
 /// path `drv_load` takes, so record order, severity mapping, and the
-/// user-coordinate span mapping are all under the golden.
+/// score-coordinate spans are all under the golden.
 fn renderDiags(
     a: Allocator,
     out: *Io.Writer,

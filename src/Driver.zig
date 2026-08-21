@@ -14,13 +14,21 @@
 //! shims — the Driver owns lifetime, not API. Callers reach `setBpm`,
 //! `setControl`, diagnostics, and meta encoding through the fields.
 //!
-//! Ownership: SJON convention — `deinit()` releases everything; the
-//! struct never retains the caller's GPA beyond what `CompileResult`
-//! itself keeps (its `Validated` holds the gpa for follow-up allocation).
+//! One ring further out sits the `Schema` (`Schema.zig`): the preloaded
+//! manifest the result validated against, whose arenas the result's
+//! plugins alias. The Driver stores the pointer it was initialised with
+//! so the borrow is visible on the struct, but does NOT own it — a
+//! `Schema` is a host-level object built once, above every Driver, and
+//! deinited after all of them. The full nesting is
+//! `Schema ⊃ CompileResult ⊃ Evaluator`, torn down inside-out.
+//!
+//! Ownership: SJON convention — `deinit()` releases everything the pair
+//! owns; the struct never retains the caller's GPA.
 
 const std = @import("std");
 const Compile = @import("Compile.zig");
 const Eval = @import("Eval.zig");
+const Schema = @import("Schema.zig");
 
 const Driver = @This();
 
@@ -31,6 +39,10 @@ pub const Error = Compile.Error;
 result: Compile.CompileResult,
 /// Non-null iff `result.ok()` — armed by `init`, borrowing `result`.
 evaluator: ?Eval.Evaluator,
+/// The preloaded schema `result` was compiled against. BORROWED, never
+/// owned: recorded here so the outer ring of the lifetime is visible on
+/// the struct rather than only in prose. Must outlive this Driver.
+schema: *const Schema,
 
 /// In-place init: the POINTER receiver is the contract — `self` is the
 /// final memory location, visibly, in the signature itself. Compiles
@@ -40,8 +52,17 @@ evaluator: ?Eval.Evaluator,
 /// succeeds with `evaluator == null` and the diagnostics readable on
 /// `result`. On `error.OutOfMemory` nothing survives — `self` is
 /// undefined and needs no deinit.
-pub fn init(self: *Driver, gpa: std.mem.Allocator, source: [:0]const u8, targets: []const Compile.Target) Error!void {
-    self.result = try Compile.compile(gpa, source, targets);
+///
+/// `schema` is borrowed for the Driver's whole life (see the header).
+pub fn init(
+    self: *Driver,
+    gpa: std.mem.Allocator,
+    schema: *const Schema,
+    source: [:0]const u8,
+    targets: []const Compile.Target,
+) Error!void {
+    self.schema = schema;
+    self.result = try Compile.compile(gpa, schema, source, targets);
     self.evaluator = if (self.result.ok())
         Eval.Evaluator.init(gpa, &self.result) catch |err| {
             self.result.deinit();
@@ -80,8 +101,10 @@ const broken_source: [:0]const u8 =
 ;
 
 test "Driver: a clean score arms the evaluator and evals" {
+    var schema = try Schema.load(t_.allocator);
+    defer schema.deinit();
     var d: Driver = undefined;
-    try d.init(t_.allocator, clean_source, &test_targets);
+    try d.init(t_.allocator, &schema, clean_source, &test_targets);
     defer d.deinit();
     try t_.expect(d.result.ok());
     try t_.expect(d.evaluator != null);
@@ -91,8 +114,10 @@ test "Driver: a clean score arms the evaluator and evals" {
 }
 
 test "Driver: a defective score leaves the evaluator null, diagnostics readable" {
+    var schema = try Schema.load(t_.allocator);
+    defer schema.deinit();
     var d: Driver = undefined;
-    try d.init(t_.allocator, broken_source, &test_targets);
+    try d.init(t_.allocator, &schema, broken_source, &test_targets);
     defer d.deinit();
     try t_.expect(!d.result.ok());
     try t_.expect(d.evaluator == null);
@@ -100,12 +125,14 @@ test "Driver: a defective score leaves the evaluator null, diagnostics readable"
 }
 
 test "Driver: reload in place — deinit + re-init on the same storage" {
+    var schema = try Schema.load(t_.allocator);
+    defer schema.deinit();
     var d: Driver = undefined;
-    try d.init(t_.allocator, broken_source, &test_targets);
+    try d.init(t_.allocator, &schema, broken_source, &test_targets);
     try t_.expect(!d.result.ok());
     d.deinit();
 
-    try d.init(t_.allocator, clean_source, &test_targets);
+    try d.init(t_.allocator, &schema, clean_source, &test_targets);
     defer d.deinit();
     try t_.expect(d.result.ok());
     // 120 bpm ⇒ 2 beats/s: 1.0 s = beat 2, the segment midpoint.

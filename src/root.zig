@@ -22,7 +22,10 @@ const sjon = @import("sjon");
 /// Package version. Mirrors `build.zig.zon`.
 pub const version = "0.2.0";
 
-/// Score compiler: manifest prepend → `sjon.validateDocument` → the
+/// The pacer score schema, preloaded once per host and borrowed by every
+/// compile — the outermost ring of the lifetime nesting.
+pub const Schema = @import("Schema.zig");
+/// Score compiler: preloaded schema → `sjon.validateDocument` → the
 /// compiled `TrackTable` (targets joined, ticks converted, programs
 /// deduped), with pacer's own wire-stable diagnostic codes.
 pub const Compile = @import("Compile.zig");
@@ -50,10 +53,11 @@ pub const PatternTrack = @import("PatternTrack.zig");
 /// Packed write-buffer wire format (`'PACW'` header + 20-byte entries).
 pub const Writes = @import("Writes.zig");
 /// WASM boundary blobs: `'PACT'` target-registry list in, `'PACD'`
-/// user-coordinate diagnostics out (`'PACW'` writes live in `Writes`).
+/// diagnostics out in score coordinates (`'PACW'` writes live in `Writes`).
 pub const Abi = @import("Abi.zig");
 
 test {
+    _ = Schema;
     _ = Compile;
     _ = TimeMap;
     _ = Easing;

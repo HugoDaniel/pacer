@@ -40,7 +40,7 @@
 //! beyond the 2^53 tick ceiling).
 //!
 //! On a successful load the `'PACM'` metadata blob (transport, tracks
-//! with key ticks + spans, controls — spans in user coordinates) is
+//! with key ticks + spans, controls — spans in score coordinates) is
 //! encoded once; `drv_metaLen` is 0 when nothing is loaded or the blob
 //! would not fit its zone (pathological scores only — meta never
 //! silently truncates).
@@ -62,6 +62,7 @@ const sjon = @import("sjon");
 const Abi = @import("Abi.zig");
 const Compile = @import("Compile.zig");
 const Driver = @import("Driver.zig");
+const Schema = @import("Schema.zig");
 const Eval = @import("Eval.zig");
 const TrackTable = @import("TrackTable.zig");
 const Writes = @import("Writes.zig");
@@ -82,8 +83,10 @@ const WRITES_CAP: usize = Writes.encodedLen(Eval.MAX_FRAME_ENTRIES);
 const NO_SLOT: u32 = 0xffff_ffff;
 
 comptime {
-    // The combined manifest+doc text must stay parseable by SJON.
-    std.debug.assert(MAX_DOC_SIZE + Compile.manifest_src.len + 2 <= sjon.Binary.MAX_FILE_SIZE);
+    // The score text must stay parseable by SJON. The schema is preloaded
+    // beside the document, not prepended to it, so the whole budget is the
+    // document's.
+    std.debug.assert(MAX_DOC_SIZE <= sjon.Binary.MAX_FILE_SIZE);
     // A full diag buffer still fits useful records (16-byte fixed part).
     std.debug.assert(DIAGS_CAP >= Abi.DIAGS_HEADER_LEN + 64 * (Abi.DIAG_RECORD_LEN + 256));
     // Meta at the caps fits — every record and every section at its
@@ -112,6 +115,20 @@ var writes_buffer: [WRITES_CAP]u8 align(4) = undefined;
 /// Decoded 'PACT' scratch — names alias `targets_buffer`, consumed
 /// entirely inside `drv_load`.
 var targets_scratch: [Abi.MAX_TARGETS]Compile.Target = undefined;
+
+/// The preloaded score schema — parsed once, on the first `drv_load`,
+/// and held for the instance's lifetime (the wasm module is the host, and
+/// a host owns exactly one `Schema`; see `Schema.zig`). It is the
+/// outermost ring of the borrow nesting, so it is never torn down: every
+/// `Driver` built against it goes first, and the instance dies with it.
+var schema: ?Schema = null;
+
+/// Borrowed handle to `schema`, preloading on first use. Null only on
+/// allocation failure, which `drv_load` reports as `oom`.
+fn liveSchema() ?*const Schema {
+    if (schema == null) schema = Schema.load(gpa) catch return null;
+    return &schema.?;
+}
 
 /// Loaded state. The `Driver` owns the result/evaluator pair and its
 /// borrow-whole lifetime (in-place init, ordered teardown — see
@@ -183,12 +200,16 @@ export fn drv_load(doc_len: u32, targets_len: u32) u32 {
     const targets = Abi.decodeTargets(targets_buffer[0..targets_len], &targets_scratch) orelse
         return @intFromEnum(LoadStatus.bad_call);
 
+    // Preloading is part of argument validation, not of teardown: a
+    // failure here must leave the live table alone, like a bad call does.
+    const live_schema = liveSchema() orelse return @intFromEnum(LoadStatus.oom);
+
     unload();
     diags_len = 0;
     doc_buffer[doc_len] = 0;
     const source: [:0]const u8 = doc_buffer[0..doc_len :0];
 
-    driver.init(gpa, source, targets) catch
+    driver.init(gpa, live_schema, source, targets) catch
         return @intFromEnum(LoadStatus.oom);
     loaded = true;
     // Encode diagnostics before any teardown — 'PACD' copies messages

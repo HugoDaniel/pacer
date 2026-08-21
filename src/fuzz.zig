@@ -40,6 +40,7 @@ const std = @import("std");
 const sjon = @import("sjon");
 const Abi = @import("Abi.zig");
 const Compile = @import("Compile.zig");
+const test_support = @import("test_support.zig");
 const Eval = @import("Eval.zig");
 const Easing = @import("Easing.zig");
 const Writes = @import("Writes.zig");
@@ -113,7 +114,7 @@ fn fuzzCompile(_: void, smith: *Smith) anyerror!void {
     const src = try toSentinel(testing.allocator, buf[0..len]);
     defer testing.allocator.free(src);
 
-    var result = Compile.compile(testing.allocator, src, &fuzz_targets) catch |err| {
+    var result = Compile.compile(testing.allocator, test_support.schema(), src, &fuzz_targets) catch |err| {
         try testing.expectEqual(error.OutOfMemory, err);
         return;
     };
@@ -458,7 +459,7 @@ fn fuzzEvalClocks(ctx: EvalPair, smith: *Smith) anyerror!void {
 }
 
 test "fuzz Evaluator clocks: same time → same frame, in any order" {
-    var result = Compile.compile(testing.allocator, eval_score, &eval_targets) catch |err| {
+    var result = Compile.compile(testing.allocator, test_support.schema(), eval_score, &eval_targets) catch |err| {
         try testing.expectEqual(error.OutOfMemory, err);
         return;
     };
@@ -569,7 +570,7 @@ fn fuzzTargetJoin(_: void, smith: *Smith) anyerror!void {
     const src = try toSentinel(testing.allocator, text[0..pos]);
     defer testing.allocator.free(src);
 
-    var result = Compile.compile(testing.allocator, src, host[0..n_host]) catch |err| {
+    var result = Compile.compile(testing.allocator, test_support.schema(), src, host[0..n_host]) catch |err| {
         try testing.expectEqual(error.OutOfMemory, err);
         return;
     };

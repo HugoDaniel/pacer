@@ -173,9 +173,9 @@ pub const Track = struct {
 /// compiled scene-relative (their key ticks already absolute); this row
 /// carries the window itself, for the eval gate and `drv_meta`.
 pub const Scene = struct {
-    /// Span of the `:name` symbol in COMBINED-text coordinates
-    /// (`drv_meta` maps to user coordinates) — the editor slices the
-    /// scene's name from it; the frame path never reads it.
+    /// Span of the `:name` symbol in score-source coordinates — the
+    /// editor slices the scene's name from it (`drv_meta` writes it
+    /// through verbatim); the frame path never reads it.
     name_span: sjon.Ast.Span,
     /// Window start on the transport grid.
     start_tick: Tick,
@@ -211,9 +211,9 @@ pub const Control = struct {
     /// Optional widget range — editor metadata, the driver never clamps.
     min: ?[4]f32,
     max: ?[4]f32,
-    /// Span of the `:value` literal in COMBINED-text coordinates
-    /// (`drv_meta` maps to user coordinates) — the commit-to-text anchor
-    /// for editor widgets.
+    /// Span of the `:value` literal in score-source coordinates — the
+    /// commit-to-text anchor for editor widgets (`drv_meta` writes it
+    /// through verbatim).
     value_span: sjon.Ast.Span,
 };
 
@@ -228,7 +228,7 @@ programs: []const Easing.Program,
 /// `(control …)` pins in document order; the position index is the
 /// control's handle in the `drv_setControl` index space.
 controls: []const Control,
-/// Spans of each `(track …)` / `(key …)` form in COMBINED-text
+/// Spans of each `(track …)` / `(key …)` form in score-source
 /// coordinates, parallel to `tracks` / `keys` (key spans ride the same
 /// sort as their keys). Pure `drv_meta` material — the editor's
 /// timeline anchors; the frame path never reads them.

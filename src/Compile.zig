@@ -1,12 +1,12 @@
-//! Score compiler: manifest prepend → `sjon.validateDocument` →
+//! Score compiler: preloaded schema → `sjon.validateDocument` →
 //! compiled `TrackTable`.
 //!
-//! Stage 1 (`validate`): the pacer schema manifest (`schema/pacer.sjon`,
-//! `@embedFile`'d via the `pacer_schema` build import) is prepended to
-//! the user source and the combined text validated in one call — no
-//! filesystem, works on wasm32-freestanding (the pngine `Compiler.zig`
-//! pattern). Spans in diagnostics index the COMBINED text; user
-//! coordinates are recovered via `Validated.userOffset`.
+//! Stage 1 (`validate`): the score is validated against the preloaded
+//! pacer schema (`Schema.zig`, built once per host) handed to SJON
+//! through `HostOptions.preloaded` — no filesystem, works on
+//! wasm32-freestanding. The document is parsed on its own, so every
+//! diagnostic span is a DOCUMENT coordinate: nothing to rebase, no
+//! manifest region to filter out.
 //!
 //! Stage 2 (`compile`): walk the validated tree once into the static
 //! `TrackTable` — positions converted to i64 ticks here (beats/bars
@@ -44,13 +44,11 @@ const Easing = @import("Easing.zig");
 const TrackTable = @import("TrackTable.zig");
 const ExprTrack = @import("ExprTrack.zig");
 const PatternTrack = @import("PatternTrack.zig");
+const Schema = @import("Schema.zig");
+const test_support = @import("test_support.zig");
 
 const Ast = sjon.Ast;
 const NodeIndex = Ast.NodeIndex;
-
-/// The pacer score schema, embedded as a portable SJON manifest.
-/// Provided as the `pacer_schema` anonymous import by build.zig.
-pub const manifest_src: [:0]const u8 = @embedFile("pacer_schema");
 
 /// Explicit error set. Validation/compile FAILURES are not errors —
 /// they are diagnostics on a successfully returned result (collection
@@ -73,58 +71,45 @@ comptime {
 // Stage 1 — validate
 // ---------------------------------------------------------------------------
 
-/// Owned result of `validate`. Holds the SJON `HostResult` (tree,
-/// schema, data forest, diagnostics) plus the combined manifest+source
-/// text the result's spans index into.
+/// Owned result of `validate`: the SJON `HostResult` (tree, schema, data
+/// forest, diagnostics) over the score source alone. Spans index the
+/// SCORE — the schema rides beside the document rather than in front of
+/// it, so there is no coordinate translation anywhere in pacer.
+///
+/// A thin wrapper rather than a bare `HostResult` because `deinit`'s
+/// ordering obligation (this goes down before the `Schema` it borrows)
+/// belongs to a named type.
 pub const Validated = struct {
     result: sjon.Host.HostResult,
-    /// Manifest + "\n\n" + user source. Diagnostic/AST spans index here.
-    combined: [:0]const u8,
-    /// Byte offset where user source begins inside `combined`.
-    prefix_len: usize,
-    gpa: Allocator,
 
-    /// Free the combined text and the SJON result (the one place the
-    /// caller's GPA is retained — to free `combined`, SJON-style).
+    /// Release the SJON result. The `Schema` it borrowed must outlive
+    /// this call — see `Schema.zig`'s header.
     pub fn deinit(self: *Validated) void {
         self.result.deinit();
-        self.gpa.free(self.combined);
         self.* = undefined;
     }
 
-    /// True when any diagnostic is an error (manifest or validation).
+    /// True when any diagnostic is an error.
     pub fn hasErrors(self: *const Validated) bool {
         return self.result.hasErrors();
     }
-
-    /// Map a combined-text byte offset into user-source coordinates.
-    /// Asserts the offset lies in the user region — manifest spans have
-    /// no user coordinate and must be filtered first.
-    pub fn userOffset(self: *const Validated, combined_offset: usize) usize {
-        std.debug.assert(combined_offset >= self.prefix_len);
-        std.debug.assert(combined_offset <= self.combined.len);
-        return combined_offset - self.prefix_len;
-    }
 };
 
-/// Validate a pacer score. Always returns a `Validated` on success of
-/// the machinery itself — check `.hasErrors()` / `.result.diagnostics`
-/// for the score's actual verdict. O(manifest + source). Host contract
-/// (asserted, not diagnosed): `source` plus the prepended manifest must
-/// fit `sjon.Binary.MAX_FILE_SIZE` — the wasm host gates this via
-/// `drv_docCap`; a native host sizes its own input.
-pub fn validate(gpa: Allocator, source: [:0]const u8) Error!Validated {
-    std.debug.assert(source.len + manifest_src.len + 2 <= sjon.Binary.MAX_FILE_SIZE);
-    const combined = std.fmt.allocPrintSentinel(gpa, "{s}\n\n{s}", .{ manifest_src, source }, 0) catch
-        return error.OutOfMemory;
-    errdefer gpa.free(combined);
-    const prefix_len = manifest_src.len + 2;
-
-    const result = sjon.validateDocument(gpa, combined, .{}) catch |err| switch (err) {
+/// Validate a pacer score against the preloaded schema. Always returns a
+/// `Validated` on success of the machinery itself — check `.hasErrors()`
+/// / `.result.diagnostics` for the score's actual verdict. O(source): the
+/// manifest was parsed once, when `schema` was built.
+///
+/// `schema` is BORROWED — it must outlive the returned `Validated` (and
+/// anything derived from it). Host contract (asserted, not diagnosed):
+/// `source` must fit `sjon.Binary.MAX_FILE_SIZE` — the wasm host gates
+/// this via `drv_docCap`; a native host sizes its own input.
+pub fn validate(gpa: Allocator, schema: *const Schema, source: [:0]const u8) Error!Validated {
+    std.debug.assert(source.len <= sjon.Binary.MAX_FILE_SIZE);
+    const result = sjon.validateDocument(gpa, source, .{ .preloaded = &schema.preloaded }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
-    std.debug.assert(combined.len == prefix_len + source.len);
-    return .{ .result = result, .combined = combined, .prefix_len = prefix_len, .gpa = gpa };
+    return .{ .result = result };
 }
 
 /// First SJON diagnostic with the given code, or null. Test/debug
@@ -228,9 +213,9 @@ comptime {
     std.debug.assert(@intFromEnum(Code.tempo_map_invalid) == 30);
 }
 
-/// One pacer load diagnostic. `span` indexes the combined text (same
-/// coordinate space as SJON's own diagnostics — map through
-/// `Validated.userOffset` for editor display).
+/// One pacer load diagnostic. `span` indexes the score source — the same
+/// coordinate space as SJON's own diagnostics, ready for editor display
+/// with no translation.
 pub const Diagnostic = struct {
     code: Code,
     span: Ast.Span,
@@ -270,15 +255,19 @@ pub const CompileResult = struct {
     /// are arena-owned, but host names are not.
     targets: []const Target,
     /// Schema for expr-track evaluation: the CORE plugin prepended to
-    /// the document's user plugins (`HostResult.schema` is user-only by
-    /// design — core funcs like `sin`/`tau` would not resolve through
-    /// it, and an unresolved head quietly evaluates to a form literal).
-    /// Mirrors `Host.zig`'s eval-pass schema. Arena-backed slice, so it
-    /// survives the by-value move of this struct.
+    /// this document's user plugins — the preloaded pacer schema, plus
+    /// anything the score declared inline (`HostResult.schema` is
+    /// user-only by design: core funcs like `sin`/`tau` would not resolve
+    /// through it, and an unresolved head quietly evaluates to a form
+    /// literal). Mirrors `Host.zig`'s eval-pass schema. The outer slice
+    /// is arena-backed, so it survives the by-value move of this struct;
+    /// the preloaded entries' interiors live in the `Schema` bundle,
+    /// which must outlive this result.
     eval_schema: sjon.Schema.Schema,
 
     /// Tear down everything the compile owns (table, arena, validated
-    /// tree). Any `Eval.Evaluator` borrowing this result goes first.
+    /// tree). Any `Eval.Evaluator` borrowing this result goes first; the
+    /// `Schema` this result borrows goes last.
     pub fn deinit(self: *CompileResult) void {
         if (self.table) |*tb| tb.deinit();
         self.arena.deinit();
@@ -327,13 +316,14 @@ pub const CompileResult = struct {
 /// nothing beyond the returned result — but the result is borrowed
 /// WHOLE: expr/pattern tracks re-read its tree + schema every frame, so
 /// only keyframe-only scores could live off `table` alone (see
-/// `CompileResult`). Host contract, asserted not diagnosed:
-/// `source.len` within `sjon.Binary.MAX_FILE_SIZE` less the manifest
-/// (the wasm host gates via `drv_docCap`), and `targets.len` within
-/// `MAX_TARGETS` (the 'PACT' decoder gates).
-pub fn compile(gpa: Allocator, source: [:0]const u8, targets: []const Target) Error!CompileResult {
+/// `CompileResult`). `schema` is borrowed too, one ring further out (see
+/// `Schema.zig`): it must outlive the result. Host contract, asserted not
+/// diagnosed: `source.len` within `sjon.Binary.MAX_FILE_SIZE` (the wasm
+/// host gates via `drv_docCap`), and `targets.len` within `MAX_TARGETS`
+/// (the 'PACT' decoder gates).
+pub fn compile(gpa: Allocator, schema: *const Schema, source: [:0]const u8, targets: []const Target) Error!CompileResult {
     std.debug.assert(targets.len <= MAX_TARGETS);
-    var v = try validate(gpa, source);
+    var v = try validate(gpa, schema, source);
     errdefer v.deinit();
 
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -1218,7 +1208,7 @@ const Builder = struct {
         if (result.diagnostics.len > 0) {
             // Forward the engine's own diagnostics (malformed
             // combinators, broken expr leaves) — their spans index the
-            // same combined tree, so they land on the offending head.
+            // same tree, so they land on the offending head.
             for (result.diagnostics) |d| {
                 try self.emit(.pattern_eval_failed, d.span, "pattern: {s}", .{d.message});
             }
@@ -1646,7 +1636,7 @@ const minimal_score: [:0]const u8 =
 ;
 
 test "minimal score validates clean" {
-    var v = try validate(t.allocator, minimal_score);
+    var v = try validate(t.allocator, test_support.schema(), minimal_score);
     defer v.deinit();
     for (v.result.diagnostics) |d| {
         std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
@@ -1655,7 +1645,7 @@ test "minimal score validates clean" {
 }
 
 test "composed easing program validates clean" {
-    var v = try validate(t.allocator,
+    var v = try validate(t.allocator, test_support.schema(),
         \\(transport :bpm 90)
         \\(track :target logo-y
         \\  (key :at 0b :value 0.0)
@@ -1672,7 +1662,7 @@ test "composed easing program validates clean" {
 }
 
 test "bare number in a position slot is rejected (unit required)" {
-    var v = try validate(t.allocator,
+    var v = try validate(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target x (key :at 4 :value 0.5))
     );
@@ -1682,7 +1672,7 @@ test "bare number in a position slot is rejected (unit required)" {
 }
 
 test "wrong unit on a position slot is rejected" {
-    var v = try validate(t.allocator,
+    var v = try validate(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target x (key :at 4ms :value 0.5))
     );
@@ -1691,7 +1681,7 @@ test "wrong unit on a position slot is rejected" {
 }
 
 test "unknown easing name is rejected" {
-    var v = try validate(t.allocator,
+    var v = try validate(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target x
         \\  (key :at 0b :value 0)
@@ -1702,7 +1692,7 @@ test "unknown easing name is rejected" {
 }
 
 test "unknown form head is rejected" {
-    var v = try validate(t.allocator, "(timeline :bpm 120)");
+    var v = try validate(t.allocator, test_support.schema(), "(timeline :bpm 120)");
     defer v.deinit();
     try t.expect(v.hasErrors());
 }
@@ -1712,16 +1702,16 @@ test "diagnostic spans map back into user source" {
         \\(transport :bpm 120)
         \\(track :target x (key :at 4 :value 0.5))
     ;
-    var v = try validate(t.allocator, bad_source);
+    var v = try validate(t.allocator, test_support.schema(), bad_source);
     defer v.deinit();
     const d = findCode(&v, .unit_required).?;
-    const user_start = v.userOffset(d.span.start);
+    const user_start = d.span.start;
     // The offending literal `4` sits inside the user text.
     try t.expectEqualStrings("4", bad_source[user_start .. user_start + 1]);
 }
 
 test "empty source validates clean (no data forms, no diagnostics)" {
-    var v = try validate(t.allocator, "");
+    var v = try validate(t.allocator, test_support.schema(), "");
     defer v.deinit();
     try t.expect(!v.hasErrors());
 }
@@ -1737,7 +1727,7 @@ const test_targets = [_]Target{
 };
 
 test "compile builds the table: ticks exact, programs deduped" {
-    var r = try compile(t.allocator, minimal_score, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), minimal_score, &test_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -1762,7 +1752,7 @@ test "compile builds the table: ticks exact, programs deduped" {
 }
 
 test "compile resolves multi-registry targets and vec arity" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target tint
         \\  (key :at 0b :value [1 0 0])
@@ -1784,7 +1774,7 @@ test "compile resolves multi-registry targets and vec arity" {
 }
 
 test "compile sorts out-of-order keys by tick" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius
         \\  (key :at 4b :value 0.8)
@@ -1800,7 +1790,7 @@ test "compile sorts out-of-order keys by tick" {
 }
 
 test "compile diagnostics: unknown target, arity, duplicates, loop, empty" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :end loop)
         \\(track :target nonexistent (key :at 0b :value 1))
         \\(track :target circle-radius
@@ -1821,7 +1811,7 @@ test "compile diagnostics: unknown target, arity, duplicates, loop, empty" {
 // ---- compose-mode (target …) declarations ----
 
 test "compose-mode: a standalone score compiles against an empty host registry" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(target :name glow :arity 1 :registry 0)
         \\(target :name tint :arity 3 :registry 0)
         \\(transport :bpm 120)
@@ -1851,7 +1841,7 @@ test "compose-mode: declared targets merge with the host registry (host authorit
     // Host: circle-radius(1,reg0), tint(3,reg0), cutoff(1,reg1). The score
     // restates circle-radius (consistent), tries to move tint to reg 5
     // (host wins — ignored), and declares a decl-only glow at reg 2.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(target :name circle-radius :arity 1 :registry 0)
         \\(target :name tint :arity 3 :registry 5)
         \\(target :name glow :arity 1 :registry 2)
@@ -1871,7 +1861,7 @@ test "compose-mode: declared targets merge with the host registry (host authorit
 }
 
 test "compose-mode: a declared arity disagreeing with the host is target_arity_mismatch" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(target :name circle-radius :arity 3)
         \\(transport :bpm 120)
         \\(track :target circle-radius (key :at 0b :value [1 1 1]))
@@ -1882,7 +1872,7 @@ test "compose-mode: a declared arity disagreeing with the host is target_arity_m
 }
 
 test "compose-mode: a duplicate target declaration is target_decl_invalid" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(target :name glow :arity 1)
         \\(target :name glow :arity 1)
         \\(transport :bpm 120)
@@ -1894,7 +1884,7 @@ test "compose-mode: a duplicate target declaration is target_decl_invalid" {
 }
 
 test "compose-mode: a target declaration missing :name or :arity is target_decl_invalid" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(target :registry 0)
         \\(transport :bpm 120)
     , &.{});
@@ -1904,12 +1894,12 @@ test "compose-mode: a target declaration missing :name or :arity is target_decl_
 }
 
 test "compile diagnostics: transport missing / seq nesting / weights" {
-    var missing = try compile(t.allocator, "(track :target tint (key :at 0b :value [1 1 1]))", &test_targets);
+    var missing = try compile(t.allocator, test_support.schema(), "(track :target tint (key :at 0b :value [1 1 1]))", &test_targets);
     defer missing.deinit();
     try t.expect(!missing.ok());
     try t.expect(missing.findDiag(.transport_missing) != null);
 
-    var nested = try compile(t.allocator,
+    var nested = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius
         \\  (key :at 0b :value 0)
@@ -1920,7 +1910,7 @@ test "compile diagnostics: transport missing / seq nesting / weights" {
     try t.expect(!nested.ok());
     try t.expect(nested.findDiag(.ease_nesting_unsupported) != null);
 
-    var weights = try compile(t.allocator,
+    var weights = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius
         \\  (key :at 0b :value 0)
@@ -1933,7 +1923,7 @@ test "compile diagnostics: transport missing / seq nesting / weights" {
 }
 
 test "compile accepts expr tracks: node recorded, keys table untouched" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(track :target circle-radius
         \\  :expr (+ 0.5 (* 0.5 (sin (* (tau) beat)))))
@@ -1950,7 +1940,7 @@ test "compile accepts expr tracks: node recorded, keys table untouched" {
 }
 
 test "compile diagnostics: keys XOR expr — both is a conflict" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius
         \\  :expr (+ beat 0)
@@ -1967,7 +1957,7 @@ test "compile accepts pattern tracks: node recorded, walk-opaque interior" {
     // out, exactly like `:expr`. The fixture exercises a combinator, a
     // fastcat vector, literal numbers, AND an expr leaf — everything the
     // Phase 2 dry-run must accept for a sound pattern.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(track :target circle-radius :pattern (fast 2 [0.2 (pure (+ 0.1 0.2))]))
     , &test_targets);
@@ -1981,7 +1971,7 @@ test "compile accepts pattern tracks: node recorded, walk-opaque interior" {
 }
 
 test "compile diagnostics: pattern XOR keys XOR expr — any pairing is a conflict" {
-    var with_keys = try compile(t.allocator,
+    var with_keys = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius
         \\  :pattern [0 1]
@@ -1991,7 +1981,7 @@ test "compile diagnostics: pattern XOR keys XOR expr — any pairing is a confli
     try t.expect(!with_keys.ok());
     try t.expect(with_keys.findDiag(.track_source_conflict) != null);
 
-    var with_expr = try compile(t.allocator,
+    var with_expr = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius
         \\  :expr (+ beat 0)
@@ -2005,18 +1995,18 @@ test "compile diagnostics: pattern XOR keys XOR expr — any pairing is a confli
 test "compile diagnostics: pattern dry-run — a malformed combinator fails at load with spans" {
     // `(fast 2)` is missing its pattern argument. The engine collects an
     // arity diagnostic (degrading the node to silence) and the dry-run
-    // forwards it as `pattern_eval_failed` — same combined tree, so the
-    // span lands on the offending head in user coordinates.
+    // forwards it as `pattern_eval_failed` — same tree, so the span
+    // lands on the offending head in score coordinates.
     const source: [:0]const u8 =
         \\(transport :bpm 120)
         \\(track :target circle-radius :pattern (fast 2))
     ;
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     try t.expect(!r.ok());
     const diag = r.findDiag(.pattern_eval_failed).?;
-    const start = r.validated.userOffset(diag.span.start);
-    try t.expectEqualStrings("fast", source[start..r.validated.userOffset(diag.span.end)]);
+    const start = diag.span.start;
+    try t.expectEqualStrings("fast", source[start..diag.span.end]);
 }
 
 test "compile diagnostics: pattern dry-run runs under the frame budget — over-budget cycle 0 fails at load" {
@@ -2030,18 +2020,18 @@ test "compile diagnostics: pattern dry-run runs under the frame budget — over-
         \\(transport :bpm 120)
         \\(track :target circle-radius :pattern (fast 8000 (pure 1)))
     ;
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     try t.expect(!r.ok());
     const diag = r.findDiag(.pattern_eval_failed).?;
     try t.expect(std.mem.indexOf(u8, diag.message, "budget") != null);
     // The span lands on the `:pattern` value node.
-    const start = r.validated.userOffset(diag.span.start);
-    try t.expect(std.mem.indexOf(u8, source[start..r.validated.userOffset(diag.span.end)], "fast 8000") != null);
+    const start = diag.span.start;
+    try t.expect(std.mem.indexOf(u8, source[start..diag.span.end], "fast 8000") != null);
 
     // Guard against over-tightening: a comfortably-dense-but-fitting
     // pattern must still load.
-    var dense = try compile(t.allocator,
+    var dense = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius :pattern (fast 64 (pure 1)))
     , &test_targets);
@@ -2058,7 +2048,7 @@ test "compile diagnostics: expr dry-run runs under the frame budget — over-bud
     const wide = "(+ " ++ ("1.5 " ** 20000) ++ ")";
     const source: [:0]const u8 =
         "(transport :bpm 120)\n(track :target circle-radius :expr " ++ wide ++ ")";
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     try t.expect(!r.ok());
     const diag = r.findDiag(.expr_eval_failed).?;
@@ -2070,7 +2060,7 @@ test "compile diagnostics: pattern payloads must be finite numbers — pattern_r
     // write contract (a track's value is a finite number). The dry-run
     // checks EVERY hap in the dry-run cycle, so the defect fails at
     // load even though tick 0's hap (0.5) is fine.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius :pattern [0.5 bd])
     , &test_targets);
@@ -2083,7 +2073,7 @@ test "compile diagnostics: a pattern on a multi-component target is pattern_resu
     // `PatValue` has no vector variant — a pattern can only ever drive a
     // scalar target this slice, so the impossible pairing is rejected at
     // load regardless of the pattern's content.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target tint :pattern [0.2 0.7])
     , &test_targets);
@@ -2098,7 +2088,7 @@ test "compile patterns: a scened pattern dry-runs at its scene start" {
     // queries cycle 0 and accepts (the bd at cycle 1 is a frame-path
     // omission, the expr-at-t=0 limitation); a scene opening at bar 1
     // dry-runs the cycle containing its start — and catches bd at load.
-    var top = try compile(t.allocator,
+    var top = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius :pattern (slowcat 0.5 bd))
     , &test_targets);
@@ -2106,7 +2096,7 @@ test "compile patterns: a scened pattern dry-runs at its scene start" {
     for (top.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(top.ok());
 
-    var scened = try compile(t.allocator,
+    var scened = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(scene :name drop :at 1bar :dur 1bar
         \\  (track :target circle-radius :pattern (slowcat 0.5 bd)))
@@ -2122,7 +2112,7 @@ test "compile patterns: hap exprs read pacer's time env under the pattern-local 
     // leaf check at load (UnknownBinding → pattern_eval_failed). The dry-run
     // now chains pacer's env under the `cycle`/`tick`/`seed` shadows — the
     // frozen env-merge design — so the document is sound.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(track :target circle-radius :pattern (pure (* beat 2)))
     , &test_targets);
@@ -2134,7 +2124,7 @@ test "compile patterns: hap exprs read pacer's time env under the pattern-local 
 test "compile patterns: hap exprs read document control values" {
     // Controls bind in the env's parent scope exactly as for `:expr`
     // tracks — the dry-run binds the document `:value`.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(control :id sway :value 0.5)
         \\(track :target circle-radius :pattern (pure (* sway 2)))
@@ -2147,7 +2137,7 @@ test "compile patterns: hap exprs read document control values" {
 test "compile patterns: an unbound name in a hap expr still fails at load" {
     // The env is additive, not a blanket resolver — a genuinely unknown
     // name keeps its honest load failure.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius :pattern (pure (* nope 2)))
     , &test_targets);
@@ -2173,13 +2163,13 @@ test "compile diagnostics: expr dry-run failures carry user spans" {
         \\(track :target circle-radius :expr (* radius-knob 2))
         \\(track :target tint :expr (/ 1 beat))
     ;
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     try t.expect(!r.ok());
     const unknown = r.findDiag(.expr_eval_failed).?;
-    // The span points at the whole expression in user coordinates.
-    const start = r.validated.userOffset(unknown.span.start);
-    try t.expectEqualStrings("(* radius-knob 2)", source[start..r.validated.userOffset(unknown.span.end)]);
+    // The span points at the whole expression in score coordinates.
+    const start = unknown.span.start;
+    try t.expectEqualStrings("(* radius-knob 2)", source[start..unknown.span.end]);
 }
 
 test "compile diagnostics: expr result shape — arity, boolean, typo'd func" {
@@ -2187,7 +2177,7 @@ test "compile diagnostics: expr result shape — arity, boolean, typo'd func" {
     // that is no expr-func (`sine`) evaluates to a form LITERAL, not
     // `UnknownFunction` — it must still fail the dry-run, as a shape
     // defect.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius :expr [1 2])
         \\(track :target tint :expr (+ 1 2))
@@ -2211,7 +2201,7 @@ test "compile builds controls: target join, defaults, spans, env binding" {
         \\(track :target circle-radius :expr (* radius-knob 2))
         \\(track :target tint :expr [sway sway sway])
     ;
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -2226,9 +2216,9 @@ test "compile builds controls: target join, defaults, spans, env binding" {
     try t.expectEqual(@as(f32, 0.4), knob.value[0]);
     try t.expectEqual(@as(f32, 0), knob.min.?[0]);
     try t.expectEqual(@as(f32, 1), knob.max.?[0]);
-    // The :value span is the commit-to-text anchor, in user coordinates.
-    const vs_start = r.validated.userOffset(knob.value_span.start);
-    const vs_end = r.validated.userOffset(knob.value_span.end);
+    // The :value span is the commit-to-text anchor, in score coordinates.
+    const vs_start = knob.value_span.start;
+    const vs_end = knob.value_span.end;
     try t.expectEqualStrings("0.4", source[vs_start..vs_end]);
 
     // Env-only control: no target, defaults applied.
@@ -2242,7 +2232,7 @@ test "compile builds controls: target join, defaults, spans, env binding" {
 }
 
 test "compile builds vector controls and joins their arity" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(control :id tint-pick :type color :target tint :value [1 0 0])
         \\(track :target tint :expr tint-pick)
@@ -2258,7 +2248,7 @@ test "compile builds vector controls and joins their arity" {
 }
 
 test "compile diagnostics: control defects" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(control :id knob :value 1)
         \\(control :id knob :value 2)
@@ -2283,7 +2273,7 @@ test "compile diagnostics: control defects" {
 test "compile binds controls for the dry-run regardless of document order" {
     // The track sits ABOVE the control: a single-pass walk would miss
     // the binding; the two-pass build must not.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius :expr (* late-knob 0.5))
         \\(control :id late-knob :value 0.8)
@@ -2294,7 +2284,7 @@ test "compile binds controls for the dry-run regardless of document order" {
 }
 
 test "compile leaves table null when SJON validation already failed" {
-    var r = try compile(t.allocator, "(transport :bpm 120)(track :target x (key :at 4 :value 1))", &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), "(transport :bpm 120)(track :target x (key :at 4 :value 1))", &test_targets);
     defer r.deinit();
     try t.expect(!r.ok());
     try t.expectEqual(@as(usize, 0), r.diagnostics.len); // SJON's own diagnostic carries it
@@ -2304,7 +2294,7 @@ test "compile leaves table null when SJON validation already failed" {
 /// Compile `source` and assert exactly that `code` was raised (the score
 /// is defective, so the table is null).
 fn expectDiag(source: [:0]const u8, code: Code) !void {
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     try t.expect(!r.ok());
     if (r.findDiag(code) == null) {
@@ -2366,7 +2356,7 @@ test "compile transport :emit resolves clock lanes to same-named targets" {
         .{ .name = "bar", .ncomp = 1 },
         .{ .name = "phase", .ncomp = 1, .registry = 1 },
     };
-    var r = try compile(t.allocator, "(transport :bpm 120 :emit [beat bar phase])", &targets);
+    var r = try compile(t.allocator, test_support.schema(), "(transport :bpm 120 :emit [beat bar phase])", &targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -2390,14 +2380,14 @@ test "compile transport :emit defects fire by name" {
     };
     // Duplicate lane in the list.
     {
-        var r = try compile(t.allocator, "(transport :bpm 120 :emit [beat beat])", &scalar);
+        var r = try compile(t.allocator, test_support.schema(), "(transport :bpm 120 :emit [beat beat])", &scalar);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.transport_invalid) != null);
     }
     // A symbol that is not an emittable time name.
     {
-        var r = try compile(t.allocator, "(transport :bpm 120 :emit [wobble])", &scalar);
+        var r = try compile(t.allocator, test_support.schema(), "(transport :bpm 120 :emit [wobble])", &scalar);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.transport_invalid) != null);
@@ -2405,14 +2395,14 @@ test "compile transport :emit defects fire by name" {
     // A reserved time name that is NOT emittable (tick/cycle/dur) is
     // rejected too — the emit set is a subset of the env bindings.
     {
-        var r = try compile(t.allocator, "(transport :bpm 120 :emit [tick])", &scalar);
+        var r = try compile(t.allocator, test_support.schema(), "(transport :bpm 120 :emit [tick])", &scalar);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.transport_invalid) != null);
     }
     // An emittable name absent from every host registry.
     {
-        var r = try compile(t.allocator, "(transport :bpm 120 :emit [phase])", &scalar);
+        var r = try compile(t.allocator, test_support.schema(), "(transport :bpm 120 :emit [phase])", &scalar);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.unknown_target) != null);
@@ -2420,7 +2410,7 @@ test "compile transport :emit defects fire by name" {
     // An emittable name resolving to a non-scalar target.
     {
         const vec = [_]Target{.{ .name = "beat", .ncomp = 2 }};
-        var r = try compile(t.allocator, "(transport :bpm 120 :emit [beat])", &vec);
+        var r = try compile(t.allocator, test_support.schema(), "(transport :bpm 120 :emit [beat])", &vec);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.target_arity_mismatch) != null);
@@ -2430,11 +2420,11 @@ test "compile transport :emit defects fire by name" {
 test "compile transport :emit diagnostics carry the offending entry's span" {
     const scalar = [_]Target{.{ .name = "beat", .ncomp = 1 }};
     const source: [:0]const u8 = "(transport :bpm 120 :emit [beat wobble])";
-    var r = try compile(t.allocator, source, &scalar);
+    var r = try compile(t.allocator, test_support.schema(), source, &scalar);
     defer r.deinit();
     const d = r.findDiag(.transport_invalid).?;
-    const start = r.validated.userOffset(d.span.start);
-    const end = r.validated.userOffset(d.span.end);
+    const start = d.span.start;
+    const end = d.span.end;
     try t.expectEqualStrings("wobble", source[start..end]);
 }
 
@@ -2457,7 +2447,7 @@ test "compile diagnostics: table + program caps fire by name" {
         try src.appendSlice(a, "(transport :bpm 120)\n");
         for (0..TrackTable.MAX_TRACKS + 1) |_|
             try src.appendSlice(a, "(track :target circle-radius (key :at 0b :value 0))\n");
-        var r = try compile(t.allocator, try zterm(a, &src), &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), try zterm(a, &src), &test_targets);
         defer r.deinit();
         try t.expect(r.findDiag(.track_cap_exceeded) != null);
     }
@@ -2469,7 +2459,7 @@ test "compile diagnostics: table + program caps fire by name" {
         for (0..TrackTable.MAX_KEYS + 1) |i|
             try src.appendSlice(a, try std.fmt.allocPrint(a, "  (key :at {d}b :value 0)\n", .{i}));
         try src.appendSlice(a, ")\n");
-        var r = try compile(t.allocator, try zterm(a, &src), &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), try zterm(a, &src), &test_targets);
         defer r.deinit();
         try t.expect(r.findDiag(.key_cap_exceeded) != null);
     }
@@ -2481,7 +2471,7 @@ test "compile diagnostics: table + program caps fire by name" {
         for (0..TrackTable.MAX_CONTROLS + 1) |i|
             try src.appendSlice(a, try std.fmt.allocPrint(a, "(control :id c{d} :value 0)\n", .{i}));
         try src.appendSlice(a, "(track :target circle-radius (key :at 0b :value 0))\n");
-        var r = try compile(t.allocator, try zterm(a, &src), &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), try zterm(a, &src), &test_targets);
         defer r.deinit();
         try t.expect(r.findDiag(.control_cap_exceeded) != null);
     }
@@ -2504,7 +2494,7 @@ test "compile diagnostics: table + program caps fire by name" {
             try src.appendSlice(a, try std.fmt.allocPrint(a, "  (key :at {d}b :value 0 :ease {s})\n", .{ i, ease }));
         }
         try src.appendSlice(a, ")\n");
-        var r = try compile(t.allocator, try zterm(a, &src), &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), try zterm(a, &src), &test_targets);
         defer r.deinit();
         try t.expect(r.findDiag(.ease_cap_exceeded) != null);
     }
@@ -2522,7 +2512,7 @@ test "compile diagnostics: scene missing :name/:at/:dur → scene_invalid" {
         "(transport :bpm 120)\n(scene :name intro :at 0b (track :target circle-radius (key :at 0b :value 0)))",
     };
     for (cases) |src| {
-        var r = try compile(t.allocator, src, &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.scene_invalid) != null);
@@ -2530,7 +2520,7 @@ test "compile diagnostics: scene missing :name/:at/:dur → scene_invalid" {
 }
 
 test "compile diagnostics: two scenes named drop → scene_duplicate_name" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(scene :name drop :at 0b :dur 8b
         \\  (track :target circle-radius (key :at 0b :value 0)))
@@ -2552,7 +2542,7 @@ test "compile diagnostics: 65 scenes → scene_cap_exceeded" {
         try src.appendSlice(a, try std.fmt.allocPrint(a, "(scene :name s{d} :at {d}b :dur 4b (track :target circle-radius (key :at 0b :value 0)))\n", .{ i, i }));
     try src.append(a, 0);
     const source = src.items[0 .. src.items.len - 1 :0];
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     try t.expect(r.findDiag(.scene_cap_exceeded) != null);
 }
@@ -2560,7 +2550,7 @@ test "compile diagnostics: 65 scenes → scene_cap_exceeded" {
 test "compile accepts a valid scene: no diagnostics" {
     // A well-formed scene compiles clean; its nested (track …) rows are
     // pinned by the table-shape tests below.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(scene :name drop :at 160b :dur 60b
         \\  (track :target circle-radius
@@ -2584,7 +2574,7 @@ test "compile scenes: child keys land at absolute ticks, tracks carry the scene 
         \\    (key :at 0b :value [1 0 0])
         \\    (key :at 4b :value [0 0 1] :ease out-cubic)))
     ;
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -2595,9 +2585,9 @@ test "compile scenes: child keys land at absolute ticks, tracks carry the scene 
     try t.expectEqual(@as(usize, 1), table.scenes.len);
     try t.expectEqual(@as(i64, 160 * ppb), table.scenes[0].start_tick);
     try t.expectEqual(@as(i64, 60 * ppb), table.scenes[0].dur_ticks);
-    // The name span slices `drop` out of the user source (combined→user).
+    // The name span slices `drop` straight out of the score source.
     const ns = table.scenes[0].name_span;
-    try t.expectEqualStrings("drop", source[r.validated.userOffset(ns.start)..r.validated.userOffset(ns.end)]);
+    try t.expectEqualStrings("drop", source[ns.start..ns.end]);
 
     // Two tracks: the top-level one is un-scened, the scened one indexes 0.
     try t.expectEqual(@as(usize, 2), table.tracks.len);
@@ -2614,7 +2604,7 @@ test "compile scenes: scene-relative position overflow → tick_overflow" {
     // Scene start and child key each convert inside the grid (≈5.4e18
     // ticks) but their sum overflows i64 — the addition seam, not the
     // per-position conversion, must raise tick_overflow.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(scene :name edge :at 30000000000000b :dur 4b
         \\  (track :target circle-radius (key :at 30000000000000b :value 0)))
@@ -2635,7 +2625,7 @@ test "compile diagnostics: scene-beat/scene-phase are unbound at the top level" 
         "(transport :bpm 120)\n(track :target circle-radius :expr scene-beat)",
         "(transport :bpm 120)\n(track :target circle-radius :expr scene-phase)",
     }) |src| {
-        var r = try compile(t.allocator, src, &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.expr_eval_failed) != null);
@@ -2655,7 +2645,7 @@ test "compile diagnostics: trigger source shape → trigger_invalid" {
         "(transport :bpm 120)\n(trigger :target circle-radius :every 0b)",
     };
     for (cases) |src| {
-        var r = try compile(t.allocator, src, &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.trigger_invalid) != null);
@@ -2673,7 +2663,7 @@ test "compile diagnostics: trigger empty or unsorted :at → trigger_invalid" {
         "(transport :bpm 120)\n(trigger :target circle-radius :at [1bar 2b])",
     };
     for (cases) |src| {
-        var r = try compile(t.allocator, src, &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.trigger_invalid) != null);
@@ -2683,7 +2673,7 @@ test "compile diagnostics: trigger empty or unsorted :at → trigger_invalid" {
 test "compile diagnostics: trigger unknown target → unknown_target" {
     // A trigger joins its target like a track — an unresolved name reuses
     // the existing unknown_target code (no trigger-specific target code).
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(trigger :target nonexistent :every 2b)
     , &test_targets);
@@ -2694,20 +2684,20 @@ test "compile diagnostics: trigger unknown target → unknown_target" {
 
 test "compile trigger diagnostics carry a user span" {
     const source: [:0]const u8 = "(transport :bpm 120)\n(trigger :target circle-radius :every 0b)";
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     const d = r.findDiag(.trigger_invalid).?;
     // The :every value is the offending node; its span maps into the user
-    // text (no manifest-region trap) and slices `0b`.
-    const start = r.validated.userOffset(d.span.start);
-    const end = r.validated.userOffset(d.span.end);
+    // text and slices `0b`.
+    const start = d.span.start;
+    const end = d.span.end;
     try t.expectEqualStrings("0b", source[start..end]);
 }
 
 test "compile accepts valid triggers: periodic + explicit list" {
     // A well-formed trigger emits no diagnostic; its table row and
     // lanes are pinned by the trigger-shape and Eval tests.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(trigger :target circle-radius :every 2b :offset 1b)
         \\(trigger :target cutoff :at [160b 220b 256b])
@@ -2721,7 +2711,7 @@ test "compile accepts valid triggers: periodic + explicit list" {
 // --- triggers (plan 02 Phase 2: compile into the table) --------------
 
 test "compile triggers: periodic schedule builds a table row" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(trigger :target circle-radius :every 2b :offset 1b)
     , &test_targets);
@@ -2747,7 +2737,7 @@ test "compile triggers: periodic schedule builds a table row" {
 }
 
 test "compile triggers: periodic :offset defaults to 0" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(trigger :target circle-radius :every 4b)
     , &test_targets);
@@ -2759,7 +2749,7 @@ test "compile triggers: periodic :offset defaults to 0" {
 }
 
 test "compile triggers: explicit :at builds an owned ascending tick slice" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(trigger :target cutoff :at [160b 220b 256b])
     , &test_targets);
@@ -2788,7 +2778,7 @@ test "compile triggers: a scened trigger walks scene-relative and carries the sc
         \\  (trigger :target circle-radius :at [0b 4b])
         \\  (trigger :target cutoff :every 2b :offset 1b))
     ;
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t.expect(r.ok());
@@ -2822,7 +2812,7 @@ test "compile triggers: scene-relative schedule overflow → tick_overflow" {
         \\  (trigger :target circle-radius :every 2b :offset 30000000000000b))
     };
     for (cases) |src| {
-        var r = try compile(t.allocator, src, &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.tick_overflow) != null);
@@ -2842,7 +2832,7 @@ test "compile triggers: a trigger past MAX_TRACKS → track_cap_exceeded" {
     try src.appendSlice(a, "(trigger :target circle-radius :every 2b)\n");
     try src.append(a, 0);
     const source = src.items[0 .. src.items.len - 1 :0];
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     try t.expect(r.findDiag(.track_cap_exceeded) != null);
 }
@@ -2854,7 +2844,7 @@ test "compile never panics on stray top-level atoms (fuzz regression)" {
     // on every forest node without a tagOf guard. drv_load reaches this
     // path, so this is a real crash surface, not a test-only one.
     for ([_][:0]const u8{ "5", "[1 2 3]", "nil" }) |src| {
-        var r = try compile(t.allocator, src, &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok()); // no transport → not loadable, but no panic
     }
@@ -2863,7 +2853,7 @@ test "compile never panics on stray top-level atoms (fuzz regression)" {
 // ---- (tempo …) tempo-map segments (plan it/01) ----
 
 test "tempo-map: a clean multi-segment score compiles with 0 diags" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 125 :meter [4 4] :dur 400b :end loop)
         \\(tempo :at 160b :bpm 150)
         \\(tempo :at 200b :bpm 96.5)
@@ -2886,7 +2876,7 @@ test "tempo-map: a clean multi-segment score compiles with 0 diags" {
 }
 
 test "tempo-map: a mapless score still carries segment 0 (the transport's own :bpm)" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
         \\(track :target circle-radius (key :at 0b :value 0.5))
     , &test_targets);
@@ -2907,11 +2897,11 @@ test "tempo-map: a missing :at or :bpm is tempo_map_invalid with the form's span
         \\(tempo :at 160b)
     };
     for (cases) |source| {
-        var r = try compile(t.allocator, source, &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
         const d = r.findDiag(.tempo_map_invalid).?;
-        const start = r.validated.userOffset(d.span.start);
+        const start = d.span.start;
         try t.expectEqualStrings("(tempo", source[start..][0..6]);
     }
 }
@@ -2936,7 +2926,7 @@ test "tempo-map: :at 0b, negative, seconds-unit, descending, duplicate → tempo
         \\(tempo :at 160b :bpm 96.5)
     };
     for (cases) |source| {
-        var r = try compile(t.allocator, source, &test_targets);
+        var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
         try t.expect(r.findDiag(.tempo_map_invalid) != null);
@@ -2948,12 +2938,12 @@ test "tempo-map: the seconds-unit rejection spans the offending :at literal" {
         \\(transport :bpm 120)
         \\(tempo :at 30s :bpm 150)
     ;
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     try t.expect(!r.ok());
     const d = r.findDiag(.tempo_map_invalid).?;
-    const start = r.validated.userOffset(d.span.start);
-    const end = r.validated.userOffset(d.span.end);
+    const start = d.span.start;
+    const end = d.span.end;
     try t.expectEqualStrings("30s", source[start..end]);
 }
 
@@ -2971,7 +2961,7 @@ test "tempo-map: more than MAX_TEMPO_SEGMENTS segments is tempo_map_invalid" {
     }
     try src.append(a, 0);
     const source = src.items[0 .. src.items.len - 1 :0];
-    var r = try compile(t.allocator, source, &test_targets);
+    var r = try compile(t.allocator, test_support.schema(), source, &test_targets);
     defer r.deinit();
     try t.expect(!r.ok());
     const d = r.findDiag(.tempo_map_invalid).?;
@@ -2982,7 +2972,7 @@ test "tempo-map: s-unit key positions resolve through the piecewise map" {
     // 120 bpm 4/4 doubling to 240 at beat 4 (tick 720720, wall-clock
     // 2 s). A key at 3 s is 1 s past the boundary — 4 beats at 240 —
     // landing on beat 8 (tick 1441440), NOT the constant-bpm beat 6.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(tempo :at 4b :bpm 240)
         \\(track :target circle-radius
@@ -3000,7 +2990,7 @@ test "tempo-map: scene :at / :dur and trigger :at in s are map-correct" {
     // scene :at 3s → tick 1441440; :dur 1s is wall-clock FROM THE SCENE
     // START (3 s → 4 s = 4 beats at 240) → 720720 ticks, not the
     // origin-tempo 360360. The trigger hit at 3s matches the scene start.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(tempo :at 4b :bpm 240)
         \\(scene :name drop :at 3s :dur 1s
@@ -3020,7 +3010,7 @@ test "tempo-map: a scened key in s anchors at the scene start" {
     // Scene starts at beat 4 = the tempo boundary (wall-clock 2 s). A
     // key 1 s into the scene runs at 240 bpm → local 720720 ticks,
     // absolute 1441440 — the constant math would land at 1081080.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(tempo :at 4b :bpm 240)
         \\(scene :name drop :at 4b :dur 8b
@@ -3036,7 +3026,7 @@ test "tempo-map: a scened key in s anchors at the scene start" {
 }
 
 test "tempo-map: transport :dur in s converts from the origin; loop_secs is exact" {
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4] :dur 3s :end loop)
         \\(tempo :at 4b :bpm 240)
         \\(track :target circle-radius (key :at 0b :value 0))
@@ -3050,7 +3040,7 @@ test "tempo-map: transport :dur in s converts from the origin; loop_secs is exac
 }
 
 test "tempo-map: setBpm refuses a mapped score (tempo truth is score text)" {
-    var mapped = try compile(t.allocator,
+    var mapped = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :meter [4 4])
         \\(tempo :at 4b :bpm 240)
         \\(track :target circle-radius (key :at 0b :value 0))
@@ -3061,7 +3051,7 @@ test "tempo-map: setBpm refuses a mapped score (tempo truth is score text)" {
     try t.expectEqual(@as(f64, 120), mapped.table.?.transport.map.bpm);
 
     // A constant score still nudges — and keeps loop_secs coherent.
-    var flat = try compile(t.allocator,
+    var flat = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120 :dur 2bar :end loop)
         \\(track :target circle-radius (key :at 0b :value 0))
     , &test_targets);
@@ -3077,7 +3067,7 @@ test "tempo-map: a (tempo …) with no (transport …) is still transport_missin
     // Segment 0 IS the transport's :bpm — without a transport there is no
     // map to join, so the existing transport_missing verdict stands and
     // the orphaned (tempo …) forms are simply never walked.
-    var r = try compile(t.allocator,
+    var r = try compile(t.allocator, test_support.schema(),
         \\(tempo :at 160b :bpm 150)
     , &test_targets);
     defer r.deinit();

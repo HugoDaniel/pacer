@@ -68,6 +68,7 @@ const Writes = @import("Writes.zig");
 const ExprTrack = @import("ExprTrack.zig");
 const PatternTrack = @import("PatternTrack.zig");
 const Compile = @import("Compile.zig");
+const test_support = @import("test_support.zig");
 
 /// The shared grid position type (`i64`), re-exported for call sites.
 pub const Tick = sjon.Pattern.Tick;
@@ -621,7 +622,7 @@ const trigger_targets = [_]Compile.Target{
 };
 
 fn compileScoreWith(source: [:0]const u8, tgts: []const Compile.Target) !Compile.CompileResult {
-    var r = try Compile.compile(t_.allocator, source, tgts);
+    var r = try Compile.compile(t_.allocator, test_support.schema(), source, tgts);
     errdefer r.deinit();
     for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
     try t_.expect(r.ok());
