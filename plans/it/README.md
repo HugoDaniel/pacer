@@ -66,3 +66,30 @@ waits on (it 10's ladder: T2 = player+timeline, P40 = batida.wasm).
 Cross-repo context of record: `~/llm/plans/it/` (batida set — esp. 06 TimeMap,
 07 param surface, 09 demo composition) and `~/llm/plans/audzio/` (the future
 `(audio-graph …)` engine). This set never blocks on them for Wave A (see 00).
+
+## SJON re-verification (dated note 2026-08-25)
+
+This set was written on 2026-07-19, before SJON cut 1.1.0 (08-15), 1.2.0 (08-17) and
+the unreleased run to 08-18. Re-checked against `~/Dev/SJON` at `906b149`: **nothing
+here needs changing.**
+
+- **Wave A's schema surface is already current.** 01 shipped the `(tempo …)` form on
+  07-19; [`../12-sjon-alignment.md`](../12-sjon-alignment.md) swept the whole manifest
+  on 08-21 and modernised it in place — `(tempo …)` carries `:default`s read back
+  through `EffectiveView`, `bpm-value` carries `(unit-shape :reject true)` and its
+  bounds, and `time-pos` keeps the required-unit rule the plan froze. The
+  `:at`/`:bpm`-are-schema-optional discipline (a missing key is `tempo_map_invalid`
+  with a span, not a bare SJON error) survived the sweep intact, which is the property
+  01 cared about.
+- **Wave B is unaffected.** 03 P3–P4 and 04 are studio-editor TypeScript behind
+  external batida gates; neither touches `schema/pacer.sjon` or a SJON API. The score
+  text they emit is the same vocabulary the sweep already validated.
+- **One thing the sweep is worth reading for**, if 03 P4 ever moves the `:at`-list cap:
+  12's *reachability rule* — a rule that moves into the manifest short-circuits the
+  pacer builder, so a cap expressed as a schema bound makes its pacer diagnostic
+  unreachable and breaks `audit-diagnostics`. That is why `(head-set … :max-children)`
+  was rejected for `(seq …)` and why an imported-trigger cap belongs in `Compile.zig`,
+  not in a `time-pos-list` bound.
+
+The one SJON gap the sweep left is [`../13-sjon-union-arms.md`](../13-sjon-union-arms.md),
+and it does not touch this set.

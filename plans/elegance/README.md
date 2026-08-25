@@ -51,3 +51,22 @@ Two plans are release-relevant, the rest are quality:
 - [x] 05 builder-rows
 - [x] 04 pattern-dry-run-budget
 - [x] 03 driver-pinning
+
+## SJON re-verification (dated note 2026-08-25)
+
+This wave was distilled on 2026-07-20, before SJON cut 1.1.0 / 1.2.0 / the unreleased
+run. Re-checked against `~/Dev/SJON` at `906b149`: **nothing here is affected, and the
+wave stays closed.** Every finding it closed is a pacer-internal one — a hand-mirrored
+sum, a prose contract, a parallel-array convention — and none of them crosses the SJON
+boundary.
+
+The one plan that even looks SJON-adjacent is
+[04-pattern-dry-run-budget](04-pattern-dry-run-budget.md), and it is not: it bounds the
+**allocator** the compile-time pattern dry-run runs under so that a load cannot accept
+what the frame path would refuse. That is pacer's budget over SJON's
+`*WithBudget` entry points, not SJON's pattern *vocabulary*, which the language
+additions did not touch.
+
+The SJON-facing work lives in [`../12-sjon-alignment.md`](../12-sjon-alignment.md)
+(closed 2026-08-21) and its one follow-up,
+[`../13-sjon-union-arms.md`](../13-sjon-union-arms.md).

@@ -126,10 +126,28 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 4 | 11 hardening · P1–P5 ✓ (P5 diagnostic goldens 2026-07-18) → plan 11 DONE | ☑ |
 | 4 | 1.0 review · DONE 2026-07-18 (audit clean, 0.2.0 cut, studio refreshed) | ☑ |
 | 4 | 1.0-tag prereqs · DONE 2026-07-18 (fuzz ×2, wire policy, root LICENSE) | ☑ |
+| — | 12 sjon-alignment · Waves A–D ALL CLOSED 2026-08-21 (preload, schema vocabulary, project file + generated reference, examples; corpus 29 → 36) | ☑ |
+| — | 13 sjon-union-arms · Phase 1 not started (an upstream ask; see What's next) | ☐ |
 
 ## What's next
 
-→ **THE ROLLOUT IS COMPLETE and the 1.0-tag prerequisites are LANDED (2026-07-18).**
+→ **SJON re-verified 2026-08-25; one new plan, [13](13-sjon-union-arms.md), Phase 1.**
+Plan 12 realigned pacer with SJON 1.1/1.2+ on 2026-08-21 and closed all four waves, so
+there is no uplift backlog: preload, `:default`, `:requires`, exclusive groups,
+`(repr-shape …)`, `(variant :when [a b])`, slot-local bodies, hex literals, the project
+file and the generated reference all landed. SJON has shipped **nothing
+language-affecting since** — everything after 08-21 (checked to `906b149`, 2026-08-24)
+is landing-page, playground and tutorial work. What the sweep turned up is one thing 12
+observed and did not chase: the two hand-written unions in `schema/pacer.sjon`
+(`key-value`, `ease-spec`) report `union_no_branch_matched` and swallow the arm's own
+cause, so B6's whole point — *a value must fit f32* — never reaches the author, and a
+typo'd easing name names no legal set. SJON built arm-accurate reporting for
+`scalar-or-ref-shape` on 2026-08-18 (S13) and scoped it out of hand-written unions
+because their arms *may* overlap; these two do not. That is plan 13: file the ask, then
+pin the answer either way. Carried follow-up, still the only other one:
+the instrumented `--fuzz` re-check on the next zig toolchain bump.
+
+→ **Prior — THE ROLLOUT IS COMPLETE and the 1.0-tag prerequisites are LANDED (2026-07-18).**
 The review audited all wire-stable surfaces clean, fixed three TDD-red behavioral edges,
 bumped the triple-pin to **0.2.0**, and refreshed the studio (editor 1704/1704); the
 follow-up landed the review's decided remainder — the eval-clock purity + target-join
@@ -1262,3 +1280,38 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   full green (4880); pacer verify green (158 tests, corpus 22/22, npm 63), audit
   30/30. The ONLY remaining carried follow-up anywhere: instrumented `--fuzz` on a
   toolchain bump.
+
+- 2026-08-21 — **Plan 12 (SJON 1.1/1.2+ alignment) written and closed the same day**,
+  all four waves. Recorded here because this board never got its row while it ran; the
+  narrative of record is `CLAUDE.md`'s roadmap section and 12's own progress log.
+  Durable facts: (1) the schema is **preloaded** once per host, so every diagnostic
+  span is a score coordinate by construction and `Validated.combined` / `prefix_len` /
+  `userOffset` are gone; (2) every rule that moved into the manifest **deleted** the
+  pacer branch it subsumed — pacer voids the table on any SJON error, so a subsumed
+  branch is dead code, not a second line of defence, and the reachability rule in 12
+  is what decides whether a rule may move at all; (3) three rules were rejected on
+  structure and stay pacer diagnostics — a `(cross-ref …)` on `:target` (host
+  registries supply names no `(target …)` declares), a head-set count on `(seq …)`
+  (it would make `ease_stages_exceeded` unreachable), a `:when loop` variant for
+  `transport :dur` (`:dur` is legal under `hold` too, and a key lives in exactly one
+  place); (4) one tooling win was rejected too — harness files forgo LSP coverage,
+  because one project file means one composed vocabulary and both manifests declare a
+  `target` form.
+- 2026-08-25 — **SJON re-verified against the plans; no uplift backlog, one new plan.**
+  Checked `~/Dev/SJON` at `906b149` (2026-08-24): everything landing after 12's sweep
+  is landing-page / playground / tutorial work, so 1.2.0 plus the unreleased run to
+  08-18 is the whole of what pacer has to align with, and 12 covers it. The sibling
+  waves are unaffected — `it/` Wave A shipped `(tempo …)` before the sweep and the
+  sweep modernised it in place (`:default`, `:repr`, unit modes are all on the form
+  today), `it/` Wave B is studio TypeScript gated on batida milestones, and the
+  `elegance/` wave is closed and touches no schema surface (its 04 bounds
+  PatternQuery's *dry-run allocator*, not its vocabulary). **New: plan
+  [13](13-sjon-union-arms.md)** — the one gap the sweep left. `key-value` and
+  `ease-spec` are hand-written `(union-shape …)` kinds whose arms are disjoint by node
+  shape, so `union_no_branch_matched` swallows a cause that S13's arm-selection rule
+  (SJON 2026-08-18) already knows how to report; `corpus/diag-repr-f32`'s own header
+  documents the swallow. Upstream ask first, corpus pin after — the shape `euclid` and
+  `queryTreeWithEnv` both took. Also confirmed while sweeping: **pacer's PatternQuery
+  consumption is the reason `euclid` is in SJON's vocabulary**, which is worth
+  remembering the next time a plan set assumes patterns are unclaimed ground
+  (`~/llm/plans/it/` carried that assumption until it was corrected the same day).
