@@ -127,7 +127,7 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 4 | 1.0 review · DONE 2026-07-18 (audit clean, 0.2.0 cut, studio refreshed) | ☑ |
 | 4 | 1.0-tag prereqs · DONE 2026-07-18 (fuzz ×2, wire policy, root LICENSE) | ☑ |
 | — | 12 sjon-alignment · Waves A–D ALL CLOSED 2026-08-21 (preload, schema vocabulary, project file + generated reference, examples; corpus 29 → 36) | ☑ |
-| — | 13 sjon-union-arms · Phase 1 not started (an upstream ask; see What's next) | ☐ |
+| — | 13 sjon-union-arms · P1 ✓ filed as SJON asks `15` 2026-08-25 (unverdicted); P2 waits on SJON's answer | ☐ |
 
 ## What's next
 
@@ -143,9 +143,12 @@ observed and did not chase: the two hand-written unions in `schema/pacer.sjon`
 cause, so B6's whole point — *a value must fit f32* — never reaches the author, and a
 typo'd easing name names no legal set. SJON built arm-accurate reporting for
 `scalar-or-ref-shape` on 2026-08-18 (S13) and scoped it out of hand-written unions
-because their arms *may* overlap; these two do not. That is plan 13: file the ask, then
-pin the answer either way. Carried follow-up, still the only other one:
-the instrumented `--fuzz` re-check on the next zig toolchain bump.
+because their arms *may* overlap; these two do not. That is plan 13, and its **Phase 1 is done**: the
+ask is filed as `SJON/docs/plans/asks/15-union-arm-diagnostics.md`, unverdicted, with
+a reproduction that needs nothing of pacer. Phase 2 — the corpus pin, or the recorded
+refusal — waits on SJON's verdict; nothing here is blocked either way. Carried
+follow-ups: SJON asks `15`, and the instrumented `--fuzz` re-check on the next zig
+toolchain bump.
 
 → **Prior — THE ROLLOUT IS COMPLETE and the 1.0-tag prerequisites are LANDED (2026-07-18).**
 The review audited all wire-stable surfaces clean, fixed three TDD-red behavioral edges,
@@ -1315,3 +1318,17 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   consumption is the reason `euclid` is in SJON's vocabulary**, which is worth
   remembering the next time a plan set assumes patterns are unclaimed ground
   (`~/llm/plans/it/` carried that assumption until it was corrected the same day).
+- 2026-08-25 — **13 Phase 1 done: the ask is filed as SJON asks `15`**
+  (`SJON/docs/plans/asks/15-union-arm-diagnostics.md`, unverdicted; pacer is the
+  second host to file in that directory, after PNGine's fourteen). Two durable facts
+  from the re-derivation. (1) **The change SJON would make is smaller than the plan
+  guessed**: `Validator.zig:6589` already computes the arm and `:6598` already keeps
+  its `MatchFail` from the probe the loop runs anyway, both walkers funnel through
+  the one function, and `alternativeReaches` (`:6670`) is already general — the gate
+  is two guards, `:6717` and `:6721`. There is no re-run to pay for; S13 removed it.
+  (2) **It is a spec question as much as a code one**: `portable-manifest-v1.md`
+  §4.9 does not omit this behaviour, it states it and gives a reason ("there is no
+  arm to blame"), so a refusal is a complete answer and the ask is written to accept
+  one. Filing convention learned and followed: a filed ask gets a header sentence
+  and its own section in the asks README, **not** a verdict-table row — the row is
+  SJON's to add with its verdict, which is what PNGine's own filing (`c6593fb`) did.

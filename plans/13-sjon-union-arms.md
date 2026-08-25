@@ -69,9 +69,13 @@ a new rule, it is the existing rule applied to the other carrier:
 > is reachable from the value's node shape, report that arm's own diagnostic; when
 > zero or two or more are reachable, keep `union_no_branch_matched` exactly as today.
 
-Properties that make it cheap to accept, each to be re-derived against the tree before
-the ask is filed (the `docs/plans/asks/` discipline: an ask is a claim about SJON made
-from outside SJON):
+Properties that make it cheap to accept — **re-derived against `906b149` on
+2026-08-25 while filing**, and cheaper than this plan guessed: the union loop already
+computes the arm and keeps its `MatchFail` (`Validator.zig:6589`, `:6598`), both
+walkers already funnel through the one function (`:9119`/`:9133`, `:9233`/`:9238`),
+and `alternativeReaches` (`:6670`) never mentions `scalar_or_ref` at all — the entire
+gate is `if (!kind.scalar_or_ref) return null;` (`:6717`) plus a two-arm restriction
+(`:6721`). There is no re-run to pay for; S13 already removed it. The rest:
 
 - **No document changes verdict.** Matching is untouched; only the code a failure
   carries changes. This is the same guarantee S13 shipped under.
@@ -99,7 +103,7 @@ trade a good language for a good error message.
 
 ## Phases
 
-### Phase 1 — file the ask
+### Phase 1 — file the ask · **DONE 2026-08-25**
 Load: `SJON/docs/plans/asks/README.md` (the verdict table and the ledger's shape),
 `SJON/docs/plans/asks/13-scalar-or-ref-branch-diagnostics.md` (the precedent this
 extends), `schema/pacer.sjon` (the two kinds), `corpus/diag-repr-f32/doc.sjon`.
@@ -107,6 +111,14 @@ Work: re-derive every claim above against the SJON tree (file:line, not changelo
 then file the ask in SJON's own format — evidence first, verdict invited, the refusal
 case stated. Record the ask id here and in 00-strategy's decision log.
 Gate: none on this side; the deliverable is the ask document.
+
+**Filed as `SJON/docs/plans/asks/15-union-arm-diagnostics.md`** (`15`, not `11`:
+PNGine wrote up an S11 and did not file it, and the file numbers track its
+S-numbers — an ask from another host takes the next number after the last).
+Unverdicted, in SJON's format, registered from SJON's `docs/plans/README.md` and
+its asks README's "A second host's ask (filed 2026-08-25)" — no verdict-table row
+until there is a verdict, which is what PNGine's own filing did. pacer is the
+second host to file here.
 
 ### Phase 2 — pin it, once SJON answers
 Load: this file, `corpus/diag-repr-f32/`, `corpus/diag-ease/`, `docs/score-language.md`.
@@ -122,4 +134,23 @@ moves is SJON's).
 
 ## Progress log
 
-_(empty — Phase 1 not started)_
+- **2026-08-25 — Phase 1 done: the ask is filed.**
+  `SJON/docs/plans/asks/15-union-arm-diagnostics.md`, unverdicted, plus its
+  registration in SJON's `docs/plans/README.md` and the asks README. Two things the
+  re-derivation changed about this plan's own claims, both in pacer's favour:
+  (1) **the fix is smaller than "small"** — the union loop at `Validator.zig:6589`
+  already calls `scalarOrRefArm` and `:6598` already keeps the selected arm's
+  `MatchFail` from the probe it runs anyway, so there is no re-run and no extra
+  captured reference; the gate is the two guards at `:6717` and `:6721`, and
+  `alternativeReaches` (`:6670`) is already general over any alternative name.
+  (2) **it is a spec question too** — `docs/portable-manifest-v1.md` §4.9 does not
+  merely omit this, it states the opposite in as many words ("there is no arm to
+  blame … Spelling the same two kinds by hand as a `(union-shape …)` keeps the
+  collapsed report"), so a refusal is a complete answer and the ask says so.
+  The reproduction is SJON-only and runs: one plugin, eight document lines, showing
+  the same base kind and the same `1e39` reporting `union_no_branch_matched` through
+  a hand-written union and `repr_out_of_range` through a `scalar-or-ref`, with the
+  zero-reach and both-reach rows that must not change. Also noted while filing:
+  §4.9's own `[byte-count symbol]` example is shape-disjoint, so it is a case the
+  ask would improve too.
+  No pacer code, schema or corpus touched; gates not run (nothing to gate).
