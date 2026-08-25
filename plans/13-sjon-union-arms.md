@@ -120,7 +120,7 @@ its asks README's "A second host's ask (filed 2026-08-25)" — no verdict-table 
 until there is a verdict, which is what PNGine's own filing did. pacer is the
 second host to file here.
 
-### Phase 2 — pin it, once SJON answers
+### Phase 2 — pin it, once SJON answers · **DONE 2026-08-26 (the ask landed)**
 Load: this file, `corpus/diag-repr-f32/`, `corpus/diag-ease/`, `docs/score-language.md`.
 Work — **if the ask lands**: add a red for the typo'd easing name (there is no case for
 it today, which is itself a gap: `diag-ease` covers pacer's five ease codes and none of
@@ -131,6 +131,14 @@ Work — **if the ask is refused**: keep the corpus header as the record of why,
 the refusal's reasoning to it. Either way the case documents the real behaviour.
 Gate: `zig build verify` green, `audit-diagnostics` 31/31 (unchanged — every code that
 moves is SJON's).
+
+**SJON built it** (`docs/plans/asks/README.md`, verdict *Valid, and built*; SJON
+`08d6983`..`922579d`, 2026-08-26), and built it wider than the ask asked: the rule is
+per value and N-ary — count the alternatives the value's node shape reaches, and one
+reachable alternative is the arm — so `Plugin.ValueKind.scalar_or_ref` was **retired**
+rather than widened. `(scalar-or-ref-shape …)` is unchanged as a spelling; it just has
+no bit of its own any more. pacer's side is the corpus pin plus one test that turned
+out to be a second record of the swallow — see the progress log.
 
 ## Progress log
 
@@ -154,3 +162,37 @@ moves is SJON's).
   §4.9's own `[byte-count symbol]` example is shape-disjoint, so it is a case the
   ask would improve too.
   No pacer code, schema or corpus touched; gates not run (nothing to gate).
+
+- **2026-08-26 — Phase 2 done: SJON built the ask, and the corpus pins it.**
+  Verdict *Valid, and built* (`SJON/docs/plans/asks/README.md`, `08d6983`..`922579d`).
+  The rule shipped wider than filed — it is per value and N-ary (count the
+  alternatives the value's node shape reaches; exactly one is the arm), so the
+  `scalar_or_ref` bit is **retired** rather than widened, and `(scalar-or-ref-shape …)`
+  keeps its spelling with no flag behind it. Manifest §4.9 now owns the rule for every
+  union instead of stating the collapse as deliberate.
+
+  pacer's side, all four gates green (`verify`, corpus 36 → **37**,
+  `audit-diagnostics` 31/31, score-docs unchanged — no `:description` moved):
+
+  - **`corpus/diag-ease-name`** is the new red the plan asked for, and it pins four
+    rows rather than one, because two of them are the rule's *boundaries*:
+    `:ease smoothstepp` → `not_member` with all eighteen legal names (code 35, was 38);
+    `:ease (transport :bpm 120)` → `not_head_member` naming the five combinator heads
+    (37, was 38); `:ease (spring2 …)` → `unknown_form` (1); `:ease "linear"` →
+    `union_no_branch_matched` (38), still, because a string reaches neither arm.
+  - **A typo'd combinator head does not get the arm treatment**, which the plan did not
+    foresee: head resolution runs before the slot's kind is consulted, so `spring2`
+    is `unknown_form` and never reaches the union. The `not_head_member` red therefore
+    needs a head that *exists* — hence `(transport …)` in an `:ease` slot, which is
+    otherwise an odd thing to write. Same reason `(stage …)` outside `(seq …)` is
+    `unknown_form`: it is a slot-local, and outside its slot it is nothing.
+  - **`corpus/diag-repr-f32`'s `:value` row moved 38 → 114** (`repr_out_of_range`), so
+    both spellings of the slot now say the value does not fit f32 — the paragraph
+    explaining the swallow is now the paragraph explaining the arm.
+  - **One source change the plan did not list.** `src/Compile.zig`'s "values that
+    narrow to f32 must FIT" test asserted `union_no_branch_matched` for the three
+    union slots and `repr_out_of_range` only for the bare ones — the corpus header was
+    *not* the only record of the swallow, and `zig build verify` failed on it before
+    it failed on anything else. Its six cases now assert one code, and it gained the
+    boundary the corpus also pins: `:value "nope"` reaches neither arm and keeps the
+    union's own report.

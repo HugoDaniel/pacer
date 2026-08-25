@@ -127,11 +127,23 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 4 | 1.0 review · DONE 2026-07-18 (audit clean, 0.2.0 cut, studio refreshed) | ☑ |
 | 4 | 1.0-tag prereqs · DONE 2026-07-18 (fuzz ×2, wire policy, root LICENSE) | ☑ |
 | — | 12 sjon-alignment · Waves A–D ALL CLOSED 2026-08-21 (preload, schema vocabulary, project file + generated reference, examples; corpus 29 → 36) | ☑ |
-| — | 13 sjon-union-arms · P1 ✓ filed as SJON asks `15` 2026-08-25 (unverdicted); P2 waits on SJON's answer | ☐ |
+| — | 13 sjon-union-arms · P1 ✓ ask filed as SJON `15` 2026-08-25, P2 ✓ SJON built it 2026-08-26 and the corpus pins it (36 → 37 cases) → plan 13 DONE | ☑ |
 
 ## What's next
 
-→ **SJON re-verified 2026-08-25; one new plan, [13](13-sjon-union-arms.md), Phase 1.**
+→ **[13](13-sjon-union-arms.md) is DONE — the ask landed and the corpus pins it (2026-08-26).**
+SJON answered *Valid, and built* the day after it was filed, and built it wider: the arm
+rule is per value and N-ary, for **every** union, so `Plugin.ValueKind.scalar_or_ref` is
+retired rather than widened. pacer's two hand-written unions now report the arm — a
+typo'd easing name answers `not_member` with all eighteen legal names, and `:value 1e39`
+finally says the value does not fit f32, which was 12's Phase B6's whole point. Pinned by
+the new `corpus/diag-ease-name` (four rows: the two arms, plus the two boundaries — an
+undeclared head is `unknown_form` before the union is consulted, and a value that reaches
+neither arm keeps `union_no_branch_matched`) and by `corpus/diag-repr-f32`, whose header
+now explains the arm instead of the swallow. Carried follow-up, back to one: the
+instrumented `--fuzz` re-check on the next zig toolchain bump.
+
+→ **Prior — SJON re-verified 2026-08-25; one new plan, [13](13-sjon-union-arms.md), Phase 1.**
 Plan 12 realigned pacer with SJON 1.1/1.2+ on 2026-08-21 and closed all four waves, so
 there is no uplift backlog: preload, `:default`, `:requires`, exclusive groups,
 `(repr-shape …)`, `(variant :when [a b])`, slot-local bodies, hex literals, the project
@@ -1332,3 +1344,20 @@ bit-exact eval, and the `transport-emit` golden. See 04's progress log; the stud
   one. Filing convention learned and followed: a filed ask gets a header sentence
   and its own section in the asks README, **not** a verdict-table row — the row is
   SJON's to add with its verdict, which is what PNGine's own filing (`c6593fb`) did.
+- 2026-08-26 — **13 Phase 2 done, and plan 13 with it: SJON built the ask.** Verdict
+  *Valid, and built* one day after filing (`SJON/docs/plans/asks/README.md`,
+  `08d6983`..`922579d`). Three things worth carrying. (1) **The answer was wider than
+  the ask.** pacer asked for arm selection on shape-disjoint unions; SJON made it the
+  rule for every union, decided per value and N-ary — count the alternatives the value's
+  node shape reaches, exactly one is the arm — and therefore **retired**
+  `Plugin.ValueKind.scalar_or_ref` instead of widening its gate. Manifest §4.9 now owns
+  the rule where it used to state the collapse as deliberate. The lesson repeats
+  `euclid`'s: file the motivating case, let SJON pick the shape. (2) **The corpus was
+  not the only record of the swallow.** `corpus/diag-repr-f32`'s header documented it,
+  and so did an assertion inside `src/Compile.zig`'s repr test — which is what actually
+  failed `verify` first. A behaviour worth writing into a corpus header is worth
+  grepping for before assuming the pin is one file. (3) **Head resolution beats arm
+  selection**: an undeclared head (`spring2`) is `unknown_form` and never reaches the
+  slot's kind, so a `not_head_member` red needs a form that exists. Both boundaries are
+  now pinned in `corpus/diag-ease-name`, along with the value that reaches neither arm
+  and keeps `union_no_branch_matched`.
