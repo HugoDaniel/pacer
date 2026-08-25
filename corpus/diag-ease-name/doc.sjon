@@ -1,0 +1,38 @@
+; diag-ease-name: the ease diagnostics the SCHEMA owns — diag-ease covers
+; pacer's five ease codes and none of SJON's. `:ease` is a union of a
+; closed name set and a combinator head-set, and its two arms are
+; disjoint by node shape, so a failing value reports the arm it could
+; only have meant (SJON ask 15, filed from here, built 2026-08-26): a
+; symbol reports not_member with the legal set, a form reports
+; not_head_member with the legal heads. Before the rule both collapsed to
+; union_no_branch_matched naming two kinds and no cause.
+;
+; The two rows after them are the boundaries. An undeclared head is
+; unknown_form: head resolution runs before arm selection, so a typo'd
+; combinator never reaches the union at all. A string reaches NEITHER
+; arm, so the collapse stands — the rule is decided per value, not per
+; slot. Load fails, so times are never evaluated.
+(transport :bpm 120)
+
+; not_member — `smoothstepp` for `smoothstep`, the likeliest typo in a
+; score, against a closed set of eighteen names.
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 1b :value 1 :ease smoothstepp))
+
+; not_head_member — a real form, but not one of the five ease heads.
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 1b :value 1 :ease (transport :bpm 120)))
+
+; unknown_form — `spring2` is declared nowhere, so the head is rejected
+; before the slot's kind is consulted.
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 1b :value 1 :ease (spring2 :damping 0.6)))
+
+; union_no_branch_matched — a string is neither a symbol nor a form, so
+; no arm is determined and the union's own report is the honest one.
+(track :target radius
+  (key :at 0b :value 0)
+  (key :at 1b :value 1 :ease "linear"))

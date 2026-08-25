@@ -2068,37 +2068,52 @@ test "values that narrow to f32 must FIT — 1e39 is refused, not encoded as +in
     // a span. Range-only by design — precision loss (16777217 losing its
     // low bit) stays the emitter's accepted step.
     //
-    // The CODE differs by slot, and that is SJON's rule, not a pacer
-    // choice: a hand-written union names its alternatives and forwards no
-    // branch's private cause (portable-manifest §4.9). So every slot typed
-    // `key-value` — a union of scalar and vector — reports
-    // `union_no_branch_matched`, and only the slots typed by a bare kind
-    // report `repr_out_of_range`. Both refuse; both carry a span.
-    const cases = [_]struct { src: [:0]const u8, code: Ast.Diagnostic.Code }{
-        // …a scalar key value (union slot)…
-        .{ .src = "(transport :bpm 120)\n(track :target circle-radius (key :at 0b :value 1e39))", .code = .union_no_branch_matched },
+    // EVERY slot reports the same code, and that is SJON's rule, not a
+    // pacer choice: a union whose alternatives are disjoint by node shape
+    // reports the arm the value could only have meant
+    // (portable-manifest §4.9, SJON ask 15). A number in a `key-value`
+    // slot can only have meant `plain-number`, a vector only `vec-value`,
+    // so the union spelling says what the bare kind says. It used to
+    // collapse to `union_no_branch_matched` naming two kinds and no
+    // cause — the rule landed, its message did not, and the corpus case
+    // `diag-repr-f32` was written around the swallow.
+    const cases = [_][:0]const u8{
+        // …a scalar key value (union slot, scalar arm)…
+        "(transport :bpm 120)\n(track :target circle-radius (key :at 0b :value 1e39))",
         // …a vector component (union slot, vector arm)…
-        .{ .src = "(transport :bpm 120)\n(track :target tint (key :at 0b :value [0 -1e39 0]))", .code = .union_no_branch_matched },
+        "(transport :bpm 120)\n(track :target tint (key :at 0b :value [0 -1e39 0]))",
         // …a control's document value (union slot)…
-        .{ .src = "(transport :bpm 120)\n(control :id knob :value 1e39)", .code = .union_no_branch_matched },
+        "(transport :bpm 120)\n(control :id knob :value 1e39)",
         // …a seq stage's time weight and value span (bare kinds)…
-        .{ .src = "(transport :bpm 120)\n(track :target circle-radius\n  (key :at 0b :value 0)\n  (key :at 1b :value 1 :ease (seq (stage :ease linear :t 1e39 :v 1))))", .code = .repr_out_of_range },
-        .{ .src = "(transport :bpm 120)\n(track :target circle-radius\n  (key :at 0b :value 0)\n  (key :at 1b :value 1 :ease (seq (stage :ease linear :t 1 :v 1e39))))", .code = .repr_out_of_range },
+        "(transport :bpm 120)\n(track :target circle-radius\n  (key :at 0b :value 0)\n  (key :at 1b :value 1 :ease (seq (stage :ease linear :t 1e39 :v 1))))",
+        "(transport :bpm 120)\n(track :target circle-radius\n  (key :at 0b :value 0)\n  (key :at 1b :value 1 :ease (seq (stage :ease linear :t 1 :v 1e39))))",
         // …and a bezier control point (vector element, bare kind).
-        .{ .src = "(transport :bpm 120)\n(track :target circle-radius\n  (key :at 0b :value 0)\n  (key :at 1b :value 1 :ease (cubic-bezier :p [0.4 1e39 0.2 1])))", .code = .repr_out_of_range },
+        "(transport :bpm 120)\n(track :target circle-radius\n  (key :at 0b :value 0)\n  (key :at 1b :value 1 :ease (cubic-bezier :p [0.4 1e39 0.2 1])))",
     };
-    for (cases) |c| {
-        var r = try compile(t.allocator, test_support.schema(), c.src, &test_targets);
+    for (cases) |src| {
+        var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
-        const d = findCode(&r.validated, c.code) orelse {
-            std.debug.print("expected {s}; got:\n", .{@tagName(c.code)});
+        const d = findCode(&r.validated, .repr_out_of_range) orelse {
+            std.debug.print("expected repr_out_of_range; got:\n", .{});
             for (r.validated.result.diagnostics) |got| std.debug.print("  {s}: {s}\n", .{ @tagName(got.code), got.message });
             return error.TestUnexpectedResult;
         };
         // The span lands on the offending literal, in score coordinates.
-        try t.expect(std.mem.indexOf(u8, c.src[d.span.start..d.span.end], "1e39") != null);
+        try t.expect(std.mem.indexOf(u8, src[d.span.start..d.span.end], "1e39") != null);
     }
+
+    // The boundary of the rule above, and the reason the arm can be
+    // trusted: an arm is determined PER VALUE. A string reaches neither
+    // alternative of `key-value`, nothing else could have been meant is
+    // false, and the union's own report is what stands.
+    var no_arm = try compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(track :target circle-radius (key :at 0b :value "nope"))
+    , &test_targets);
+    defer no_arm.deinit();
+    try t.expect(!no_arm.ok());
+    try t.expect(findCode(&no_arm.validated, .union_no_branch_matched) != null);
 
     // The largest f32 still compiles — the bound is the type's, not a
     // hand-picked ceiling.
