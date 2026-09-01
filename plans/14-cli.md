@@ -45,14 +45,51 @@ pacer check <score.sjon|-> [--target …] [--json]
   document IR, which a live override does not change.
 - `-` reads stdin; the file label becomes `<stdin>`.
 
-### Render from the blobs, not the table
+### Render from MEMORY, not from the blobs
 
-`corpus_runner.renderMeta` already encodes via `Abi` then decodes field by field,
-so the golden sits ON the wire format. SJON does the same for `eval
---format=json`. The CLI follows — but rather than hand-rolling a *second* Zig
-decoder (there is already one inline in the runner and one in JS), the reading
-halves go into `Abi` itself, symmetric with `encodeTargets`/`decodeTargets` and
-`Writes.encode`/`decode`.
+`corpus_runner.renderMeta` encodes via `Abi` then decodes field by field, so the
+golden sits ON the wire format. That ritual is right for the corpus, whose whole
+job is proving `'PACM'` byte-identical native and wasm. It is the WRONG ritual
+for the CLI, because `'PACM'` is lossy relative to the in-memory result and the
+lost parts are exactly what an `ir` dump promises:
+
+- **No emit lanes at all.** `TrackTable.Transport.emit` has no `'PACM'`
+  representation, so a score with `(transport :emit [beat bar])` would render
+  NOTHING about it. Verified: `Abi.zig` has no `emit` anywhere.
+- **No target names** — only `target_id`. `corpus_runner` already breaks out of
+  the blob for these, resolving through `result.targets`.
+- **No scene names** — a span only.
+- **No expr / pattern source text** — the track record is a `source` byte 0..3.
+- **No merged-join origins.** `CompileResult.targets` is a native-side view that
+  preserves host indices then appends compose-mode declarations, so `origin:
+  host|declared` is computable natively and unavailable on the wire.
+- **Codes as ordinals, not names.** `'PACD'` carries `Compile.Code`'s u16; the
+  CLI wants `@tagName` beside it, which only the in-memory enum has.
+
+So `ir`, `check` and `eval` all render from `CompileResult` / `TrackTable` /
+`Writes.Entry` directly. The CLI is native-only and makes no parity claim, so
+round-tripping through a wasm-boundary format to produce native-only output
+would be ritual, not proof.
+
+The one thing that ritual DID buy is the diagnostic merge order — `encodeDiags`
+writes every SJON diagnostic first, then every pacer code. Rendering from memory
+re-spells that, so pin it with a counterfactual test rather than a decoder: on a
+score tripping both, the rendered array's `(producer, code_id, span.start)`
+triples must match the blob's positionally.
+
+### The one core change: `Eval.Evaluator.last_tick`
+
+`evalSeconds` wraps SECONDS first for a mapped score, then converts; `evalTicks`
+then wraps again in TICKS (`@mod(t, dur)`). Either way the tick the writes came
+from is `evalTicks`'s post-wrap value, which is NOT `map.tickFromSeconds(seconds)`
+— they diverge on every looping score past its `:dur`. A CLI printing a frame's
+tick therefore cannot recompute it, and must not re-spell the wrap (a pinned
+determinism seam).
+
+So `Evaluator` gains `last_tick: Tick = 0` beside `expr_failures`, assigned in
+`evalTicks` after the wrap, documented in the same voice ("a debugging probe, not
+semantics"). Additive, no wire impact, no behaviour change. **Its gate is that
+every corpus golden stays byte-identical.**
 
 ### Channels and exit codes
 
@@ -105,6 +142,21 @@ hanging at 0% CPU with no diagnostic.
 - `CompileResult.targets` aliases caller memory for host names; argv outlives the
   compile, so `--target` names borrow from argv.
 - A frame aliases the evaluator's reused buffer — render before the next eval.
+- Write values are truncated to `ncomp` lanes in the JSON — `ncomp` sits beside
+  them so nothing is hidden, and it makes `--set pan=0.25,0.5` and
+  `"value":[0.25,0.5]` the same spelling in both directions.
+- `std.fmt.parseFloat` ACCEPTS `"nan"` and `"inf"`, so `--set` must reject
+  non-finite lanes in the parser (a typo, not a score property) rather than
+  leaning on `setControl`'s bool.
+- `eval` with neither `--at` nor a sweep is a usage error, not a default of 0:
+  adding a default later is additive, removing one is breaking.
+- Sweep times are `from + i/fps` computed from `i`, never accumulated, so a long
+  sweep does not drift. Explicit `--at`s come first in argv order, then the
+  sweep; no sorting, no dedup — the frames array indexes 1:1 with what was asked.
+- CLI tests CANNOT ride `src/root.zig`'s `test {}` block: these files
+  `@import("pacer")`, which inside the core test binary resolves to a second,
+  distinct module instance. Hence a separate `addTest` rooted at `src/cli/Cli.zig`,
+  whose own `test {}` plays root.zig's role one level down.
 - `std.json.Stringify` prints a non-finite f64 as bare `nan`/`inf` (invalid
   JSON). pacer never lets one into a write, so the only door is argv: reject
   non-finite `--at`/`--from`/`--to`/`--set` at parse time.
@@ -117,24 +169,117 @@ Gate: `zig build verify` with a ZERO-byte corpus diff.
 
 ### Phase 2 — CLI skeleton + `check`
 Load: `src/cli/*` (new), `build.zig`, `SJON/src/cli/main.zig` for the entry shape.
-Reds: `invoke(&.{"pacer","check",fixture})` → `(code, stdout, stderr)`; unknown
-flag → 2; missing positional → 2; a clean corpus score → 0; `corpus/diag-controls`
-→ 1 with five diagnostics; `--json` parses. Table tests for `indexToLineCol`
-(UTF-8 included) and `--target` parsing.
-Build wiring: a NAMED `cli` step, not `b.installArtifact` — bare `zig build`
-installs nothing today and that property holds. Plus a `run` step forwarding
-`b.args`, and a `cli_tests` artifact `test` and `verify` depend on.
+New: `main.zig`, `Cli.zig`, `Args.zig`, `Json.zig`, `Source.zig`, `Diags.zig`.
+Reds: `Json` escaping / invalid-UTF-8 → U+FFFD / non-finite → `null`; `LineIndex`
+(ASCII, multi-byte columns, offset inside a sequence, CRLF, EOF, past-EOF, empty,
+invalid lead); `Args` verb dispatch, `-` as positional not flag, `--target`
+grammar and the `Compile.MAX_TARGETS` cap; the `encodeDiags` merge-order pin; end
+to end over `corpus/diag-controls/doc.sjon` → exit 1 with five diagnostics, and a
+clean score → exit 0, `diagnostics: []`, empty stderr.
+Build wiring: a NAMED `cli` step, not `b.installArtifact` — nothing in this build
+attaches to the default install step, so a bare `zig build` stays a no-op and
+should keep doing so. Plus a `run` step forwarding `b.args`, and the separate CLI
+test artifact hung on `test_step`.
 
 ### Phase 3 — `ir`
-Load: `src/cli/Cli.zig`, `src/cli/Render.zig`, `src/Abi.zig` (MetaView),
-`npm/pacer/src/types.js` for field names.
+Load: `src/TrackTable.zig`, `src/TimeMap.zig`, `src/Easing.zig` (`Op`/`Stage`/
+`Program`), `src/Compile.zig` (`Target` + the `CompileResult.targets` doc).
+New: `src/cli/Ir.zig`.
+Reds: keys + easing variety; `:expr` / `:pattern` / `(trigger …)` with their
+SOURCE TEXT asserted via the track span; scenes + a `(tempo …)` map +
+`(transport :emit …)` + a compose-mode `(target …)` asserting `origin: declared`.
 
-### Phase 4 — `eval`, `--set`, sampling
-Load: `src/cli/Cli.zig`, `src/cli/Render.zig`, `src/Eval.zig` (control API).
+### Phase 4 — `eval`, `--set`, sampling, and the `last_tick` probe
+Load: `src/Eval.zig`, `src/Writes.zig`, `src/TrackTable.zig` (`Control`),
+`src/cli/Args.zig` + `Cli.zig`.
+New: `src/cli/Frames.zig`; `src/Eval.zig` gains `last_tick` — the ONLY file
+outside `src/cli/` this plan touches.
+Reds: the probe on a mapped looping score past `:dur` reports the WRAPPED tick
+(this red lives in `Eval.zig`'s own tests); sweep count/endpoints/caps/partial
+flags; `--set` grammar, name-vs-slot, unknown id, out-of-range slot, non-finite
+rejected at parse; a two-sample test proving the frame-aliasing rule is respected
+(frames must STREAM — never collect, or every frame shows the last one's writes);
+an out-of-range time → `out_of_range: true` at exit 0; `--set` rejected by `ir`.
+Gate: `zig build verify`, and every corpus golden byte-identical after the probe.
 
-### Phase 5 — docs
-`docs/cli.md` (hand-written — no schema to render from), the verb in CLAUDE.md's
-build-verb table, a README layout row, and the explicit "CLI JSON is not a wire
-surface" note in CLAUDE.md's wire-stable section.
+### Phase 5 — the binary golden and the docs
+Load: `tools/score_docs.sh` (the shape to copy), `build.zig`, `CLAUDE.md`,
+`README.md`.
+New: `tools/cli_golden.sh` + `src/cli/testdata/{starter.ir,starter.eval,
+controls.check}.json`; `docs/cli.md`.
+The goldens live under `src/cli/testdata/`, NOT `corpus/` — that directory's
+contract is native-vs-wasm byte equality and the CLI makes no such claim. Same
+check-by-default / `--update`-to-write shape as `score_docs.sh`, check leg on
+`verify`, update leg on a `cli-golden` verb. `examples/starter.score.sjon` is the
+fixture: keys, expr, pattern, trigger, scene, tempo map, control, three easing
+combinators, two registries.
+Docs: a `zig build cli` row in CLAUDE.md's verb table, one sentence under
+Wire-stable surfaces naming the CLI JSON as deliberately OUTSIDE the set (one
+producer, no second decoder — so it is versioned via `"format": N`, not frozen),
+and a README row.
 
 ## Progress log
+
+### Phase 1 — `Abi.decodeMeta` / `decodeDiags` — DONE 2026-09-01
+
+**Deliverable — the reading halves of the two encode-only blobs** (`src/Abi.zig`),
+symmetric with the `encodeTargets`/`decodeTargets` and `Writes.encode`/`decode`
+pairs already there. `decodeMeta(blob) ?MetaView` and `decodeDiags(blob) ?DiagView`,
+plus the decoded record types `MetaTrack` / `MetaKey` / `MetaControl` / `MetaScene`
+/ `MetaTempoSeg` / `DiagRecord` and the three wire enums `TrackSourceKind` /
+`DiagSource` / `DiagSeverity`.
+
+**Both decoders are TOTAL** — every defect returns null rather than trapping,
+matching `decodeTargets`, because a blob is host glue's output. Validation happens
+ONCE at decode (lengths, magic, version, every enum byte, key ranges inside the key
+stream, each section's exact payload accounting, no repeated section id, no
+trailing bytes); the accessors are therefore assert-based, not fallible. Every
+returned slice — a diagnostic message, a control id — ALIASES the blob.
+
+**Enum bytes are validated at decode, not at access**, because the accessors return
+real enum values (`Easing.Op`, `TrackTable.ControlType`, `TrackSourceKind`): an
+unvalidated byte would be an invalid enum, i.e. UB, rather than a null. That is why
+`decodeMeta` walks all 8×4 op slots of every `'EASE'` program. Zeroed slots decode
+cleanly because `Op.linear == 0`, matching `Program.zero_stage`.
+
+**An unknown section id is still skipped by length** — the TLV tolerance guarantee
+is under test (`decodeMeta: an unknown section id is skipped by length`), and an
+ABSENT section reads as an EMPTY one (`sceneCount() == 0`), which is the encoder's
+own omit-when-count-is-zero equivalence.
+
+**`corpus_runner` now renders through them.** `renderMeta` / `renderEasePrograms` /
+`renderDiags` lost ~205 lines of inline byte-walking; `renderLanes` and `renderRail`
+now take `[4]f32` / `?[4]f32` instead of raw byte slices, and the section order is
+stated explicitly (`'SCEN'`, `'EASE'`, `'TMPO'`) rather than emerging from the walk
+— which is the encoder's fixed order restated as code. `easeOpName` and
+`controlTypeName` are gone: `@tagName` over the decoded enums gives the same
+spellings the goldens pin.
+
+**Zig 0.16 note:** `std.meta.intToEnum` no longer exists; the checked conversion is
+`std.enums.fromInt(E, x) ?E`.
+
+**Gate: `zig build verify` green with a ZERO-byte corpus diff** — 37 cases
+byte-identical, no golden touched. That diff being empty IS the proof the decoders
+match the encoder, which is why this phase came before any CLI code. It also makes
+`encodeMeta` round-trip testable in Zig for the first time (previously it was only
+proven through golden text).
+
+**CORRECTION, same day, before Phase 2 started.** This phase was planned partly on
+the premise that the CLI would otherwise be a THIRD hand-rolled `'PACM'` decoder.
+That premise is FALSE and the plan's design section now says the opposite: the CLI
+renders from memory, because `'PACM'` carries no emit lanes, no target names, no
+scene names, no expr/pattern source text, no join origins, and codes as ordinals
+rather than names. So neither decoder gets a CLI consumer.
+
+The phase is kept anyway, on the two justifications that survive independently:
+`corpus_runner` shed ~205 lines of inline byte-walking, and `encodeMeta` became
+round-trip testable in Zig for the first time (it was previously provable only
+through golden text). `decodeMeta`/`decodeDiags` are also a fair public surface for
+any host reading a blob back. Recorded rather than quietly dropped, because a
+progress log that only lists the reasons that worked out is not a log.
+
+**Carry-forward for Phase 2:** nothing from this phase is on the CLI's path. Read
+the IR from `driver.result` — `table.tracks` / `.keys` / `.controls` / `.scenes` /
+`.programs` / `.transport` — and diagnostics from `result.diagnostics` plus
+`result.validated.result.diagnostics`, in that order (the merge `encodeDiags`
+performs, pinned by a counterfactual test rather than by decoding).

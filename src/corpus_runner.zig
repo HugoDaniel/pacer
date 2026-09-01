@@ -601,204 +601,134 @@ fn renderCase(
 fn renderMeta(a: Allocator, w: *Io.Writer, result: *const Compile.CompileResult, doc: []const u8) !void {
     const blob = try a.alloc(u8, Abi.metaEncodedLen(result));
     // Sized exactly by `metaEncodedLen` — BufferTooSmall here would be
-    // an encoder accounting bug, not a resource condition.
+    // an encoder accounting bug, not a resource condition. The decode
+    // likewise reads our own bytes, so a null is an encoder/decoder
+    // disagreement, which is the thing this pairing exists to catch.
     _ = Abi.encodeMeta(result, blob) catch unreachable;
+    const m = Abi.decodeMeta(blob) orelse unreachable;
 
-    const bpm_bits = std.mem.readInt(u64, blob[8..16], .little);
-    const dur = std.mem.readInt(i64, blob[16..24], .little);
-    const beats_per_bar = std.mem.readInt(u16, blob[24..26], .little);
-    const flags = blob[26];
-    const track_count = std.mem.readInt(u32, blob[28..32], .little);
-    const key_count = std.mem.readInt(u32, blob[32..36], .little);
-    const control_count = std.mem.readInt(u32, blob[36..40], .little);
-
-    w.print("(meta :bpm \"{X:0>16}\" :beats-per-bar {d}", .{ bpm_bits, beats_per_bar }) catch return error.OutOfMemory;
-    if (flags & 1 != 0) {
-        w.print(" :dur {d} :end {s}", .{ dur, if (flags & 2 != 0) "loop" else "hold" }) catch return error.OutOfMemory;
+    w.print("(meta :bpm \"{X:0>16}\" :beats-per-bar {d}", .{
+        @as(u64, @bitCast(m.bpm)), m.beats_per_bar,
+    }) catch return error.OutOfMemory;
+    if (m.dur) |dur| {
+        w.print(" :dur {d} :end {s}", .{ dur, if (m.end_loop) "loop" else "hold" }) catch return error.OutOfMemory;
     }
 
-    const keys_base: usize = Abi.META_HEADER_LEN + @as(usize, track_count) * Abi.META_TRACK_LEN;
-    var toff: usize = Abi.META_HEADER_LEN;
-    for (0..track_count) |_| {
-        const rec = blob[toff..][0..Abi.META_TRACK_LEN];
-        const target_id = std.mem.readInt(u16, rec[0..2], .little);
-        const source = rec[4];
-        const key_start = std.mem.readInt(u32, rec[8..12], .little);
-        const key_len = std.mem.readInt(u32, rec[12..16], .little);
+    for (0..m.track_count) |ti| {
+        const track = m.track(ti);
         w.print("\n  (mtrack :id {d} :target {s} :registry {d} :ncomp {d} :source {s} :span [{d} {d}]", .{
-            target_id,                                  result.targets[target_id].name,
-            rec[2],                                     rec[3],
-            switch (source) {
-                0 => "keys",
-                1 => "expr",
-                2 => "trigger",
-                3 => "pattern",
-                else => unreachable,
-            },
-            std.mem.readInt(u32, rec[16..20], .little), std.mem.readInt(u32, rec[20..24], .little),
+            track.target_id,
+            result.targets[track.target_id].name,
+            track.registry,
+            track.ncomp,
+            @tagName(track.source),
+            track.span.start,
+            track.span.end,
         }) catch return error.OutOfMemory;
-        for (0..key_len) |k| {
-            const krec = blob[keys_base + (@as(usize, key_start) + k) * Abi.META_KEY_LEN ..][0..Abi.META_KEY_LEN];
-            w.print("\n    (mkey :at {d} :value [", .{std.mem.readInt(i64, krec[0..8], .little)}) catch return error.OutOfMemory;
-            try renderLanes(w, krec[8..24]);
-            w.print("] :span [{d} {d}])", .{
-                std.mem.readInt(u32, krec[24..28], .little), std.mem.readInt(u32, krec[28..32], .little),
-            }) catch return error.OutOfMemory;
+        for (0..track.key_len) |k| {
+            const key = m.key(track.key_start + k);
+            w.print("\n    (mkey :at {d} :value [", .{key.at}) catch return error.OutOfMemory;
+            try renderLanes(w, key.value);
+            w.print("] :span [{d} {d}])", .{ key.span.start, key.span.end }) catch return error.OutOfMemory;
         }
         w.writeByte(')') catch return error.OutOfMemory;
-        toff += Abi.META_TRACK_LEN;
     }
 
-    var coff: usize = keys_base + @as(usize, key_count) * Abi.META_KEY_LEN;
-    for (0..control_count) |i| {
-        const rec = blob[coff..][0..Abi.META_CONTROL_LEN];
-        const target_id = std.mem.readInt(u16, rec[0..2], .little);
-        const cflags = rec[5];
-        const id_len = std.mem.readInt(u16, rec[6..8], .little);
-        const id = blob[coff + Abi.META_CONTROL_LEN ..][0..id_len];
+    var controls = m.controls();
+    var ci: usize = 0;
+    while (controls.next()) |ctl| : (ci += 1) {
         w.print("\n  (mcontrol :index {d} :id {s} :target {s} :registry {d} :ncomp {d} :type {s} :value [", .{
-            i,                                                                               id,
-            if (target_id == Abi.META_NO_TARGET) "none" else result.targets[target_id].name, rec[2],
-            rec[3],                                                                          controlTypeName(rec[4]),
+            ci,
+            ctl.id,
+            if (ctl.target_id) |id| result.targets[id].name else "none",
+            ctl.registry,
+            ctl.ncomp,
+            @tagName(ctl.kind),
         }) catch return error.OutOfMemory;
-        try renderLanes(w, rec[8..24]);
+        try renderLanes(w, ctl.value);
         w.writeAll("] :min ") catch return error.OutOfMemory;
-        try renderRail(w, cflags & 1 != 0, rec[24..40]);
+        try renderRail(w, ctl.min);
         w.writeAll(" :max ") catch return error.OutOfMemory;
-        try renderRail(w, cflags & 2 != 0, rec[40..56]);
-        w.print(" :value-span [{d} {d}])", .{
-            std.mem.readInt(u32, rec[56..60], .little), std.mem.readInt(u32, rec[60..64], .little),
-        }) catch return error.OutOfMemory;
-        coff += Abi.META_CONTROL_LEN + id_len;
+        try renderRail(w, ctl.max);
+        w.print(" :value-span [{d} {d}])", .{ ctl.value_span.start, ctl.value_span.end }) catch return error.OutOfMemory;
     }
 
-    // Post-controls section stream (the 'PACM' TLV convention): walk to
-    // end-of-buffer, render the 'SCEN' scenes section, skip any unknown
-    // id by its length (the tolerance guarantee). `blob.len` is exactly
-    // `metaEncodedLen`, so the walk terminates on the last frame.
-    var soff: usize = coff;
-    while (soff < blob.len) {
-        const sid = std.mem.readInt(u32, blob[soff..][0..4], .little);
-        const plen = std.mem.readInt(u32, blob[soff + 4 ..][0..4], .little);
-        const body = soff + Abi.META_SECTION_HEADER_LEN;
-        if (sid == Abi.SCENES_SECTION_ID) {
-            const scene_count = std.mem.readInt(u32, blob[body..][0..4], .little);
-            var srec: usize = body + 4;
-            for (0..scene_count) |_| {
-                const rec = blob[srec..][0..Abi.SCENE_REC_LEN];
-                const nstart = std.mem.readInt(u32, rec[16..20], .little);
-                const nend = std.mem.readInt(u32, rec[20..24], .little);
-                w.print("\n  (mscene :name {s} :at {d} :dur {d} :name-span [{d} {d}])", .{
-                    doc[nstart..nend],
-                    std.mem.readInt(i64, rec[0..8], .little),
-                    std.mem.readInt(i64, rec[8..16], .little),
-                    nstart,
-                    nend,
-                }) catch return error.OutOfMemory;
-                srec += Abi.SCENE_REC_LEN;
-            }
-        } else if (sid == Abi.EASE_SECTION_ID) {
-            try renderEasePrograms(w, blob[body..][0..plen]);
-        } else if (sid == Abi.TEMPO_SECTION_ID) {
-            // Tempo segments (including segment 0): ticks decimal, bpm
-            // as an f64 bit pattern like the transport's own :bpm.
-            const seg_count = std.mem.readInt(u32, blob[body..][0..4], .little);
-            var trec: usize = body + 4;
-            for (0..seg_count) |_| {
-                const rec = blob[trec..][0..Abi.TEMPO_REC_LEN];
-                w.print("\n  (mtempo :tick {d} :bpm \"{X:0>16}\")", .{
-                    std.mem.readInt(i64, rec[0..8], .little),
-                    std.mem.readInt(u64, rec[8..16], .little),
-                }) catch return error.OutOfMemory;
-                trec += Abi.TEMPO_REC_LEN;
-            }
-        }
-        soff = body + plen;
+    // The post-controls sections, in the encoder's fixed order —
+    // 'SCEN', 'EASE', 'TMPO'. An absent section reads as an empty one,
+    // so a score without scenes / easing / a tempo map renders nothing
+    // here, exactly as the omit-when-empty encoding intends.
+    for (0..m.sceneCount()) |si| {
+        const scene = m.scene(si);
+        w.print("\n  (mscene :name {s} :at {d} :dur {d} :name-span [{d} {d}])", .{
+            doc[scene.name_span.start..scene.name_span.end],
+            scene.start_tick,
+            scene.dur_ticks,
+            scene.name_span.start,
+            scene.name_span.end,
+        }) catch return error.OutOfMemory;
     }
-    // The TLV walk's own termination claim: frames account for exactly
-    // the rest of the blob.
-    std.debug.assert(soff == blob.len);
+    try renderEasePrograms(w, &m);
+    for (0..m.tempoCount()) |i| {
+        // Tempo segments (including segment 0): ticks decimal, bpm
+        // as an f64 bit pattern like the transport's own :bpm.
+        const seg = m.tempoSeg(i);
+        w.print("\n  (mtempo :tick {d} :bpm \"{X:0>16}\")", .{
+            seg.tick, @as(u64, @bitCast(seg.bpm)),
+        }) catch return error.OutOfMemory;
+    }
     w.writeAll(")\n") catch return error.OutOfMemory;
 }
 
-/// Render an `'EASE'` section payload: one `(mease …)` form per compiled
+/// Render the `'EASE'` section: one `(mease …)` form per compiled
 /// program (its live stages/ops with f32-bit weights + params), then a
 /// flat `(measerefs …)` list of the per-key program index in key order.
-fn renderEasePrograms(w: *Io.Writer, payload: []const u8) !void {
-    const prog_count = std.mem.readInt(u32, payload[0..4], .little);
-    var poff: usize = 4;
+/// Renders nothing when the section is absent (a linear-only score).
+fn renderEasePrograms(w: *Io.Writer, m: *const Abi.MetaView) !void {
+    const prog_count = m.easeProgramCount();
+    if (prog_count == 0) return;
     for (0..prog_count) |pi| {
-        const prog = payload[poff..][0..Abi.META_EASE_PROGRAM_LEN];
-        const stage_count = prog[0];
+        const prog = m.easeProgram(pi);
         w.print("\n  (mease :index {d}", .{pi}) catch return error.OutOfMemory;
-        for (0..stage_count) |si| {
-            const st = prog[4 + si * Abi.META_EASE_STAGE_LEN ..][0..Abi.META_EASE_STAGE_LEN];
+        for (prog.stages[0..prog.len]) |stage| {
             w.print("\n    (mstage :t-end \"{X:0>8}\" :v-base \"{X:0>8}\" :v-span \"{X:0>8}\"", .{
-                std.mem.readInt(u32, st[0..4], .little),
-                std.mem.readInt(u32, st[4..8], .little),
-                std.mem.readInt(u32, st[8..12], .little),
+                @as(u32, @bitCast(stage.t_end)),
+                @as(u32, @bitCast(stage.v_base)),
+                @as(u32, @bitCast(stage.v_span)),
             }) catch return error.OutOfMemory;
-            const ops_len = st[12];
-            for (0..ops_len) |oi| {
-                const op = st[16 + oi * Abi.META_EASE_OP_LEN ..][0..Abi.META_EASE_OP_LEN];
-                w.print("\n      (mop :code {s} :params [", .{easeOpName(op[0])}) catch return error.OutOfMemory;
-                for (0..4) |q| {
-                    const sep = if (q == 0) "" else " ";
-                    w.print("{s}\"{X:0>8}\"", .{ sep, std.mem.readInt(u32, op[4 + q * 4 ..][0..4], .little) }) catch return error.OutOfMemory;
-                }
+            for (stage.ops[0..stage.ops_len]) |op| {
+                w.print("\n      (mop :code {s} :params [", .{@tagName(op.code)}) catch return error.OutOfMemory;
+                try renderLanes(w, op.params);
                 w.writeAll("])") catch return error.OutOfMemory;
             }
             w.writeByte(')') catch return error.OutOfMemory; // close mstage
         }
         w.writeByte(')') catch return error.OutOfMemory; // close mease
-        poff += Abi.META_EASE_PROGRAM_LEN;
     }
-    const ref_count = std.mem.readInt(u32, payload[poff..][0..4], .little);
-    poff += 4;
     w.writeAll("\n  (measerefs [") catch return error.OutOfMemory;
-    for (0..ref_count) |ri| {
+    for (0..m.easeRefCount()) |ri| {
         const sep = if (ri == 0) "" else " ";
-        w.print("{s}{d}", .{ sep, std.mem.readInt(u16, payload[poff..][0..2], .little) }) catch return error.OutOfMemory;
-        poff += 2;
+        w.print("{s}{d}", .{ sep, m.easeRef(ri) }) catch return error.OutOfMemory;
     }
     w.writeAll("])") catch return error.OutOfMemory;
 }
 
-/// The `Easing.Op` tag name for a wire code byte — the golden's stable
-/// spelling of an op (mirrored by the npm renderer's `EASE_OPS` table).
-fn easeOpName(code: u8) []const u8 {
-    return @tagName(@as(Easing.Op, @enumFromInt(code)));
-}
-
 /// Four f32 lanes as space-separated `"H8"` bit patterns (no brackets).
-fn renderLanes(w: *Io.Writer, bytes: []const u8) !void {
-    for (0..4) |i| {
-        const bits = std.mem.readInt(u32, bytes[i * 4 ..][0..4], .little);
+fn renderLanes(w: *Io.Writer, lanes: [4]f32) !void {
+    for (lanes, 0..) |lane, i| {
         const sep = if (i == 0) "" else " ";
-        w.print("{s}\"{X:0>8}\"", .{ sep, bits }) catch return error.OutOfMemory;
+        w.print("{s}\"{X:0>8}\"", .{ sep, @as(u32, @bitCast(lane)) }) catch return error.OutOfMemory;
     }
 }
 
 /// A control rail (`:min`/`:max`): `none` when absent, else `[…lanes…]`.
-fn renderRail(w: *Io.Writer, present: bool, bytes: []const u8) !void {
-    if (!present) {
+fn renderRail(w: *Io.Writer, rail: ?[4]f32) !void {
+    const lanes = rail orelse {
         w.writeAll("none") catch return error.OutOfMemory;
         return;
-    }
-    w.writeByte('[') catch return error.OutOfMemory;
-    try renderLanes(w, bytes);
-    w.writeByte(']') catch return error.OutOfMemory;
-}
-
-fn controlTypeName(t: u8) []const u8 {
-    return switch (t) {
-        0 => "slider",
-        1 => "xy",
-        2 => "color",
-        // Our own in-process encoder's output — a new ControlType must
-        // land here before it can reach a golden (like track sources).
-        else => unreachable,
     };
+    w.writeByte('[') catch return error.OutOfMemory;
+    try renderLanes(w, lanes);
+    w.writeByte(']') catch return error.OutOfMemory;
 }
 
 /// Render `(diag …)` lines from the `'PACD'` blob — the same encode
@@ -816,23 +746,16 @@ fn renderDiags(
     const blob_buf = try a.alloc(u8, Abi.diagsEncodedLen(result));
     const blob = Abi.encodeDiags(result, blob_buf);
     std.debug.assert(blob.len == blob_buf.len);
+    const view = Abi.decodeDiags(blob) orelse unreachable;
 
-    const count = std.mem.readInt(u32, blob[8..12], .little);
-    var pos: usize = Abi.DIAGS_HEADER_LEN;
-    for (0..count) |_| {
-        const source: []const u8 = if (blob[pos] == 0) "sjon" else "pacer";
-        const severity: []const u8 = if (blob[pos + 1] == 0) "error" else "warning";
-        const code = std.mem.readInt(u16, blob[pos + 2 ..][0..2], .little);
-        const start = std.mem.readInt(u32, blob[pos + 4 ..][0..4], .little);
-        const end = std.mem.readInt(u32, blob[pos + 8 ..][0..4], .little);
-        const msg_len = std.mem.readInt(u32, blob[pos + 12 ..][0..4], .little);
-        const msg = blob[pos + Abi.DIAG_RECORD_LEN ..][0..msg_len];
-        pos += Abi.DIAG_RECORD_LEN + msg_len;
-
+    var records = view.records();
+    while (records.next()) |d| {
         w.print("(diag :source {s} :severity {s} :code {d} :start {d} :end {d} :message \"", .{
-            source, severity, code, start, end,
+            @tagName(d.source), if (d.severity == .err) "error" else "warning",
+            d.code,             d.span.start,
+            d.span.end,
         }) catch return error.OutOfMemory;
-        for (msg) |b| {
+        for (d.message) |b| {
             if (b < 0x20) {
                 try out.print("corpus: {s}: control byte in diagnostic message — not renderable\n", .{name});
                 return false;

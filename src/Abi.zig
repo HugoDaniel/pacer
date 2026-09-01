@@ -590,6 +590,445 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
 }
 
 // ---------------------------------------------------------------------------
+// 'PACD' / 'PACM' — decoding
+// ---------------------------------------------------------------------------
+//
+// The reading halves of the two encode-only blobs, symmetric with
+// `encodeTargets`/`decodeTargets` and `Writes.encode`/`decode`. Three
+// consumers want them: `corpus_runner` (which used to walk the bytes
+// inline), the native CLI, and any host that reads a blob back.
+//
+// Both decoders are TOTAL — every defect returns null rather than
+// trapping, exactly as `decodeTargets` does, because a blob is host
+// glue's output. Validation happens ONCE, at decode: lengths, magics,
+// versions, enum bytes, and the section stream's exact accounting. The
+// accessors are therefore assert-based rather than fallible, and every
+// returned slice (a message, a control id) ALIASES `blob`.
+
+/// Which encoder produced a `'PACD'` record — the `source` byte.
+pub const DiagSource = enum(u8) { sjon = 0, pacer = 1 };
+/// A `'PACD'` record's `severity` byte. Pacer records are always `err`.
+pub const DiagSeverity = enum(u8) { err = 0, warning = 1 };
+
+/// One decoded `'PACD'` record. `message` aliases the blob.
+pub const DiagRecord = struct {
+    source: DiagSource,
+    severity: DiagSeverity,
+    /// `Ast.Diagnostic.Code` when `source == .sjon`, `Compile.Code` when
+    /// `.pacer` — the two code spaces are disjoint only by `source`.
+    code: u16,
+    span: Ast.Span,
+    message: []const u8,
+};
+
+/// A validated `'PACD'` blob. Records come SJON-first, then pacer's —
+/// the order `encodeDiags` writes and the golden pins.
+pub const DiagView = struct {
+    blob: []const u8,
+    count: u32,
+
+    pub const Iter = struct {
+        blob: []const u8,
+        left: u32,
+        pos: usize,
+
+        pub fn next(self: *Iter) ?DiagRecord {
+            if (self.left == 0) return null;
+            self.left -= 1;
+            const b = self.blob;
+            const p = self.pos;
+            const msg_len = std.mem.readInt(u32, b[p + 12 ..][0..4], .little);
+            self.pos = p + DIAG_RECORD_LEN + msg_len;
+            return .{
+                .source = @enumFromInt(b[p]),
+                .severity = @enumFromInt(b[p + 1]),
+                .code = std.mem.readInt(u16, b[p + 2 ..][0..2], .little),
+                .span = .{
+                    .start = std.mem.readInt(u32, b[p + 4 ..][0..4], .little),
+                    .end = std.mem.readInt(u32, b[p + 8 ..][0..4], .little),
+                },
+                .message = b[p + DIAG_RECORD_LEN ..][0..msg_len],
+            };
+        }
+    };
+
+    pub fn records(self: *const DiagView) Iter {
+        return .{ .blob = self.blob, .left = self.count, .pos = DIAGS_HEADER_LEN };
+    }
+};
+
+/// Decode a `'PACD'` blob. Null on any defect: bad magic, a version this
+/// build does not know, a truncated record or message, an out-of-range
+/// `source`/`severity` byte, or trailing bytes past the last record.
+pub fn decodeDiags(blob: []const u8) ?DiagView {
+    if (blob.len < DIAGS_HEADER_LEN) return null;
+    if (std.mem.readInt(u32, blob[0..4], .little) != DIAGS_MAGIC) return null;
+    if (std.mem.readInt(u32, blob[4..8], .little) != DIAGS_VERSION) return null;
+    const count = std.mem.readInt(u32, blob[8..12], .little);
+
+    var pos: usize = DIAGS_HEADER_LEN;
+    for (0..count) |_| {
+        if (blob.len - pos < DIAG_RECORD_LEN) return null;
+        if (std.enums.fromInt(DiagSource, blob[pos]) == null) return null;
+        if (std.enums.fromInt(DiagSeverity, blob[pos + 1]) == null) return null;
+        const msg_len = std.mem.readInt(u32, blob[pos + 12 ..][0..4], .little);
+        pos += DIAG_RECORD_LEN;
+        if (blob.len - pos < msg_len) return null;
+        pos += msg_len;
+    }
+    if (pos != blob.len) return null;
+    return .{ .blob = blob, .count = count };
+}
+
+/// A track's value source, as the `'PACM'` `source` byte spells it.
+/// Append-only, mirroring the encoder's mapping and the npm glue's
+/// `TRACK_SOURCES` table.
+pub const TrackSourceKind = enum(u8) { keys = 0, expr = 1, trigger = 2, pattern = 3 };
+
+/// One decoded `'PACM'` track record.
+pub const MetaTrack = struct {
+    target_id: u16,
+    registry: u8,
+    ncomp: u8,
+    source: TrackSourceKind,
+    /// Index of this track's first key in the flat key stream; `(0, 0)`
+    /// for every non-key source.
+    key_start: u32,
+    key_len: u32,
+    span: Ast.Span,
+};
+
+/// One decoded `'PACM'` key record. Lanes at or past the track's `ncomp`
+/// are zero, as encoded.
+pub const MetaKey = struct {
+    at: i64,
+    value: [4]f32,
+    span: Ast.Span,
+};
+
+/// One decoded `'PACM'` control record. `id` aliases the blob;
+/// `target_id` is null for an env-only control (the wire sentinel).
+pub const MetaControl = struct {
+    target_id: ?u16,
+    registry: u8,
+    ncomp: u8,
+    kind: TrackTable.ControlType,
+    value: [4]f32,
+    min: ?[4]f32,
+    max: ?[4]f32,
+    id: []const u8,
+    value_span: Ast.Span,
+};
+
+/// One decoded `'SCEN'` record. The name rides as a span — slice it from
+/// the score source, as the encoder's header explains.
+pub const MetaScene = struct {
+    start_tick: i64,
+    dur_ticks: i64,
+    name_span: Ast.Span,
+};
+
+/// One decoded `'TMPO'` record — an authored `(tempo …)` segment.
+pub const MetaTempoSeg = struct {
+    tick: i64,
+    bpm: f64,
+};
+
+/// A validated `'PACM'` blob: the fixed header plus cursors into the
+/// three arrays and whichever TLV sections were present. An absent
+/// section reads as an empty one (`sceneCount() == 0`), which is the
+/// encoder's own equivalence — it omits a section whose count is zero.
+pub const MetaView = struct {
+    blob: []const u8,
+    bpm: f64,
+    /// null when the transport declared no `:dur` (the flags bit).
+    dur: ?i64,
+    end_loop: bool,
+    beats_per_bar: u16,
+    track_count: u32,
+    key_count: u32,
+    control_count: u32,
+    /// Offset of the first control record — where the key array ends.
+    controls_off: usize,
+    scen: ?[]const u8 = null,
+    ease: ?[]const u8 = null,
+    tmpo: ?[]const u8 = null,
+
+    fn keysOff(self: *const MetaView) usize {
+        return META_HEADER_LEN + @as(usize, self.track_count) * META_TRACK_LEN;
+    }
+
+    pub fn track(self: *const MetaView, i: usize) MetaTrack {
+        std.debug.assert(i < self.track_count);
+        const r = self.blob[META_HEADER_LEN + i * META_TRACK_LEN ..][0..META_TRACK_LEN];
+        return .{
+            .target_id = std.mem.readInt(u16, r[0..2], .little),
+            .registry = r[2],
+            .ncomp = r[3],
+            .source = @enumFromInt(r[4]),
+            .key_start = std.mem.readInt(u32, r[8..12], .little),
+            .key_len = std.mem.readInt(u32, r[12..16], .little),
+            .span = .{
+                .start = std.mem.readInt(u32, r[16..20], .little),
+                .end = std.mem.readInt(u32, r[20..24], .little),
+            },
+        };
+    }
+
+    pub fn key(self: *const MetaView, i: usize) MetaKey {
+        std.debug.assert(i < self.key_count);
+        const r = self.blob[self.keysOff() + i * META_KEY_LEN ..][0..META_KEY_LEN];
+        return .{
+            .at = std.mem.readInt(i64, r[0..8], .little),
+            .value = readLanes(r[8..24]),
+            .span = .{
+                .start = std.mem.readInt(u32, r[24..28], .little),
+                .end = std.mem.readInt(u32, r[28..32], .little),
+            },
+        };
+    }
+
+    pub const ControlIter = struct {
+        blob: []const u8,
+        left: u32,
+        pos: usize,
+
+        pub fn next(self: *ControlIter) ?MetaControl {
+            if (self.left == 0) return null;
+            self.left -= 1;
+            const r = self.blob[self.pos..][0..META_CONTROL_LEN];
+            const target_id = std.mem.readInt(u16, r[0..2], .little);
+            const flags = r[5];
+            const id_len = std.mem.readInt(u16, r[6..8], .little);
+            const id = self.blob[self.pos + META_CONTROL_LEN ..][0..id_len];
+            self.pos += META_CONTROL_LEN + id_len;
+            return .{
+                .target_id = if (target_id == META_NO_TARGET) null else target_id,
+                .registry = r[2],
+                .ncomp = r[3],
+                .kind = @enumFromInt(r[4]),
+                .value = readLanes(r[8..24]),
+                .min = if (flags & 1 != 0) readLanes(r[24..40]) else null,
+                .max = if (flags & 2 != 0) readLanes(r[40..56]) else null,
+                .id = id,
+                .value_span = .{
+                    .start = std.mem.readInt(u32, r[56..60], .little),
+                    .end = std.mem.readInt(u32, r[60..64], .little),
+                },
+            };
+        }
+    };
+
+    /// Controls in document order — which IS the `drv_setControl` index
+    /// space, so the iteration index is the slot.
+    pub fn controls(self: *const MetaView) ControlIter {
+        return .{ .blob = self.blob, .left = self.control_count, .pos = self.controls_off };
+    }
+
+    pub fn sceneCount(self: *const MetaView) usize {
+        const p = self.scen orelse return 0;
+        return std.mem.readInt(u32, p[0..4], .little);
+    }
+
+    pub fn scene(self: *const MetaView, i: usize) MetaScene {
+        std.debug.assert(i < self.sceneCount());
+        const r = self.scen.?[4 + i * SCENE_REC_LEN ..][0..SCENE_REC_LEN];
+        return .{
+            .start_tick = std.mem.readInt(i64, r[0..8], .little),
+            .dur_ticks = std.mem.readInt(i64, r[8..16], .little),
+            .name_span = .{
+                .start = std.mem.readInt(u32, r[16..20], .little),
+                .end = std.mem.readInt(u32, r[20..24], .little),
+            },
+        };
+    }
+
+    pub fn tempoCount(self: *const MetaView) usize {
+        const p = self.tmpo orelse return 0;
+        return std.mem.readInt(u32, p[0..4], .little);
+    }
+
+    pub fn tempoSeg(self: *const MetaView, i: usize) MetaTempoSeg {
+        std.debug.assert(i < self.tempoCount());
+        const r = self.tmpo.?[4 + i * TEMPO_REC_LEN ..][0..TEMPO_REC_LEN];
+        return .{
+            .tick = std.mem.readInt(i64, r[0..8], .little),
+            .bpm = @bitCast(std.mem.readInt(u64, r[8..16], .little)),
+        };
+    }
+
+    pub fn easeProgramCount(self: *const MetaView) usize {
+        const p = self.ease orelse return 0;
+        return std.mem.readInt(u32, p[0..4], .little);
+    }
+
+    /// Rebuild one compiled program from its wire record. Every stage and
+    /// op slot is carried (unused ones zeroed by the encoder), so this is
+    /// bit-equal to the `TrackTable.programs` entry it came from.
+    pub fn easeProgram(self: *const MetaView, i: usize) Easing.Program {
+        std.debug.assert(i < self.easeProgramCount());
+        const r = self.ease.?[4 + i * META_EASE_PROGRAM_LEN ..][0..META_EASE_PROGRAM_LEN];
+        var prog: Easing.Program = .{ .len = r[0], .stages = undefined };
+        for (0..Easing.MAX_STAGES) |s| {
+            const sr = r[4 + s * META_EASE_STAGE_LEN ..][0..META_EASE_STAGE_LEN];
+            var stage: Easing.Stage = .{
+                .t_end = readF32(sr[0..4]),
+                .v_base = readF32(sr[4..8]),
+                .v_span = readF32(sr[8..12]),
+                .ops_len = sr[12],
+                .ops = undefined,
+            };
+            for (0..Easing.MAX_OPS) |o| {
+                const orr = sr[16 + o * META_EASE_OP_LEN ..][0..META_EASE_OP_LEN];
+                stage.ops[o] = .{
+                    .code = @enumFromInt(orr[0]),
+                    .params = readLanes(orr[4..20]),
+                };
+            }
+            prog.stages[s] = stage;
+        }
+        return prog;
+    }
+
+    /// Offset of the per-key `ease_ref` array inside the `'EASE'` payload.
+    fn easeRefsOff(self: *const MetaView) usize {
+        return 4 + self.easeProgramCount() * META_EASE_PROGRAM_LEN;
+    }
+
+    pub fn easeRefCount(self: *const MetaView) usize {
+        const p = self.ease orelse return 0;
+        return std.mem.readInt(u32, p[self.easeRefsOff()..][0..4], .little);
+    }
+
+    /// The program index for the segment ENDING at key `i` — parallel to
+    /// the key stream, so a consumer zips it with `key(i)`.
+    pub fn easeRef(self: *const MetaView, i: usize) u16 {
+        std.debug.assert(i < self.easeRefCount());
+        const p = self.ease.?;
+        return std.mem.readInt(u16, p[self.easeRefsOff() + 4 + i * 2 ..][0..2], .little);
+    }
+};
+
+fn readF32(b: *const [4]u8) f32 {
+    return @bitCast(std.mem.readInt(u32, b, .little));
+}
+
+fn readLanes(b: *const [16]u8) [4]f32 {
+    var out: [4]f32 = undefined;
+    for (0..4) |i| out[i] = readF32(b[i * 4 ..][0..4]);
+    return out;
+}
+
+/// Decode a `'PACM'` blob. Null on any defect: bad magic, a version this
+/// build does not know, a truncated array or control id, an enum byte
+/// outside `TrackSourceKind` / `ControlType` / `Easing.Op`, a key range
+/// running past the key stream, a section frame whose payload does not
+/// account exactly for its records, a repeated section id, or bytes left
+/// over after the last frame.
+///
+/// An UNKNOWN section id is skipped by its length — that tolerance is the
+/// whole point of the TLV stream, so a decoder predating a section still
+/// reads everything before it.
+pub fn decodeMeta(blob: []const u8) ?MetaView {
+    if (blob.len < META_HEADER_LEN) return null;
+    if (std.mem.readInt(u32, blob[0..4], .little) != META_MAGIC) return null;
+    if (std.mem.readInt(u32, blob[4..8], .little) != META_VERSION) return null;
+
+    const flags = blob[26];
+    const track_count = std.mem.readInt(u32, blob[28..32], .little);
+    const key_count = std.mem.readInt(u32, blob[32..36], .little);
+    const control_count = std.mem.readInt(u32, blob[36..40], .little);
+
+    var pos: usize = META_HEADER_LEN;
+    if ((blob.len - pos) / META_TRACK_LEN < track_count) return null;
+    for (0..track_count) |i| {
+        const r = blob[pos + i * META_TRACK_LEN ..][0..META_TRACK_LEN];
+        if (std.enums.fromInt(TrackSourceKind, r[4]) == null) return null;
+        const ks = std.mem.readInt(u32, r[8..12], .little);
+        const kl = std.mem.readInt(u32, r[12..16], .little);
+        if (@as(u64, ks) + kl > key_count) return null;
+    }
+    pos += @as(usize, track_count) * META_TRACK_LEN;
+
+    if ((blob.len - pos) / META_KEY_LEN < key_count) return null;
+    pos += @as(usize, key_count) * META_KEY_LEN;
+
+    const controls_off = pos;
+    for (0..control_count) |_| {
+        if (blob.len - pos < META_CONTROL_LEN) return null;
+        if (std.enums.fromInt(TrackTable.ControlType, blob[pos + 4]) == null) return null;
+        const id_len = std.mem.readInt(u16, blob[pos + 6 ..][0..2], .little);
+        pos += META_CONTROL_LEN;
+        if (blob.len - pos < id_len) return null;
+        pos += id_len;
+    }
+
+    var view: MetaView = .{
+        .blob = blob,
+        .bpm = @bitCast(std.mem.readInt(u64, blob[8..16], .little)),
+        .dur = if (flags & 1 != 0) std.mem.readInt(i64, blob[16..24], .little) else null,
+        .end_loop = flags & 2 != 0,
+        .beats_per_bar = std.mem.readInt(u16, blob[24..26], .little),
+        .track_count = track_count,
+        .key_count = key_count,
+        .control_count = control_count,
+        .controls_off = controls_off,
+    };
+
+    // The TLV section stream, walked to end-of-buffer.
+    while (pos < blob.len) {
+        if (blob.len - pos < META_SECTION_HEADER_LEN) return null;
+        const sid = std.mem.readInt(u32, blob[pos..][0..4], .little);
+        const plen = std.mem.readInt(u32, blob[pos + 4 ..][0..4], .little);
+        pos += META_SECTION_HEADER_LEN;
+        if (blob.len - pos < plen) return null;
+        const payload = blob[pos..][0..plen];
+        pos += plen;
+
+        switch (sid) {
+            SCENES_SECTION_ID => {
+                if (view.scen != null) return null;
+                if (plen < 4) return null;
+                const n = std.mem.readInt(u32, payload[0..4], .little);
+                if (4 + @as(u64, n) * SCENE_REC_LEN != plen) return null;
+                view.scen = payload;
+            },
+            EASE_SECTION_ID => {
+                if (view.ease != null) return null;
+                if (plen < 4) return null;
+                const progs = std.mem.readInt(u32, payload[0..4], .little);
+                const refs_off = 4 + @as(u64, progs) * META_EASE_PROGRAM_LEN;
+                if (refs_off + 4 > plen) return null;
+                const refs = std.mem.readInt(u32, payload[@intCast(refs_off)..][0..4], .little);
+                if (refs_off + 4 + @as(u64, refs) * 2 != plen) return null;
+                // Every op byte must name a real primitive: `easeProgram`
+                // returns `Easing.Op` values, so an unknown code would be
+                // an invalid enum rather than a diagnosable defect.
+                for (0..progs) |p| {
+                    const r = payload[4 + p * META_EASE_PROGRAM_LEN ..][0..META_EASE_PROGRAM_LEN];
+                    for (0..Easing.MAX_STAGES) |s| {
+                        const sr = r[4 + s * META_EASE_STAGE_LEN ..][0..META_EASE_STAGE_LEN];
+                        for (0..Easing.MAX_OPS) |o|
+                            if (std.enums.fromInt(Easing.Op, sr[16 + o * META_EASE_OP_LEN]) == null) return null;
+                    }
+                }
+                view.ease = payload;
+            },
+            TEMPO_SECTION_ID => {
+                if (view.tmpo != null) return null;
+                if (plen < 4) return null;
+                const n = std.mem.readInt(u32, payload[0..4], .little);
+                if (4 + @as(u64, n) * TEMPO_REC_LEN != plen) return null;
+                view.tmpo = payload;
+            },
+            else => {}, // unknown id — skipped by length, the TLV contract
+        }
+    }
+    std.debug.assert(pos == blob.len);
+    return view;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1116,4 +1555,254 @@ test "encodeMeta: 'EASE' rides after 'SCEN' when both are present" {
     try t.expectEqual(EASE_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
     off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
     try t.expectEqual(m.len, off); // the two frames account for the whole stream
+}
+
+// ---------------------------------------------------------------------------
+// Decoder tests (Phase 1 reds)
+// ---------------------------------------------------------------------------
+
+test "decodeMeta: every header, track, key and control field round-trips" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0.2)
+        \\  (key :at 4b :value 0.8))
+        \\(track :target tint :expr [1 0 0])
+        \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
+        \\(control :id sway :value 0.12)
+    ;
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    const table = &r.table.?;
+
+    const blob = try t.allocator.alloc(u8, metaEncodedLen(&r));
+    defer t.allocator.free(blob);
+    _ = try encodeMeta(&r, blob);
+
+    const v = decodeMeta(blob) orelse return error.TestExpectedDecode;
+
+    try t.expectEqual(table.transport.map.bpm, v.bpm);
+    try t.expectEqual(table.transport.dur, v.dur);
+    try t.expectEqual(true, v.end_loop);
+    try t.expectEqual(@as(u16, 4), v.beats_per_bar);
+    try t.expectEqual(table.tracks.len, v.track_count);
+    try t.expectEqual(table.keys.len, v.key_count);
+    try t.expectEqual(table.controls.len, v.control_count);
+
+    for (table.tracks, table.track_spans, 0..) |want, span, i| {
+        const got = v.track(i);
+        try t.expectEqual(want.target_id, got.target_id);
+        try t.expectEqual(want.registry, got.registry);
+        try t.expectEqual(want.ncomp, got.ncomp);
+        try t.expectEqual(span.start, got.span.start);
+        try t.expectEqual(span.end, got.span.end);
+        switch (want.source) {
+            .keys => |ks| {
+                try t.expectEqual(TrackSourceKind.keys, got.source);
+                try t.expectEqual(ks.start, got.key_start);
+                try t.expectEqual(ks.len, got.key_len);
+            },
+            .expr => try t.expectEqual(TrackSourceKind.expr, got.source),
+            .trigger => try t.expectEqual(TrackSourceKind.trigger, got.source),
+            .pattern => try t.expectEqual(TrackSourceKind.pattern, got.source),
+        }
+    }
+
+    for (table.keys, table.key_spans, 0..) |want, span, i| {
+        const got = v.key(i);
+        try t.expectEqual(want.at, got.at);
+        try t.expectEqual(want.value, got.value);
+        try t.expectEqual(span.start, got.span.start);
+        try t.expectEqual(span.end, got.span.end);
+    }
+
+    var it = v.controls();
+    for (table.controls) |want| {
+        const got = it.next() orelse return error.TestExpectedControl;
+        try t.expectEqualStrings(want.id, got.id);
+        try t.expectEqual(want.ncomp, got.ncomp);
+        try t.expectEqual(want.kind, got.kind);
+        try t.expectEqual(want.value, got.value);
+        try t.expectEqual(want.min, got.min);
+        try t.expectEqual(want.max, got.max);
+        try t.expectEqual(want.value_span.start, got.value_span.start);
+        if (want.target) |tg| {
+            try t.expectEqual(tg.id, got.target_id.?);
+            try t.expectEqual(tg.registry, got.registry);
+        } else {
+            try t.expectEqual(@as(?u16, null), got.target_id);
+        }
+    }
+    try t.expectEqual(@as(?MetaControl, null), it.next());
+
+    // A score with no scenes / no tempo map / linear-only easing emits
+    // none of the three sections — absent and empty are equivalent.
+    try t.expectEqual(@as(usize, 0), v.sceneCount());
+    try t.expectEqual(@as(usize, 0), v.tempoCount());
+    try t.expectEqual(@as(usize, 0), v.easeProgramCount());
+}
+
+test "decodeMeta: 'SCEN', 'EASE' and 'TMPO' sections decode against the table" {
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+        \\(tempo :at 8b :bpm 160)
+        \\(scene :name drop :at 2bar :dur 2bar
+        \\  (track :target circle-radius
+        \\    (key :at 0b :value 30)
+        \\    (key :at 4b :value 140 :ease (steps :n 8))))
+    ;
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    const table = &r.table.?;
+
+    const blob = try t.allocator.alloc(u8, metaEncodedLen(&r));
+    defer t.allocator.free(blob);
+    _ = try encodeMeta(&r, blob);
+    const v = decodeMeta(blob) orelse return error.TestExpectedDecode;
+
+    try t.expectEqual(table.scenes.len, v.sceneCount());
+    for (table.scenes, 0..) |want, i| {
+        const got = v.scene(i);
+        try t.expectEqual(want.start_tick, got.start_tick);
+        try t.expectEqual(want.dur_ticks, got.dur_ticks);
+        try t.expectEqualStrings("drop", source[got.name_span.start..got.name_span.end]);
+    }
+
+    try t.expectEqual(table.transport.segments.len, v.tempoCount());
+    for (table.transport.segments, 0..) |want, i| {
+        const got = v.tempoSeg(i);
+        try t.expectEqual(want.start_tick, got.tick);
+        try t.expectEqual(want.bpm, got.bpm);
+    }
+
+    try t.expectEqual(table.programs.len, v.easeProgramCount());
+    for (table.programs, 0..) |want, i| {
+        const got = v.easeProgram(i);
+        try t.expectEqual(want.len, got.len);
+        for (0..Easing.MAX_STAGES) |s| {
+            try t.expectEqual(want.stages[s].t_end, got.stages[s].t_end);
+            try t.expectEqual(want.stages[s].ops_len, got.stages[s].ops_len);
+            for (0..Easing.MAX_OPS) |o| {
+                try t.expectEqual(want.stages[s].ops[o].code, got.stages[s].ops[o].code);
+                try t.expectEqual(want.stages[s].ops[o].params, got.stages[s].ops[o].params);
+            }
+        }
+    }
+    try t.expectEqual(table.keys.len, v.easeRefCount());
+    for (table.keys, 0..) |want, i| try t.expectEqual(want.ease_ref, v.easeRef(i));
+}
+
+test "decodeMeta: an unknown section id is skipped by length" {
+    var r = try Compile.compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(control :id sway :value 0.12)
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+
+    const base = metaEncodedLen(&r);
+    const blob = try t.allocator.alloc(u8, base + META_SECTION_HEADER_LEN + 6);
+    defer t.allocator.free(blob);
+    _ = try encodeMeta(&r, blob[0..base]);
+    std.mem.writeInt(u32, blob[base..][0..4], 0x5a5a5a5a, .little);
+    std.mem.writeInt(u32, blob[base + 4 ..][0..4], 6, .little);
+    @memset(blob[base + META_SECTION_HEADER_LEN ..], 0xab);
+
+    const v = decodeMeta(blob) orelse return error.TestExpectedDecode;
+    try t.expectEqual(@as(u32, 1), v.control_count);
+    try t.expectEqual(@as(usize, 0), v.sceneCount());
+}
+
+test "decodeMeta rejects every malformed shape" {
+    var r = try Compile.compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(control :id sway :value 0.12)
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    const good = try t.allocator.alloc(u8, metaEncodedLen(&r));
+    defer t.allocator.free(good);
+    _ = try encodeMeta(&r, good);
+
+    try t.expectEqual(@as(?MetaView, null), decodeMeta(good[0 .. META_HEADER_LEN - 1])); // truncated header
+    try t.expectEqual(@as(?MetaView, null), decodeMeta(good[0 .. good.len - 1])); // truncated id bytes
+
+    const bad = try t.allocator.dupe(u8, good);
+    defer t.allocator.free(bad);
+    std.mem.writeInt(u32, bad[0..4], 0xdeadbeef, .little);
+    try t.expectEqual(@as(?MetaView, null), decodeMeta(bad)); // bad magic
+
+    @memcpy(bad, good);
+    std.mem.writeInt(u32, bad[4..8], META_VERSION + 1, .little);
+    try t.expectEqual(@as(?MetaView, null), decodeMeta(bad)); // future version
+
+    @memcpy(bad, good);
+    bad[META_HEADER_LEN + 4] = 9; // a control kind outside ControlType
+    try t.expectEqual(@as(?MetaView, null), decodeMeta(bad));
+}
+
+test "decodeDiags: source, severity, code, span and message round-trip" {
+    var r = try Compile.compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(control :id beat :value 1)
+        \\(track :target nonexistent :expr 1)
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(!r.ok());
+
+    const blob = try t.allocator.alloc(u8, diagsEncodedLen(&r));
+    defer t.allocator.free(blob);
+    const written = encodeDiags(&r, blob);
+    try t.expectEqual(blob.len, written.len);
+
+    const v = decodeDiags(written) orelse return error.TestExpectedDecode;
+    try t.expectEqual(r.validated.result.diagnostics.len + r.diagnostics.len, v.count);
+
+    var it = v.records();
+    for (r.validated.result.diagnostics) |want| {
+        const got = it.next() orelse return error.TestExpectedRecord;
+        try t.expectEqual(DiagSource.sjon, got.source);
+        try t.expectEqual(@as(u16, @intCast(@intFromEnum(want.code))), got.code);
+        try t.expectEqual(want.span.start, got.span.start);
+        try t.expectEqualStrings(want.message, got.message);
+    }
+    for (r.diagnostics) |want| {
+        const got = it.next() orelse return error.TestExpectedRecord;
+        try t.expectEqual(DiagSource.pacer, got.source);
+        try t.expectEqual(DiagSeverity.err, got.severity);
+        try t.expectEqual(@intFromEnum(want.code), got.code);
+        try t.expectEqual(want.span.start, got.span.start);
+        try t.expectEqual(want.span.end, got.span.end);
+        try t.expectEqualStrings(want.message, got.message);
+    }
+    try t.expectEqual(@as(?DiagRecord, null), it.next());
+}
+
+test "decodeDiags rejects every malformed shape" {
+    var r = try Compile.compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120)
+        \\(track :target nonexistent :expr 1)
+    , &sample_targets);
+    defer r.deinit();
+    const good_buf = try t.allocator.alloc(u8, diagsEncodedLen(&r));
+    defer t.allocator.free(good_buf);
+    const good = encodeDiags(&r, good_buf);
+
+    try t.expectEqual(@as(?DiagView, null), decodeDiags(good[0..DIAGS_HEADER_LEN - 1]));
+    try t.expectEqual(@as(?DiagView, null), decodeDiags(good[0 .. good.len - 1])); // truncated message
+
+    const bad = try t.allocator.dupe(u8, good);
+    defer t.allocator.free(bad);
+    std.mem.writeInt(u32, bad[0..4], 0xdeadbeef, .little);
+    try t.expectEqual(@as(?DiagView, null), decodeDiags(bad));
+
+    @memcpy(bad, good);
+    std.mem.writeInt(u32, bad[4..8], DIAGS_VERSION + 1, .little);
+    try t.expectEqual(@as(?DiagView, null), decodeDiags(bad));
+
+    @memcpy(bad, good);
+    bad[DIAGS_HEADER_LEN] = 2; // a source byte outside DiagSource
+    try t.expectEqual(@as(?DiagView, null), decodeDiags(bad));
 }
