@@ -18,7 +18,7 @@ const std = @import("std");
 const pacer = @import("pacer");
 const Allocator = std.mem.Allocator;
 
-pub const Verb = enum { check };
+pub const Verb = enum { check, ir };
 
 pub const Command = struct {
     verb: Verb,

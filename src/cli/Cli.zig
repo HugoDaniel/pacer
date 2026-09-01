@@ -19,6 +19,8 @@ const pacer = @import("pacer");
 const sjon = @import("sjon");
 const Args = @import("Args.zig");
 const Diags = @import("Diags.zig");
+const Envelope = @import("Envelope.zig");
+const Ir = @import("Ir.zig");
 const Source = @import("Source.zig");
 const Writer = std.Io.Writer;
 const Io = std.Io;
@@ -63,6 +65,7 @@ pub const usage_text =
     \\Usage:
     \\  pacer check FILE            Validate a score; report diagnostics.
     \\  pacer check -               Validate from stdin.
+    \\  pacer ir FILE               Print the compiled IR as JSON.
     \\
     \\Options:
     \\  --target NAME[:ncomp[:registry]]
@@ -150,11 +153,23 @@ fn runCommand(gpa: Allocator, io: Io, cmd: Args.Command, out: *Writer, err: *Wri
     try driver.init(gpa, &schema, source, cmd.targets);
     defer driver.deinit();
 
+    const ctx: Envelope.Ctx = .{
+        .result = &driver.result,
+        .source = source,
+        .index = &index,
+        .path = cmd.path,
+        .host_target_count = cmd.targets.len,
+    };
     return switch (cmd.verb) {
-        .check => if (cmd.json)
-            Diags.renderJson(out, &driver.result, source, &index, cmd.path)
-        else
-            Diags.renderHuman(out, &driver.result, &index, cmd.path),
+        .check => if (cmd.json) Diags.renderJson(out, ctx) else Diags.renderHuman(out, ctx),
+        // A DATA verb: stdout is JSON only, so its diagnostics go to
+        // stderr as well as into the envelope — a `| jq` pipeline that
+        // discards stderr still sees a complete, parseable object.
+        .ir => blk: {
+            const code = try Ir.write(out, ctx);
+            if (code != 0) _ = try Diags.renderHuman(err, ctx);
+            break :blk code;
+        },
     };
 }
 
@@ -168,6 +183,8 @@ test {
     // artifact here.
     _ = @import("Args.zig");
     _ = @import("Diags.zig");
+    _ = @import("Envelope.zig");
+    _ = @import("Ir.zig");
     _ = @import("Json.zig");
     _ = @import("Source.zig");
 }
@@ -270,6 +287,24 @@ test "check: the human report is grep-stable file:line:col and rides stdout" {
     try t.expectEqual(Exit.errors, c.code);
     try t.expect(std.mem.indexOf(u8, c.out.written(), "control_duplicate_id") != null);
     try t.expect(std.mem.indexOf(u8, c.out.written(), "5 errors") != null);
+}
+
+test "ir: stdout is JSON alone, and a defective score still parses" {
+    // A DATA verb, so the human diagnostics go to stderr while stdout
+    // stays a single complete object — `pacer ir bad.sjon 2>/dev/null |
+    // jq` must still work.
+    const path = try repoPath(t.allocator, "corpus/diag-controls/doc.sjon");
+    defer t.allocator.free(path);
+    var c = try invoke(&.{ "pacer", "ir", path, "--target", "tint:3" });
+    defer c.deinit();
+    try t.expectEqual(Exit.errors, c.code);
+    try t.expect(std.mem.indexOf(u8, c.err.written(), "control_duplicate_id") != null);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, c.out.written(), .{});
+    defer parsed.deinit();
+    try t.expectEqual(false, parsed.value.object.get("ok").?.bool);
+    try t.expectEqualStrings("ir", parsed.value.object.get("command").?.string);
+    try t.expectEqual(@as(usize, 5), parsed.value.object.get("diagnostics").?.array.items.len);
 }
 
 test "a usage error writes nothing to stdout, so a piped consumer sees no half object" {

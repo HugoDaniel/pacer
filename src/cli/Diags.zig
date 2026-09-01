@@ -18,6 +18,7 @@ const std = @import("std");
 const pacer = @import("pacer");
 const sjon = @import("sjon");
 const Json = @import("Json.zig");
+const Envelope = @import("Envelope.zig");
 const Source = @import("Source.zig");
 const Writer = std.Io.Writer;
 
@@ -92,14 +93,9 @@ pub fn count(result: *const pacer.Compile.CompileResult) Counts {
 
 /// The `diagnostics` array — shared by every verb's envelope, so a
 /// defective score reports identically whichever verb found it.
-pub fn writeArray(
-    w: *Writer,
-    result: *const pacer.Compile.CompileResult,
-    source: []const u8,
-    index: *const Source.LineIndex,
-) Writer.Error!void {
+pub fn writeArray(w: *Writer, ctx: Envelope.Ctx) Writer.Error!void {
     try w.writeAll("[");
-    var it = iterate(result);
+    var it = iterate(ctx.result);
     var first = true;
     while (it.next()) |d| {
         if (!first) try w.writeByte(',');
@@ -112,13 +108,10 @@ pub fn writeArray(
         try Json.string(w, d.code);
         try w.print(",\"code_id\":{d},\"message\":", .{d.code_id});
         try Json.string(w, d.message);
-        const pos = index.at(d.span.start);
-        const end = index.at(d.span.end);
-        try w.print(
-            ",\"span\":{{\"start\":{d},\"end\":{d},\"line\":{d},\"col\":{d},\"end_line\":{d},\"end_col\":{d}}},\"text\":",
-            .{ d.span.start, d.span.end, pos.line, pos.col, end.line, end.col },
-        );
-        try Json.string(w, excerpt(source, d.span));
+        try w.writeAll(",\"span\":");
+        try Envelope.writeSpan(w, ctx, d.span);
+        try w.writeAll(",\"text\":");
+        try Json.string(w, excerpt(ctx.source, d.span));
         try w.writeByte('}');
     }
     if (!first) try w.writeAll("\n  ");
@@ -134,38 +127,22 @@ fn excerpt(source: []const u8, span: sjon.Ast.Span) []const u8 {
 }
 
 /// `check --json`. Returns the exit code so the caller has one thing to
-/// forward.
-pub fn renderJson(
-    w: *Writer,
-    result: *const pacer.Compile.CompileResult,
-    source: []const u8,
-    index: *const Source.LineIndex,
-    path: []const u8,
-) Writer.Error!u8 {
-    const c = count(result);
-    try w.print("{{\n  \"pacer\":{{\"version\":\"{s}\",\"format\":{d}}},\n  \"command\":\"check\",\n  \"source\":{{\"path\":", .{ pacer.version, format_version });
-    try Json.string(w, Source.label(path));
-    try w.print(",\"bytes\":{d}}},\n  \"ok\":{},\n  \"counts\":{{\"errors\":{d},\"warnings\":{d}}},\n  \"diagnostics\":", .{
-        source.len, result.ok(), c.errors, c.warnings,
-    });
-    try writeArray(w, result, source, index);
-    try w.writeAll("\n}\n");
-    return if (c.errors > 0) 1 else 0;
+/// forward. `check`'s payload IS the diagnostics array, so the shared
+/// preamble is the whole envelope.
+pub fn renderJson(w: *Writer, ctx: Envelope.Ctx) Writer.Error!u8 {
+    try Envelope.writeHead(w, ctx, "check");
+    try Envelope.writeTail(w);
+    return Envelope.exitCode(ctx);
 }
 
 /// `check`, human. One grep-stable `file:line:col: severity: code: message`
 /// line per diagnostic, then a count — GNU style, the shape an editor's
 /// error parser and a `grep` pipeline both already understand.
-pub fn renderHuman(
-    w: *Writer,
-    result: *const pacer.Compile.CompileResult,
-    index: *const Source.LineIndex,
-    path: []const u8,
-) Writer.Error!u8 {
-    const label = Source.label(path);
-    var it = iterate(result);
+pub fn renderHuman(w: *Writer, ctx: Envelope.Ctx) Writer.Error!u8 {
+    const label = Source.label(ctx.path);
+    var it = iterate(ctx.result);
     while (it.next()) |d| {
-        const pos = index.at(d.span.start);
+        const pos = ctx.index.at(d.span.start);
         try w.print("{s}:{d}:{d}: {s}: {s}: {s}\n", .{
             label,
             pos.line,
@@ -175,7 +152,7 @@ pub fn renderHuman(
             d.message,
         });
     }
-    const c = count(result);
+    const c = count(ctx.result);
     if (c.errors == 0 and c.warnings == 0) {
         try w.print("{s}: no diagnostics\n", .{label});
         return 0;
@@ -186,11 +163,6 @@ pub fn renderHuman(
     });
     return if (c.errors > 0) 1 else 0;
 }
-
-/// The CLI JSON envelope's own version — see `main.zig`'s header. Bumped
-/// only on a BREAKING envelope change; an added field never bumps it.
-pub const format_version: u32 = 1;
-
 
 const t = std.testing;
 // ---------------------------------------------------------------------------

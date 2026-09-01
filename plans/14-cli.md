@@ -337,3 +337,53 @@ truncates. `Source.LineIndex.at(offset)` gives 1-based line/col with codepoint
 columns. The envelope preamble (`pacer`/`command`/`source`/`ok`/`diagnostics`) is
 spelled in `Diags.renderJson` — Phase 3 should lift it into a shared helper rather
 than copy it.
+
+### Phase 3 — `ir` — DONE 2026-09-01
+
+**Deliverable — `pacer ir FILE` prints the compiled IR as JSON**: the merged
+target join with `origin: host|declared`, transport (bpm, meter, the tick grid,
+`dur_ticks`/`dur_seconds`, emit lanes, the tempo map with `start_seconds`), scenes,
+tracks with their keys, controls with their rails, and the deduped easing table.
+
+**`src/cli/Envelope.zig` came first**, lifting the preamble out of `Diags` as the
+carry-forward asked: `Ctx` (result + source + line index + path + host target
+count, no allocator and no io, so every renderer is a pure function of it plus a
+writer), `writeHead`/`writeTail`, the shared `writeSpan`, and `exitCode`. `Diags`
+now renders `check --json` as head+tail alone — its payload IS the diagnostics
+array.
+
+**Rendering from memory paid for itself immediately.** Three things in the output
+have no `'PACM'` representation at all and would simply have been missing:
+`transport.emit` lanes, expr/pattern SOURCE TEXT (via `tree.spanOf`), and
+`origin: host|declared` (from `CompileResult.targets`' documented layout — host
+indices preserved, then compose-mode declarations appended). Scene names likewise
+exist only in the source; the wire has a span.
+
+**Cross-checked against the corpus**, which is the point of having one:
+`examples/starter.score.sjon`'s `circle-radius` renders ticks 0 / 1441440 /
+2882880 and values 30 / 110 / 30, against the golden's `41F00000` / `42DC0000` /
+`41F00000` at the same ticks. The decimal and the pinned hex agree bit for bit.
+
+**Three things the reds caught.** `trackKeys` ASSERTS a keys-sourced track (it is
+a library invariant, not a query), so the keys loop is guarded on the tag.
+`std.json` parses `120` as `.integer`, not `.float` — `{d}` renders a whole f64
+without a decimal point, so the tests compare through a `num()` helper rather than
+depending on a distinction JSON does not make. And a defective score has no table,
+so every payload key still appears with `transport: null` and the arrays empty —
+the shape does not vary with the outcome.
+
+**`ir` is a DATA verb:** stdout carries one complete JSON object and nothing else,
+while its human diagnostics also go to stderr, so `pacer ir bad.sjon 2>/dev/null |
+jq` still parses.
+
+**Gate: `zig build verify` green** — 43 CLI tests, 37 corpus cases unchanged.
+
+**Carry-forward for Phase 4 (`eval`):** add `.eval` to `Args.Verb`, `--at` /
+`--from`/`--to`/`--fps` / `--set` to `Args.Command` (rejecting non-finite values
+and `--set` on the other verbs at PARSE time), and `src/cli/Frames.zig`. The
+evaluator comes from `driver.evaluator.?` — non-null iff `result.ok()`. Frames
+MUST stream: `evalSeconds` returns a slice aliasing a reused buffer, so collecting
+first would make every frame show the last one's writes. `Envelope.Ctx.targetName`
+resolves a `Writes.Entry.target_id`; `entry.flags` IS the registry index. And
+`Eval.Evaluator` still needs the `last_tick` probe before a frame can report the
+tick it was actually computed at.
