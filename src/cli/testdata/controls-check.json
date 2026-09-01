@@ -1,0 +1,14 @@
+{
+  "pacer":{"version":"0.2.0","format":1},
+  "command":"check",
+  "source":{"path":"corpus/diag-controls/doc.sjon","bytes":832},
+  "ok":false,
+  "counts":{"errors":5,"warnings":0},
+  "diagnostics":[
+    {"producer":"pacer","severity":"err","code":"control_duplicate_id","code_id":20,"message":"duplicate control id `knob`","span":{"start":394,"end":398,"line":8,"col":14,"end_line":8,"end_col":18},"text":"knob"},
+    {"producer":"pacer","severity":"err","code":"control_invalid","code_id":22,"message":"control id `beat` shadows a reserved time binding","span":{"start":486,"end":490,"line":9,"col":14,"end_line":9,"end_col":18},"text":"beat"},
+    {"producer":"pacer","severity":"err","code":"unknown_target","code_id":0,"message":"unknown target `nonexistent` — not in any host registry","span":{"start":583,"end":594,"line":10,"col":24,"end_line":10,"end_col":35},"text":"nonexistent"},
+    {"producer":"pacer","severity":"err","code":"target_arity_mismatch","code_id":1,"message":"value has 1 component(s); target expects 3","span":{"start":681,"end":682,"line":11,"col":36,"end_line":11,"end_col":37},"text":"5"},
+    {"producer":"pacer","severity":"err","code":"control_invalid","code_id":22,"message":":min has 2 component(s); :value has 1","span":{"start":760,"end":765,"line":12,"col":21,"end_line":12,"end_col":26},"text":"[0 0]"}
+  ]
+}

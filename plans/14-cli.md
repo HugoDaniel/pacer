@@ -449,3 +449,49 @@ CLI does not claim), the check leg on `verify` and the update leg on a
 in `corpus/examples-starter/times.sjon`. Docs: `docs/cli.md`, a `zig build cli`
 row in CLAUDE.md's verb table, a README row, and the "CLI JSON is not a wire
 surface" sentence under Wire-stable surfaces.
+
+### Phase 5 — the binary golden and the docs — DONE 2026-09-01 · **plan 14 COMPLETE**
+
+**`tools/cli_golden.sh`** in `score_docs.sh`'s shape — check by default (the leg
+`verify` depends on), `--update` writes, one render serving both so the gate
+compares what the verb produces. Three cases in `src/cli/testdata/`:
+`starter-ir.json`, `starter-eval.json` (four times across the loop, plus a `--set`
+so the override path is pinned too), `controls-check.json`. Each declares its
+expected EXIT CODE as well, so the defective-score case cannot start passing by
+succeeding. `zig build cli-golden` regenerates; `verify` diffs.
+
+They live in `src/cli/testdata/`, NOT `corpus/`: that directory's contract is
+native == wasm byte for byte, and the CLI is native-only and claims no parity.
+Mixing them would dilute a gate whose sharpness is the point.
+
+**The goldens were reviewed by hand, against the corpus.** `examples/starter.score.sjon`
+is the fixture precisely because `corpus/examples-starter` already pins it, so the
+two goldens move together on one edit. All nine writes of the t = 4 s frame (the
+tempo boundary AND the `drop` scene's opening) were checked against
+`expected.sjon`'s f32 bit patterns: `circle-radius` 110 → `42DC0000`, `circle-y`
+0.72 → `3F3851EC`, `tint` → `3F733333`/`3EB33333`/`3EE66666`, `spark` 0.9 →
+`3F666666`, `master-gain` 0.4 → `3ECCCCCD`, the scened `circle-radius` 30 →
+`41F00000`, `flash` count 8 → `41000000` and gate 1 → `3F800000`. Eleven values,
+zero mismatches, and the write ORDER matches too (emit → tracks → controls). One
+caveat worth recording: the eval golden holds `sway-amt` at 0.2 while the corpus
+run does not, so `circle-x` is only comparable at times where `sin(τ·bar) = 0` —
+t = 4 s is one, which is why the cross-check used that frame.
+
+**Docs.** `docs/cli.md` is hand-written and says so at the top, because
+`score-language.md` beside it is generated and the distinction has to be loud.
+CLAUDE.md gains the two verb rows, the CLI leg in `verify`'s description, a
+roadmap paragraph, and — in the wire-surface section, where someone would actually
+look — the explicit statement that the CLI's JSON is NOT in the append-only set,
+with the reason (one producer, no second decoder, so versioned rather than
+frozen). README gains a layout row, a `src/cli/` row and a short usage section.
+`plans/00-strategy.md` gains a status row and a What's-next entry recording the
+three structural findings.
+
+**Gate: `zig build verify` green on all five legs** — Zig tests (61 CLI), native
+corpus (37 cases unchanged), node/wasm parity, CLI envelopes, score-docs drift.
+
+**Not built, and why.** The plan listed a `check-cli-flags.mjs`-style drift gate as
+optional; it stays unbuilt. pngine needs one because its flags are documented in a
+table a human maintains; here `docs/cli.md` and the usage text are both prose a
+reader checks, and `Args.zig`'s tests already pin every flag's grammar by name. A
+gate asserting a quoted literal appears in a file would be decoration.

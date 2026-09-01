@@ -128,10 +128,33 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | 4 | 1.0-tag prereqs · DONE 2026-07-18 (fuzz ×2, wire policy, root LICENSE) | ☑ |
 | — | 12 sjon-alignment · Waves A–D ALL CLOSED 2026-08-21 (preload, schema vocabulary, project file + generated reference, examples; corpus 29 → 36) | ☑ |
 | — | 13 sjon-union-arms · P1 ✓ ask filed as SJON `15` 2026-08-25, P2 ✓ SJON built it 2026-08-26 and the corpus pins it (36 → 37 cases) → plan 13 DONE | ☑ |
+| — | 14 cli · ALL phases ✓ 2026-09-01 (`pacer ir` / `eval` / `check`; `Abi` decoders, `Eval.last_tick`, JSON goldens) → plan 14 DONE | ☑ |
 
 ## What's next
 
-→ **[13](13-sjon-union-arms.md) is DONE — the ask landed and the corpus pins it (2026-08-26).**
+→ **[14](14-cli.md) is DONE — pacer has a native binary (2026-09-01).**
+`zig build cli` builds `pacer`, and `ir` / `eval` / `check` answer the questions
+that previously needed a host: what did the compiler make of this score, and what
+does it write at t with a knob held. Three structural facts came out of it. (1)
+**The CLI renders from memory, not from the blobs** — `'PACM'` carries no emit
+lanes at all, no target names, no scene names, no expr/pattern source text and no
+join origins, so a blob-derived dump would have been silently missing five things
+`ir` promises. `corpus_runner` still renders the other way and should: its job is
+proving the blob byte-identical native and wasm, which the CLI never claims. (2)
+**`Eval.Evaluator.last_tick`** — the only core change, a read-only probe beside
+`expr_failures`, because `evalSeconds` wraps seconds then converts while
+`evalTicks` wraps ticks, so a recomputed `tickFromSeconds` disagrees on every
+looping score (1801800 against the correct 180180 on the test fixture). Corpus
+byte-identical throughout. (3) **The two diagnostic producers cannot both report**
+— `Compile.compile` runs the builder only `if (!v.hasErrors())`, so every
+`diag-*` case is all-sjon or all-pacer, never mixed; that is now a test rather
+than an accident of the fixtures. Phase 1 also left `Abi.decodeMeta`/`decodeDiags`
+behind, which the CLI does not use but `corpus_runner` does (−205 lines of inline
+walking) and which made `encodeMeta` round-trip testable in Zig for the first
+time. The CLI's JSON is deliberately NOT a wire surface — one producer, no second
+decoder, so it is versioned (`"format": N`) rather than frozen.
+
+→ **Prior — [13](13-sjon-union-arms.md) is DONE — the ask landed and the corpus pins it (2026-08-26).**
 SJON answered *Valid, and built* the day after it was filed, and built it wider: the arm
 rule is per value and N-ary, for **every** union, so `Plugin.ValueKind.scalar_or_ref` is
 retired rather than widened. pacer's two hand-written unions now report the arm — a

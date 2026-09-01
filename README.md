@@ -38,6 +38,7 @@ registries at all.
 | Path | What |
 |---|---|
 | `src/` | the Zig driver — compile, eval, easing, tick math, WASM entry + boundary blobs |
+| `src/cli/` | the native `pacer` binary — score IR and eval-at-t as JSON |
 | `schema/pacer.sjon` | the score schema (embedded, validates on wasm32-freestanding) |
 | `schema/pacer-corpus.sjon` | the corpus harness schema (embedded; validates every `times.sjon`) |
 | `sjon-project.sjon` | the workspace project file — what `sjon-lsp` reads to give scores editor support |
@@ -45,7 +46,8 @@ registries at all.
 | `npm/pacer/` | the ESM JS glue around `pacer.wasm` (published package) |
 | `examples/` | a browser demo (live editor → canvas + audio) |
 | `docs/score-language.md` | GENERATED score-language reference (`zig build score-docs`) |
-| `tools/` | the diagnostic-coverage audit and the score-docs renderer |
+| `docs/cli.md` | the CLI reference (`pacer ir` / `eval` / `check`) |
+| `tools/` | the diagnostic-coverage audit, the score-docs renderer, the CLI goldens |
 
 ## Quickstart
 
@@ -68,6 +70,22 @@ Run the browser demo (serve from the repo root so the paths resolve):
 zig build wasm
 python3 -m http.server   # then open /examples/
 ```
+
+## Asking a score a question
+
+```sh
+zig build cli   # → zig-out/bin/pacer
+
+pacer check score.sjon              # diagnostics, with line/col
+pacer ir    score.sjon | jq         # the compiled IR as JSON
+pacer eval  score.sjon --at 3.5     # the write frame at t, as JSON
+pacer eval  score.sjon --at 3.5 --set sway-amt=0.2   # …with a knob held
+```
+
+A score that declares its own targets with `(target …)` needs no flags at all;
+one written against host registries takes them as `--target NAME[:ncomp[:registry]]`,
+in the flat order that IS the `target_id` space. Full reference:
+[`docs/cli.md`](./docs/cli.md).
 
 ## Editing scores
 

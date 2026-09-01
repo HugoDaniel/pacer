@@ -69,6 +69,16 @@ The npm glue (`npm/pacer/src/index.js`) mirrors every blob with one `DataView`
 pass and casts the exports to the `PacerExports` typedef (`npm/pacer/src/types.js`)
 — keep both sides in lockstep.
 
+**The CLI's JSON is deliberately NOT in this set.** Append-only exists because a
+second, independent implementation decodes those blobs; a format with two
+implementations must be frozen or they drift. `zig build cli`'s stdout has one
+producer and no second decoder, so it is VERSIONED instead — `"pacer":
+{"format": N}` bumps on a breaking envelope change, never on an added field.
+Every VALUE in it is still pinned (`Compile.Code` names and ordinals, `Easing.Op`
+names, the tick grid, the four-lane f32 shape): the envelope may move, the
+meanings cannot. Convention of record: `src/cli/main.zig`'s header and
+`docs/cli.md`.
+
 `'PACM'` closes with an append-only TLV **section stream** — zero or more
 `[id u32][payload_len u32][payload]` frames after the last control, walked to
 end-of-buffer with unknown ids skipped by length (so an old decoder tolerates a
@@ -165,9 +175,11 @@ would make every unqualified `(target …)` `ambiguous_form`, which is also why
 | `zig build test` | All inline Zig tests (root.zig forces submodule discovery) |
 | `zig build wasm` | Build `pacer.wasm` (freestanding, ReleaseSmall) |
 | `zig build corpus` | Native golden gate; `-- --update` regenerates |
-| `zig build verify` | test + native corpus + `node --test` (wasm parity) + score-docs drift — the whole gate |
+| `zig build verify` | test + native corpus + `node --test` (wasm parity) + CLI envelopes + score-docs drift — the whole gate |
 | `zig build fuzz` | Never-panic fuzz harnesses (separate from `verify`) |
 | `zig build audit-diagnostics` | Every `Compile.Code` variant is tested by name |
+| `zig build cli` | Build the native `pacer` binary (`ir` / `eval` / `check`) |
+| `zig build cli-golden` | Regenerate the CLI JSON envelopes in `src/cli/testdata/` |
 | `zig build score-docs` | Regenerate `docs/score-language.md` from `schema/pacer.sjon` |
 
 `docs/score-language.md` is GENERATED — `sjon export-schema --target=markdown`
@@ -265,6 +277,16 @@ corpus through SYMLINKED `doc.sjon`s (`corpus/examples-demoscene`,
 `corpus/examples-starter`) — the example that ships is the example the gate
 compiles. `examples/README.md` says which repo owns which file. No wire surface
 moved in any wave.
+
+`plans/14-cli.md` added the native binary — `zig build cli` builds `pacer`, whose
+`ir` / `eval` / `check` verbs answer *what did the compiler make of this score*
+and *what does it write at t* without a host. It renders from `CompileResult` in
+memory rather than from the `'PACM'` blob, deliberately: the blob carries no emit
+lanes, target names, scene names, expr/pattern source text or join origins. The
+one core change it needed is `Eval.Evaluator.last_tick`, a read-only probe beside
+`expr_failures` — `evalSeconds` wraps seconds then converts while `evalTicks`
+wraps ticks, so a frame's tick is not recoverable by converting again. See
+`docs/cli.md`.
 
 ## Code style
 

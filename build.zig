@@ -178,6 +178,24 @@ pub fn build(b: *std.Build) void {
     const run_cli_tests = b.addRunArtifact(cli_tests);
     test_step.dependOn(&run_cli_tests.step);
 
+    // The binary-level golden: run the freshly built CLI over pinned
+    // scores and diff the committed JSON. The in-process tests check shape
+    // and rules one assertion at a time; this checks the WHOLE envelope in
+    // one reviewable diff, and catches a reshuffle nothing asserted.
+    // Same check-by-default / `--update`-to-write shape as
+    // `tools/score_docs.sh`, so the gate compares what the verb produces.
+    const cli_golden_check = b.addSystemCommand(&.{"tools/cli_golden.sh"});
+    cli_golden_check.setCwd(b.path("."));
+    cli_golden_check.addArtifactArg(cli_exe);
+
+    const cli_golden_update = b.addSystemCommand(&.{"tools/cli_golden.sh"});
+    cli_golden_update.setCwd(b.path("."));
+    cli_golden_update.addArtifactArg(cli_exe);
+    cli_golden_update.addArg("--update");
+    cli_golden_update.has_side_effects = true;
+    const cli_golden_step = b.step("cli-golden", "Regenerate the CLI JSON goldens (review the diff)");
+    cli_golden_step.dependOn(&cli_golden_update.step);
+
     // `zig build verify` — the whole gate in one verb: unit tests, the
     // native corpus half, then node --test against the freshly built
     // pacer.wasm (the JS suite includes the corpus parity walk, so this
@@ -196,6 +214,7 @@ pub fn build(b: *std.Build) void {
     verify_step.dependOn(&run_tests.step);
     verify_step.dependOn(&run_corpus_verify.step);
     verify_step.dependOn(&node_test.step);
+    verify_step.dependOn(&cli_golden_check.step);
 
     // `zig build fuzz` — never-panic harnesses over the byte-eating and
     // arbitrary-input entrypoints (compile, decodeTargets, Writes.decode,
