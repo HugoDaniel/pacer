@@ -128,6 +128,56 @@ pub fn build(b: *std.Build) void {
     const corpus_step = b.step("corpus", "Verify the golden corpus (native); `-- --update` regenerates");
     corpus_step.dependOn(&run_corpus.step);
 
+    // `zig build cli` — the native `pacer` binary: `ir` / `eval` / `check`,
+    // JSON on stdout, everything else on stderr.
+    //
+    // Built against the PUBLIC `pacer` module rather than the sources
+    // (which is what `corpus_runner` does, because it lives in `src/` and
+    // rides root.zig's test discovery). The CLI is a CONSUMER — the first
+    // native one — so going through `@import("pacer")` makes root.zig's
+    // export list load-bearing: a surface a host needs and the module does
+    // not export fails here. `sjon` rides along for the comptime pins the
+    // JSON contract rests on.
+    //
+    // Installed through its OWN step, not `b.installArtifact`: nothing in
+    // this build attaches to the default install step, so a bare
+    // `zig build` is a no-op and should stay one. Same shape as the wasm.
+    const cli_imports = [_]std.Build.Module.Import{
+        .{ .name = "pacer", .module = pacer_mod },
+        .{ .name = "sjon", .module = sjon_mod },
+    };
+    const cli_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &cli_imports,
+    });
+    const cli_exe = b.addExecutable(.{ .name = "pacer", .root_module = cli_mod });
+    const install_cli = b.addInstallArtifact(cli_exe, .{});
+    const cli_step = b.step("cli", "Build the pacer CLI (native)");
+    cli_step.dependOn(&install_cli.step);
+
+    // `zig build run -- check score.sjon` — the CLI without the install path.
+    const run_cli = b.addRunArtifact(cli_exe);
+    if (b.args) |args| run_cli.addArgs(args);
+    const run_step = b.step("run", "Run the pacer CLI (args after `--`)");
+    run_step.dependOn(&run_cli.step);
+
+    // The CLI's tests are their OWN root. `src/root.zig`'s `test {}` block
+    // cannot reach them: these files import the `pacer` MODULE, which
+    // inside the core test binary resolves to a second, distinct instance.
+    // `src/cli/Cli.zig` plays root.zig's role one level down.
+    const cli_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/Cli.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &cli_imports,
+    });
+    cli_test_mod.addImport("build_options", build_options_mod);
+    const cli_tests = b.addTest(.{ .root_module = cli_test_mod });
+    const run_cli_tests = b.addRunArtifact(cli_tests);
+    test_step.dependOn(&run_cli_tests.step);
+
     // `zig build verify` — the whole gate in one verb: unit tests, the
     // native corpus half, then node --test against the freshly built
     // pacer.wasm (the JS suite includes the corpus parity walk, so this

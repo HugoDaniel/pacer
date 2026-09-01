@@ -283,3 +283,57 @@ the IR from `driver.result` — `table.tracks` / `.keys` / `.controls` / `.scene
 `.programs` / `.transport` — and diagnostics from `result.diagnostics` plus
 `result.validated.result.diagnostics`, in that order (the merge `encodeDiags`
 performs, pinned by a counterfactual test rather than by decoding).
+
+### Phase 2 — CLI skeleton + `check` — DONE 2026-09-01
+
+**Deliverable — `zig build cli` produces `zig-out/bin/pacer`**, with `check`
+working end to end: human report by default, `--json` envelope, `-` for stdin,
+`--target NAME[:ncomp[:registry]]` repeatable, exit 0/1/2/3.
+
+Six files under `src/cli/`: `main.zig` (process wiring only — writers built
+BEFORE argv so an OOM in `toSlice` still reports; a failed stdout flush overrides
+whatever `run` returned), `Cli.zig` (the test seam: `run(gpa, io, argv, out, err)`,
+`Exit`, usage text, the shared load path), `Args.zig` (pure — returns an `Action`,
+never prints), `Json.zig` (scalar emitters only), `Source.zig` (input + `LineIndex`),
+`Diags.zig` (the shared diagnostics array + `check`'s two renderings).
+
+**Build wiring:** a NAMED `cli` step plus `run`, never `b.installArtifact` —
+nothing in this build attaches to the default install step, so a bare `zig build`
+stays a no-op and now demonstrably keeps doing so. The CLI tests are a SECOND test
+artifact rooted at `src/cli/Cli.zig`, because `src/root.zig`'s discovery block
+cannot reach files that `@import("pacer")` — inside the core test binary that
+resolves to a second, distinct module instance. `Cli.zig`'s own `test {}` plays
+root.zig's role one level down. Hung on `test_step`, so it rides `verify` and runs
+in parallel with the core binary.
+
+**The merge pin came out differently than planned, and better.** The plan called
+for a counterfactual test on a score tripping BOTH producers at once. No such
+score exists: `Compile.compile` runs the builder only `if (!v.hasErrors())`
+(`src/Compile.zig:353`), so a document failing SJON validation never reaches
+pacer's own checks — every corpus `diag-*` case is all-sjon or all-pacer, never
+mixed. The fixture was rewritten as three tests: the walk matches the `'PACD'`
+blob record-for-record on a pacer-only score AND on a sjon-only score, plus an
+explicit pin on the structural reason they cannot mix. The day that changes, the
+third test is the one that says so.
+
+**Two Zig 0.16 notes.** `std.Io.Writer.Allocating` is the whole in-process test
+harness — `invoke(argv)` returns `(code, stdout, stderr)` with no subprocess, run
+under `std.testing.allocator`, which is ALSO the leak gate: `std.process.Init`'s
+allocator explicitly does not affect the return code, so pngine's exit-99 dance
+would buy nothing here. And `{d}` on an f32 must not be widened to f64 first —
+`0.1` as f32 widened prints `0.10000000149011612`, so `Json.number32` takes the
+f32 directly.
+
+**Gate: `zig build verify` green** (253 Zig tests incl. 34 new CLI ones, 37 corpus
+cases unchanged, npm parity, score-docs current). Smoke-verified: compose-mode
+score with zero flags exits 0, `corpus/diag-controls --target tint:3` reproduces
+exactly the five pinned diagnostics with names beside ordinals, stdin reports
+`<stdin>`, and a usage error writes zero bytes to stdout.
+
+**Carry-forward for Phase 3 (`ir`):** add `.ir` to `Args.Verb` and a branch to
+`runCommand`'s switch; everything else is in place. Read the IR from
+`driver.result.table.?` and `driver.result.targets`. `Json.lanes(v, ncomp)` already
+truncates. `Source.LineIndex.at(offset)` gives 1-based line/col with codepoint
+columns. The envelope preamble (`pacer`/`command`/`source`/`ok`/`diagnostics`) is
+spelled in `Diags.renderJson` — Phase 3 should lift it into a shared helper rather
+than copy it.
