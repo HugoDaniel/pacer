@@ -145,6 +145,17 @@ pub const Evaluator = struct {
     /// `.pattern` arm). A debugging probe, not semantics — the determinism
     /// claim never reads it.
     expr_failures: u64 = 0,
+    /// The tick the LAST frame was computed at, after every wrap. A
+    /// read-only debugging probe like `expr_failures` — the determinism
+    /// claim never reads it, and nothing in evaluation branches on it.
+    ///
+    /// It exists because that tick is not recoverable from outside:
+    /// `evalSeconds` wraps SECONDS for a mapped score and then converts,
+    /// while `evalTicks` wraps in the tick domain, so calling
+    /// `tickFromSeconds` a second time answers a different question on any
+    /// looping score. A consumer that wants to report a frame's musical
+    /// position reads this rather than re-spelling a pinned seam.
+    last_tick: Tick = 0,
 
     /// Build the evaluator over a SUCCESSFUL compile. Borrows `result`
     /// whole (table + tree + schema) — `Driver.init` is the checked way
@@ -298,6 +309,9 @@ pub const Evaluator = struct {
                 .hold => t = @min(t, dur),
             }
         }
+        // The probe, set AFTER the wrap: `t`, not `t_raw`, is the position
+        // every write below is computed from.
+        self.last_tick = t;
         // Effective control values for this frame's expressions: a live
         // override wins, else the document `:value`.
         for (self.ctl_bindings, self.slots[0..self.ctl_bindings.len], table.controls) |*b, slot, ctl| {
@@ -705,6 +719,51 @@ test "tempo-map: evalSeconds wraps in seconds — loop replays the early segment
     const buggy = ev.evalTicks(@mod(try map.tickFromSeconds(3.5), 1441440))[0].value[0];
     try t_.expectApproxEqAbs(@as(f32, 0.25), buggy, 1e-6);
     try t_.expect(buggy != wrapped);
+}
+
+test "last_tick reports the tick a frame was ACTUALLY computed at" {
+    // The probe exists because that tick is not recoverable from outside.
+    // `evalSeconds` wraps SECONDS for a mapped score and then converts;
+    // `evalTicks` wraps again in ticks. So a consumer wanting to report a
+    // frame's musical position cannot call `tickFromSeconds` a second time
+    // — on any looping score the two answers differ — and must not
+    // re-spell the wrap, which is a pinned determinism seam.
+    var r = try compileScore(
+        \\(transport :bpm 120 :meter [4 4] :dur 8b :end loop)
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target radius
+        \\  (key :at 0b :value 0.0)
+        \\  (key :at 8b :value 1.0))
+    );
+    defer r.deinit();
+    var ev = try Evaluator.init(t_.allocator, &r);
+    defer ev.deinit();
+    const map = &r.table.?.transport.map;
+
+    _ = try ev.evalSeconds(3.5);
+    // 3.5 s wraps to 0.5 s of wall clock, which is beat 1 = tick 180180.
+    try t_.expectEqual(@as(Tick, 180180), ev.last_tick);
+    // Evaluating the wrapped time directly agrees, as the values already do.
+    _ = try ev.evalSeconds(0.5);
+    try t_.expectEqual(@as(Tick, 180180), ev.last_tick);
+    // And the naive recomputation does NOT — this is the whole point.
+    try t_.expect((try map.tickFromSeconds(3.5)) != ev.last_tick);
+
+    // A constant score wraps in the tick domain instead; the probe reports
+    // the post-wrap value there too.
+    var c = try compileScore(
+        \\(transport :bpm 120 :meter [4 4] :dur 4b :end loop)
+        \\(track :target radius (key :at 0b :value 0.0) (key :at 4b :value 1.0))
+    );
+    defer c.deinit();
+    var cev = try Evaluator.init(t_.allocator, &c);
+    defer cev.deinit();
+    _ = try cev.evalSeconds(2.5); // dur 4b = 2 s, so this is 0.5 s in
+    try t_.expectEqual(@as(Tick, 180180), cev.last_tick);
+
+    // `evalTicks` is the same seam, so it sets the probe too.
+    _ = cev.evalTicks(720720 + 180180);
+    try t_.expectEqual(@as(Tick, 180180), cev.last_tick);
 }
 
 test "tempo-map: evalSeconds hold clamps at loop_secs" {

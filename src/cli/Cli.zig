@@ -20,6 +20,7 @@ const sjon = @import("sjon");
 const Args = @import("Args.zig");
 const Diags = @import("Diags.zig");
 const Envelope = @import("Envelope.zig");
+const Frames = @import("Frames.zig");
 const Ir = @import("Ir.zig");
 const Source = @import("Source.zig");
 const Writer = std.Io.Writer;
@@ -66,6 +67,7 @@ pub const usage_text =
     \\  pacer check FILE            Validate a score; report diagnostics.
     \\  pacer check -               Validate from stdin.
     \\  pacer ir FILE               Print the compiled IR as JSON.
+    \\  pacer eval FILE --at SECS   Print the write frames at given times.
     \\
     \\Options:
     \\  --target NAME[:ncomp[:registry]]
@@ -75,7 +77,14 @@ pub const usage_text =
     \\                              for a compose-mode score, which declares its
     \\                              own targets with (target ...).
     \\  --json                      Emit the JSON envelope instead of the
-    \\                              human report.
+    \\                              human report (check only).
+    \\
+    \\Options for eval:
+    \\  --at SECONDS                Sample one time. Repeatable; order is kept.
+    \\  --from S --to S --fps N     Sweep a range: t = from + i/fps, endpoint
+    \\                              included. All three flags or none.
+    \\  --set ID=V[,V,V,V]          Hold a (control ...) for the whole run. ID
+    \\                              is a control :id, or a slot index.
     \\  -h, --help                  Show this help.
     \\  -V, --version               Show the version.
     \\
@@ -170,6 +179,12 @@ fn runCommand(gpa: Allocator, io: Io, cmd: Args.Command, out: *Writer, err: *Wri
             if (code != 0) _ = try Diags.renderHuman(err, ctx);
             break :blk code;
         },
+        .eval => blk: {
+            const ev = if (driver.evaluator) |*e| e else null;
+            const code = try Frames.write(out, err, ctx, ev, cmd.eval);
+            if (code == 1) _ = try Diags.renderHuman(err, ctx);
+            break :blk code;
+        },
     };
 }
 
@@ -184,6 +199,7 @@ test {
     _ = @import("Args.zig");
     _ = @import("Diags.zig");
     _ = @import("Envelope.zig");
+    _ = @import("Frames.zig");
     _ = @import("Ir.zig");
     _ = @import("Json.zig");
     _ = @import("Source.zig");

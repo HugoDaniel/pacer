@@ -18,7 +18,55 @@ const std = @import("std");
 const pacer = @import("pacer");
 const Allocator = std.mem.Allocator;
 
-pub const Verb = enum { check, ir };
+pub const Verb = enum { check, ir, eval };
+
+/// Upper bound on frames one invocation may request. `--fps 1e9` over a
+/// second is not a request, it is a hang.
+pub const MAX_FRAMES: usize = 1 << 20;
+
+/// A swept sample range: `t_i = from + i/fps`, computed from `i` rather
+/// than accumulated, so a long sweep does not drift and frame 3600 is the
+/// same f64 whether you asked for one frame or ten thousand.
+pub const Sweep = struct {
+    from: f64,
+    to: f64,
+    fps: f64,
+
+    /// Frames this sweep yields — `floor((to - from) * fps) + 1`, the
+    /// endpoint included.
+    pub fn count(self: Sweep) usize {
+        return @as(usize, @intFromFloat(@floor((self.to - self.from) * self.fps))) + 1;
+    }
+
+    pub fn at(self: Sweep, i: usize) f64 {
+        return self.from + @as(f64, @floatFromInt(i)) / self.fps;
+    }
+};
+
+/// One `--set` override, in argv order. `key` aliases argv.
+pub const Override = struct {
+    key: []const u8,
+    /// Set when the key parses WHOLE as an integer — a slot index into the
+    /// control space (document controls in table order). A control can
+    /// never be NAMED an integer, since `:id` is a symbol, so this is
+    /// unambiguous.
+    slot: ?usize,
+    /// Lanes past the ones written are ZERO — the `Key.value` padding
+    /// convention, so `--set tint=1,0,0` and a 3-comp target agree with no
+    /// special case.
+    value: [4]f32,
+    /// How many lanes were actually written, echoed in the JSON so a
+    /// consumer can see `--set knob=1` was one lane and not four.
+    lanes: u8,
+};
+
+pub const EvalOpts = struct {
+    /// Explicit `--at` times, in argv order. Never sorted, never deduped:
+    /// the frames array indexes 1:1 with what was asked.
+    at: []const f64 = &.{},
+    sweep: ?Sweep = null,
+    sets: []const Override = &.{},
+};
 
 pub const Command = struct {
     verb: Verb,
@@ -29,6 +77,7 @@ pub const Command = struct {
     /// legal and is the default: a compose-mode score declares its own.
     targets: []const pacer.Compile.Target,
     json: bool = false,
+    eval: EvalOpts = .{},
 };
 
 pub const Action = union(enum) {
@@ -55,6 +104,11 @@ pub fn parse(a: Allocator, argv: []const [:0]const u8) Action {
     var out: Command = .{ .verb = verb, .path = undefined, .targets = &.{}, .json = false };
     var path: ?[]const u8 = null;
     var targets: std.ArrayList(pacer.Compile.Target) = .empty;
+    var at: std.ArrayList(f64) = .empty;
+    var sets: std.ArrayList(Override) = .empty;
+    var from: ?f64 = null;
+    var to: ?f64 = null;
+    var fps: ?f64 = null;
 
     var i: usize = 2;
     while (i < argv.len) : (i += 1) {
@@ -67,9 +121,31 @@ pub fn parse(a: Allocator, argv: []const [:0]const u8) Action {
             // `Compile.compile` ASSERTS this bound; refuse before it fires.
             if (targets.items.len == pacer.Compile.MAX_TARGETS)
                 return .{ .usage = say(a, "too many --target flags (max {d})", .{pacer.Compile.MAX_TARGETS}, "too many --target flags") };
-            targets.append(a, tg) catch return .{ .usage = "out of memory collecting --target" };
+            targets.append(a, tg) catch return .{ .usage = oom };
         } else if (eq(arg, "--json")) {
             out.json = true;
+        } else if (eq(arg, "--at") or eq(arg, "--from") or eq(arg, "--to") or eq(arg, "--fps") or eq(arg, "--set")) {
+            // Eval-only. `ir` reports the DOCUMENT's IR, which a live
+            // override does not change — the table is a pure function of
+            // the document, and a dump that shifted under `--set` would
+            // break exactly that.
+            if (verb != .eval)
+                return .{ .usage = say(a, "{s} is only valid for eval", .{arg}, "flag is only valid for eval") };
+            i += 1;
+            if (i >= argv.len) return .{ .usage = say(a, "{s} requires a value", .{arg}, "flag requires a value") };
+            const v = argv[i];
+            if (eq(arg, "--set")) {
+                const ov = parseSet(v) catch
+                    return .{ .usage = say(a, "bad --set `{s}` (expected ID=V[,V,V,V], up to 4 finite lanes)", .{v}, "bad --set") };
+                sets.append(a, ov) catch return .{ .usage = oom };
+                continue;
+            }
+            const x = finite(v) catch
+                return .{ .usage = say(a, "{s} expects a finite number, got `{s}`", .{ arg, v }, "expected a finite number") };
+            if (eq(arg, "--at")) at.append(a, x) catch return .{ .usage = oom };
+            if (eq(arg, "--from")) from = x;
+            if (eq(arg, "--to")) to = x;
+            if (eq(arg, "--fps")) fps = x;
         } else if (isFlag(arg)) {
             return .{ .usage = say(a, "unknown option `{s}`", .{arg}, "unknown option") };
         } else if (path != null) {
@@ -81,7 +157,27 @@ pub fn parse(a: Allocator, argv: []const [:0]const u8) Action {
 
     out.path = path orelse
         return .{ .usage = say(a, "{s} requires a score path (use `-` for stdin)", .{@tagName(verb)}, "missing score path") };
-    out.targets = targets.toOwnedSlice(a) catch return .{ .usage = "out of memory collecting --target" };
+    out.targets = targets.toOwnedSlice(a) catch return .{ .usage = oom };
+
+    if (verb == .eval) {
+        if (from != null or to != null or fps != null) {
+            if (from == null or to == null or fps == null)
+                return .{ .usage = "a sweep needs all three of --from, --to and --fps" };
+            const sw: Sweep = .{ .from = from.?, .to = to.?, .fps = fps.? };
+            if (sw.fps <= 0) return .{ .usage = "--fps must be greater than zero" };
+            if (sw.to < sw.from) return .{ .usage = "--to must not precede --from" };
+            const span = (sw.to - sw.from) * sw.fps;
+            if (!std.math.isFinite(span) or span + 1 >= @as(f64, MAX_FRAMES))
+                return .{ .usage = say(a, "that sweep asks for more than {d} frames", .{MAX_FRAMES}, "sweep is too large") };
+            out.eval.sweep = sw;
+        }
+        // No default sample time: adding one later is additive, removing
+        // one is breaking.
+        if (at.items.len == 0 and out.eval.sweep == null)
+            return .{ .usage = "eval needs sample times: --at SECONDS (repeatable), or --from/--to/--fps" };
+        out.eval.at = at.toOwnedSlice(a) catch return .{ .usage = oom };
+        out.eval.sets = sets.toOwnedSlice(a) catch return .{ .usage = oom };
+    }
     return .{ .command = out };
 }
 
@@ -101,6 +197,41 @@ fn parseTarget(spec: []const u8) error{BadTarget}!pacer.Compile.Target {
         out.registry = std.fmt.parseInt(u8, s, 10) catch return error.BadTarget;
     }
     if (it.next() != null) return error.BadTarget;
+    return out;
+}
+
+const oom = "out of memory collecting arguments";
+
+/// A finite f64, or an error. `parseFloat` ACCEPTS "nan" and "inf"; both
+/// would reach the driver as a clock it must reject, and both render as
+/// bare words JSON has no term for. A non-finite time is a typo, so it is
+/// refused here where the message can say which token.
+fn finite(s: []const u8) error{NotFinite}!f64 {
+    const x = std.fmt.parseFloat(f64, s) catch return error.NotFinite;
+    if (!std.math.isFinite(x)) return error.NotFinite;
+    return x;
+}
+
+/// `ID=V[,V[,V[,V]]]` — see `Override`.
+fn parseSet(spec: []const u8) error{BadSet}!Override {
+    const eqi = std.mem.indexOfScalar(u8, spec, '=') orelse return error.BadSet;
+    const key = spec[0..eqi];
+    if (key.len == 0) return error.BadSet;
+
+    var out: Override = .{ .key = key, .slot = null, .value = @splat(0), .lanes = 0 };
+    // `parseInt` refuses a leading '+' and any trailing byte, so `0x10`
+    // and `1 ` are names, not slots.
+    out.slot = std.fmt.parseInt(usize, key, 10) catch null;
+
+    var it = std.mem.splitScalar(u8, spec[eqi + 1 ..], ',');
+    while (it.next()) |lane| {
+        if (out.lanes == 4) return error.BadSet;
+        const x = finite(lane) catch return error.BadSet;
+        out.value[out.lanes] = @floatCast(x);
+        out.lanes += 1;
+    }
+    // `--set k=` splits to one EMPTY lane, which `finite` already refused.
+    std.debug.assert(out.lanes >= 1);
     return out;
 }
 
@@ -212,6 +343,113 @@ test "parse: --target rejects a bad ncomp, a bad registry and an empty name" {
             std.debug.print("expected a usage error for --target {s}\n", .{spec});
             return e;
         };
+    }
+}
+
+test "parse: --at is repeatable and keeps argv order, never sorted" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const cmd = try parseOk(arena.allocator(), &.{
+        "pacer", "eval", "a.sjon", "--at", "1.5", "--at", "0", "--at", "3",
+    });
+    // Sampling order is the user's: the frames array indexes 1:1 with what
+    // was asked, and sorting would hide a mistake.
+    try t.expectEqualSlices(f64, &.{ 1.5, 0, 3 }, cmd.eval.at);
+    try t.expectEqual(@as(?Sweep, null), cmd.eval.sweep);
+}
+
+test "parse: the sweep is all three flags or none" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cmd = try parseOk(a, &.{ "pacer", "eval", "a.sjon", "--from", "0", "--to", "2", "--fps", "4" });
+    try t.expectEqual(Sweep{ .from = 0, .to = 2, .fps = 4 }, cmd.eval.sweep.?);
+
+    for ([_][]const [:0]const u8{
+        &.{ "pacer", "eval", "a.sjon", "--from", "0" },
+        &.{ "pacer", "eval", "a.sjon", "--from", "0", "--to", "2" },
+        &.{ "pacer", "eval", "a.sjon", "--to", "2", "--fps", "4" },
+    }) |argv| _ = try usageMessage(a, argv);
+}
+
+test "parse: the sweep rejects a bad fps, a reversed range and an absurd frame count" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const [:0]const u8{
+        &.{ "pacer", "eval", "a.sjon", "--from", "0", "--to", "2", "--fps", "0" },
+        &.{ "pacer", "eval", "a.sjon", "--from", "0", "--to", "2", "--fps", "-1" },
+        &.{ "pacer", "eval", "a.sjon", "--from", "2", "--to", "0", "--fps", "4" },
+        // 1e9 fps over a second is not a request, it is a hang.
+        &.{ "pacer", "eval", "a.sjon", "--from", "0", "--to", "1", "--fps", "1e9" },
+    }) |argv| _ = try usageMessage(a, argv);
+}
+
+test "parse: a non-finite time is refused at parse, never handed to the driver" {
+    // `parseFloat` accepts "nan" and "inf"; a non-finite f64 would also
+    // render as bare `nan` in JSON, which no parser accepts.
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{ "nan", "inf", "-inf" }) |bad| {
+        _ = try usageMessage(a, &.{ "pacer", "eval", "a.sjon", "--at", bad });
+    }
+}
+
+test "parse: --set takes a control id or a slot, and pads lanes with zero" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const cmd = try parseOk(arena.allocator(), &.{
+        "pacer", "eval", "a.sjon", "--at", "0",
+        "--set", "sway-amt=0.2",
+        "--set", "pan=0.25,0.5",
+        "--set", "0=0.5",
+    });
+    try t.expectEqual(@as(usize, 3), cmd.eval.sets.len);
+
+    try t.expectEqualStrings("sway-amt", cmd.eval.sets[0].key);
+    try t.expectEqual(@as(?usize, null), cmd.eval.sets[0].slot);
+    try t.expectEqual(@as(u8, 1), cmd.eval.sets[0].lanes);
+    try t.expectEqual([4]f32{ 0.2, 0, 0, 0 }, cmd.eval.sets[0].value);
+
+    try t.expectEqual(@as(u8, 2), cmd.eval.sets[1].lanes);
+    try t.expectEqual([4]f32{ 0.25, 0.5, 0, 0 }, cmd.eval.sets[1].value);
+
+    // A key that parses WHOLE as an integer is a slot. No control can be
+    // named `0` — `:id` is a symbol — so this is unambiguous.
+    try t.expectEqual(@as(?usize, 0), cmd.eval.sets[2].slot);
+}
+
+test "parse: --set rejects a missing =, an empty key, five lanes and a non-finite lane" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{ "sway", "=0.5", "k=1,2,3,4,5", "k=", "k=x", "k=nan", "k=inf" }) |bad| {
+        _ = usageMessage(a, &.{ "pacer", "eval", "a.sjon", "--at", "0", "--set", bad }) catch |e| {
+            std.debug.print("expected a usage error for --set {s}\n", .{bad});
+            return e;
+        };
+    }
+}
+
+test "parse: eval with no sample times is a usage error, not a silent default of 0" {
+    // Adding a default later is additive; removing one is breaking.
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const msg = try usageMessage(arena.allocator(), &.{ "pacer", "eval", "a.sjon" });
+    try t.expect(std.mem.indexOf(u8, msg, "--at") != null);
+}
+
+test "parse: the eval-only flags are refused by ir and check" {
+    // `ir` reports the DOCUMENT's IR, which a live override does not
+    // change — the table is a pure function of the document, and an `ir`
+    // dump that shifted under `--set` would break exactly that.
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{ "ir", "check" }) |verb| {
+        _ = try usageMessage(a, &.{ "pacer", verb, "a.sjon", "--set", "k=1" });
+        _ = try usageMessage(a, &.{ "pacer", verb, "a.sjon", "--at", "0" });
     }
 }
 

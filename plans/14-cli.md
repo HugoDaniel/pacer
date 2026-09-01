@@ -387,3 +387,65 @@ first would make every frame show the last one's writes. `Envelope.Ctx.targetNam
 resolves a `Writes.Entry.target_id`; `entry.flags` IS the registry index. And
 `Eval.Evaluator` still needs the `last_tick` probe before a frame can report the
 tick it was actually computed at.
+
+### Phase 4 — `eval`, `--set`, sampling, the `last_tick` probe — DONE 2026-09-01
+
+**Deliverable — `pacer eval FILE` prints write frames as JSON**: `--at SECONDS`
+(repeatable), the `--from/--to/--fps` sweep, and `--set ID=V[,V,V,V]` holding a
+control for the whole run, by `:id` or by slot index.
+
+**`Eval.Evaluator.last_tick`** — the one change outside `src/cli/`, a read-only
+probe beside `expr_failures`, assigned in `evalTicks` AFTER the wrap. Its red is
+in `Eval.zig`'s own tests and states the reason: on a mapped looping score
+`evalSeconds` wraps seconds then converts while `evalTicks` wraps ticks, so
+`tickFromSeconds` called a second time answers a different question — for the
+fixture, 1801800 against the correct 180180. **Every corpus golden stayed
+byte-identical**, which was the gate.
+
+Visible in the smoke test: sweeping `examples/starter.score.sjon` from 6.5 s to
+7.5 s across its 7 s loop point gives ticks 2642640 → 0 → 180180. A recomputed
+tick would have run straight past the wrap.
+
+**Frames STREAM.** `evalSeconds` returns a slice aliasing the evaluator's reused
+buffer, so each frame is rendered before the next sample is taken; collecting
+first would leave every frame showing the last one's writes, silently. Two
+differing samples are a test, not an assumption.
+
+**`--set` resolves BEFORE the first byte of stdout**, because an unresolvable key
+is a usage error and a usage error must leave stdout empty rather than half an
+object. The message lists the ids the score actually declares. Resolution is the
+CLI's own job so it can say "names no control" distinctly — `setControl` folds a
+bad index and a non-finite lane into one `false`, and by then both have been
+excluded (index resolved here, lanes checked at parse).
+
+**Parse-time refusals, each for a stated reason.** Non-finite `--at`/`--from`/
+`--to`/`--set` lanes: `parseFloat` accepts `"nan"` and `"inf"`, and a non-finite
+f64 renders as a bare word no JSON parser accepts. A sweep asking for more than
+`MAX_FRAMES` (1<<20): `--fps 1e9` over a second is a hang, not a request. `--set`
+or `--at` on `ir`/`check`: the table is a pure function of the document, and a
+dump that shifted under `--set` would break exactly that. And `eval` with no
+sample times at all, because adding a default later is additive while removing one
+is breaking.
+
+**Sweep times are `from + i/fps` computed from `i`,** never accumulated, so a long
+sweep does not drift. Explicit `--at`s come first in argv order, then the sweep;
+no sorting, no dedup — the frames array indexes 1:1 with what was asked.
+
+**An unreachable clock does not move the exit code.** `out_of_range: true` with a
+`reason` and no writes; the score is fine, that time simply is not on the grid.
+`expr_failures` is reported at the end of the run — a track whose expr went
+non-finite omits its write, and the CLI exists to surface that rather than hide it.
+
+**Gate: `zig build verify` green** — 61 CLI tests, 37 corpus cases unchanged,
+score-docs current. Smoke-verified against the flagship example: `sway-amt` at its
+document `0.12` gives `circle-x` 0.62 at t = 0.5 s, and `--set sway-amt=0.2` gives
+0.70 — exactly `0.5 + sway·sin(τ·0.25)`.
+
+**Carry-forward for Phase 5 (goldens + docs):** `tools/cli_golden.sh` in
+`score_docs.sh`'s check-by-default / `--update` shape, goldens under
+`src/cli/testdata/` (NOT `corpus/`, whose contract is native-vs-wasm equality the
+CLI does not claim), the check leg on `verify` and the update leg on a
+`cli-golden` verb. The full `--target` list for `examples/starter.score.sjon` is
+in `corpus/examples-starter/times.sjon`. Docs: `docs/cli.md`, a `zig build cli`
+row in CLAUDE.md's verb table, a README row, and the "CLI JSON is not a wire
+surface" sentence under Wire-stable surfaces.
