@@ -275,7 +275,6 @@ fn slice(source: []const u8, span: sjon.Ast.Span) []const u8 {
     return source[start..@min(@max(span.end, start), source.len)];
 }
 
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

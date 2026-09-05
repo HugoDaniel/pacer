@@ -137,7 +137,6 @@ fn upperBound(starts: []const u32, off: usize) usize {
     return lo;
 }
 
-
 const t = std.testing;
 // ---------------------------------------------------------------------------
 // Tests

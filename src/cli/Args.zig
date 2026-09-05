@@ -252,7 +252,6 @@ fn say(a: Allocator, comptime fmt: []const u8, args: anytype, comptime fallback:
     return std.fmt.allocPrint(a, fmt, args) catch fallback;
 }
 
-
 const t = std.testing;
 // ---------------------------------------------------------------------------
 // Tests
@@ -319,10 +318,9 @@ test "parse: --target grammar is NAME[:ncomp[:registry]], flat order is the id s
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
     defer arena.deinit();
     const cmd = try parseOk(arena.allocator(), &.{
-        "pacer", "check", "a.sjon",
-        "--target", "circle-radius",
-        "--target", "tint:3",
-        "--target", "click:4:1",
+        "pacer",    "check",         "a.sjon",
+        "--target", "circle-radius", "--target",
+        "tint:3",   "--target",      "click:4:1",
     });
     try t.expectEqual(@as(usize, 3), cmd.targets.len);
     try t.expectEqualStrings("circle-radius", cmd.targets[0].name);
@@ -400,10 +398,9 @@ test "parse: --set takes a control id or a slot, and pads lanes with zero" {
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
     defer arena.deinit();
     const cmd = try parseOk(arena.allocator(), &.{
-        "pacer", "eval", "a.sjon", "--at", "0",
-        "--set", "sway-amt=0.2",
-        "--set", "pan=0.25,0.5",
-        "--set", "0=0.5",
+        "pacer", "eval",         "a.sjon", "--at",         "0",
+        "--set", "sway-amt=0.2", "--set",  "pan=0.25,0.5", "--set",
+        "0=0.5",
     });
     try t.expectEqual(@as(usize, 3), cmd.eval.sets.len);
 

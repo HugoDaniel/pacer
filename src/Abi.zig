@@ -1792,7 +1792,7 @@ test "decodeDiags rejects every malformed shape" {
     defer t.allocator.free(good_buf);
     const good = encodeDiags(&r, good_buf);
 
-    try t.expectEqual(@as(?DiagView, null), decodeDiags(good[0..DIAGS_HEADER_LEN - 1]));
+    try t.expectEqual(@as(?DiagView, null), decodeDiags(good[0 .. DIAGS_HEADER_LEN - 1]));
     try t.expectEqual(@as(?DiagView, null), decodeDiags(good[0 .. good.len - 1])); // truncated message
 
     const bad = try t.allocator.dupe(u8, good);

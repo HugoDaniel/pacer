@@ -188,7 +188,6 @@ fn runCommand(gpa: Allocator, io: Io, cmd: Args.Command, out: *Writer, err: *Wri
     };
 }
 
-
 const t = std.testing;
 test {
     // `src/root.zig`'s discovery block cannot reach these: they
