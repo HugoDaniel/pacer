@@ -59,12 +59,13 @@ pub const Error = error{OutOfMemory};
 pub const MAX_CHAIN_DEPTH = 4;
 
 /// Ceiling on the merged target join (host registries + compose-mode
-/// `(target …)` declarations). Mirrors `Abi.MAX_TARGETS`; kept local to
-/// avoid a circular import. A declaration past it is `target_decl_invalid`
-/// — the cap also keeps every join index inside a `u16` `target_id`.
+/// `(target …)` declarations). THE definition — `Abi.MAX_TARGETS` aliases
+/// it (Abi imports this module, never the reverse). A declaration past it
+/// is `target_decl_invalid`; the cap also keeps every join index inside a
+/// `u16` `target_id` and clear of the `TrackTable.NO_TARGET` sentinel.
 pub const MAX_TARGETS = 1024;
 comptime {
-    std.debug.assert(MAX_TARGETS <= std.math.maxInt(u16));
+    std.debug.assert(MAX_TARGETS <= TrackTable.NO_TARGET);
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +94,16 @@ pub const Validated = struct {
     pub fn hasErrors(self: *const Validated) bool {
         return self.result.hasErrors();
     }
+
+    /// First SJON diagnostic with the given code, or null. Test/debug
+    /// helper, the twin of `CompileResult.findDiag` for the other code
+    /// space; production consumers iterate `result.diagnostics`.
+    pub fn findDiag(self: *const Validated, code: Ast.Diagnostic.Code) ?sjon.Host.HostDiagnostic {
+        for (self.result.diagnostics) |d| {
+            if (d.code == code) return d;
+        }
+        return null;
+    }
 };
 
 /// Validate a pacer score against the preloaded schema. Always returns a
@@ -112,15 +123,6 @@ pub fn validate(gpa: Allocator, schema: *const Schema, source: [:0]const u8) Err
     return .{ .result = result };
 }
 
-/// First SJON diagnostic with the given code, or null. Test/debug
-/// helper; production consumers iterate `result.diagnostics`.
-pub fn findCode(v: *const Validated, code: Ast.Diagnostic.Code) ?sjon.Host.HostDiagnostic {
-    for (v.result.diagnostics) |d| {
-        if (d.code == code) return d;
-    }
-    return null;
-}
-
 // ---------------------------------------------------------------------------
 // Stage 2 — compile
 // ---------------------------------------------------------------------------
@@ -129,8 +131,9 @@ pub fn findCode(v: *const Validated, code: Ast.Diagnostic.Code) ?sjon.Host.HostD
 /// `registry` is the ordered-registry index (0 = visual, 1 = audio, …)
 /// and rides into `Writes.Entry.flags` for JS-side routing.
 pub const Target = struct {
-    /// Borrowed from the caller for the duration of `compile` (the wasm
-    /// path aliases the 'PACT' blob; the table stores ids, not names).
+    /// Borrowed from the caller for the duration of `compile` ONLY (the
+    /// wasm path aliases the 'PACT' blob): the result copies every name
+    /// it keeps into its arena, and the table stores ids, not names.
     name: []const u8,
     ncomp: u8,
     registry: u8 = 0,
@@ -249,10 +252,9 @@ pub const CompileResult = struct {
     /// reads them from source, like scene names); this is a native-side
     /// view so the corpus runner and tests can name declared-only targets.
     /// Equals the host list verbatim when the score has no declarations.
-    /// NATIVE-ONLY: host-provided names alias the caller's target memory
-    /// (the reusable `targets_buffer` under wasm, overwritten by the next
-    /// `drv_load`), so a wasm export must NOT read this — declared names
-    /// are arena-owned, but host names are not.
+    /// Every name — host-provided or declared — is arena-owned, so this
+    /// slice never aliases the caller's target memory (the SJON memory
+    /// model: the result retains nothing of its inputs).
     targets: []const Target,
     /// Schema for expr-track evaluation: the CORE plugin prepended to
     /// this document's user plugins — the preloaded pacer schema, plus
@@ -281,7 +283,8 @@ pub const CompileResult = struct {
         return self.table != null;
     }
 
-    /// First pacer diagnostic with the given code, or null. Test helper.
+    /// First pacer diagnostic with the given code, or null. Test/debug
+    /// helper; `validated.findDiag` is the SJON-side twin.
     pub fn findDiag(self: *const CompileResult, code: Code) ?Diagnostic {
         for (self.diagnostics) |d| {
             if (d.code == code) return d;
@@ -329,6 +332,18 @@ pub fn compile(gpa: Allocator, schema: *const Schema, source: [:0]const u8, targ
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
+    // The result owns its target join outright: copy the host names in
+    // now, so `CompileResult.targets` never aliases the caller's memory
+    // (under wasm that is `targets_buffer`, overwritten by the next load).
+    const host_targets = try arena.allocator().alloc(Target, targets.len);
+    for (host_targets, targets) |*owned, tg| {
+        owned.* = .{
+            .name = try arena.allocator().dupe(u8, tg.name),
+            .ncomp = tg.ncomp,
+            .registry = tg.registry,
+        };
+    }
+
     const user_plugins = v.result.schema.plugins;
     const eval_plugins = arena.allocator().alloc(sjon.Plugin.Plugin, user_plugins.len + 1) catch
         return error.OutOfMemory;
@@ -343,8 +358,8 @@ pub fn compile(gpa: Allocator, schema: *const Schema, source: [:0]const u8, targ
         .forest = v.result.data_forest,
         .schema = eval_schema,
         .view = .init(&v.result.tree, &v.result.materialized_defaults),
-        .targets = targets,
-        .merged_targets = targets,
+        .targets = host_targets,
+        .merged_targets = host_targets,
         .diags = .empty,
     };
 
@@ -1730,7 +1745,7 @@ test "bare number in a position slot is rejected (unit required)" {
     );
     defer v.deinit();
     try t.expect(v.hasErrors());
-    try t.expect(findCode(&v, .unit_required) != null);
+    try t.expect(v.findDiag(.unit_required) != null);
 }
 
 test "wrong unit on a position slot is rejected" {
@@ -1800,7 +1815,7 @@ test "diagnostic spans map back into user source" {
     ;
     var v = try validate(t.allocator, test_support.schema(), bad_source);
     defer v.deinit();
-    const d = findCode(&v, .unit_required).?;
+    const d = v.findDiag(.unit_required).?;
     const user_start = d.span.start;
     // The offending literal `4` sits inside the user text.
     try t.expectEqualStrings("4", bad_source[user_start .. user_start + 1]);
@@ -2094,7 +2109,7 @@ test "values that narrow to f32 must FIT — 1e39 is refused, not encoded as +in
         var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
-        const d = findCode(&r.validated, .repr_out_of_range) orelse {
+        const d = r.validated.findDiag(.repr_out_of_range) orelse {
             std.debug.print("expected repr_out_of_range; got:\n", .{});
             for (r.validated.result.diagnostics) |got| std.debug.print("  {s}: {s}\n", .{ @tagName(got.code), got.message });
             return error.TestUnexpectedResult;
@@ -2113,7 +2128,7 @@ test "values that narrow to f32 must FIT — 1e39 is refused, not encoded as +in
     , &test_targets);
     defer no_arm.deinit();
     try t.expect(!no_arm.ok());
-    try t.expect(findCode(&no_arm.validated, .union_no_branch_matched) != null);
+    try t.expect(no_arm.validated.findDiag(.union_no_branch_matched) != null);
 
     // The largest f32 still compiles — the bound is the type's, not a
     // hand-picked ceiling.
@@ -2179,7 +2194,7 @@ test "compile diagnostics: pattern XOR keys XOR expr — any pairing is a confli
     , &test_targets);
     defer with_expr.deinit();
     try t.expect(!with_expr.ok());
-    try t.expect(findCode(&with_expr.validated, .mutually_exclusive_keys_present) != null);
+    try t.expect(with_expr.validated.findDiag(.mutually_exclusive_keys_present) != null);
 }
 
 test "compile diagnostics: pattern dry-run — a malformed combinator fails at load with spans" {
@@ -2449,7 +2464,7 @@ test "control: :min/:max exist for slider and xy, not for color" {
     , &test_targets);
     defer color.deinit();
     try t.expect(!color.ok());
-    try t.expect(findCode(&color.validated, .unknown_key) != null);
+    try t.expect(color.validated.findDiag(.unknown_key) != null);
 
     // Both selected values keep their ranges…
     var ranged = try compile(t.allocator, test_support.schema(),
@@ -2487,7 +2502,7 @@ test "control: a variant key written BEFORE the discriminant is unknown" {
     , &test_targets);
     defer before.deinit();
     try t.expect(!before.ok());
-    try t.expect(findCode(&before.validated, .unknown_key) != null);
+    try t.expect(before.validated.findDiag(.unknown_key) != null);
 
     var after = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
@@ -2538,7 +2553,7 @@ test "compile leaves table null when SJON validation already failed" {
     defer r.deinit();
     try t.expect(!r.ok());
     try t.expectEqual(@as(usize, 0), r.diagnostics.len); // SJON's own diagnostic carries it
-    try t.expect(findCode(&r.validated, .unit_required) != null);
+    try t.expect(r.validated.findDiag(.unit_required) != null);
 }
 
 /// Compile `source` and assert exactly that `code` was raised (the score
@@ -2895,7 +2910,7 @@ test "compile diagnostics: trigger source COUNT is the schema's, its VALUES are 
     , &test_targets);
     defer none.deinit();
     try t.expect(!none.ok());
-    try t.expect(findCode(&none.validated, .required_one_of_missing) != null);
+    try t.expect(none.validated.findDiag(.required_one_of_missing) != null);
 
     var both = try compile(t.allocator, test_support.schema(),
         \\(transport :bpm 120)
@@ -2903,7 +2918,7 @@ test "compile diagnostics: trigger source COUNT is the schema's, its VALUES are 
     , &test_targets);
     defer both.deinit();
     try t.expect(!both.ok());
-    try t.expect(findCode(&both.validated, .mutually_exclusive_keys_present) != null);
+    try t.expect(both.validated.findDiag(.mutually_exclusive_keys_present) != null);
 
     // What a group cannot count — the interval's VALUE — stays pacer's.
     var zero = try compile(t.allocator, test_support.schema(),
@@ -2947,7 +2962,7 @@ test "trigger: :offset without :every is dependent_key_missing, not a silent no-
         var r = try compile(t.allocator, test_support.schema(), src, &test_targets);
         defer r.deinit();
         try t.expect(!r.ok());
-        try t.expect(findCode(&r.validated, .dependent_key_missing) != null);
+        try t.expect(r.validated.findDiag(.dependent_key_missing) != null);
     }
 
     // …and the pairing that means something still compiles.

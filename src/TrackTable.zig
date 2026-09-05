@@ -52,6 +52,12 @@ pub const MAX_TEMPO_SEGMENTS = 512;
 /// scene index is always < `MAX_SCENES`, so this can never collide.
 pub const NO_SCENE: u16 = std.math.maxInt(u16);
 
+/// `target_id` sentinel: a control that writes nothing (env-only). The
+/// one spelling of that absence — `Eval`'s runtime slot and `Abi`'s
+/// `'PACM'` control record both alias it. A real join index is always
+/// < `Compile.MAX_TARGETS` (asserted there), so this can never collide.
+pub const NO_TARGET: u16 = std.math.maxInt(u16);
+
 pub const EndBehavior = enum { loop, hold };
 
 /// A reserved time name a `(transport :emit …)` lane broadcasts. The set

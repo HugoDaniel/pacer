@@ -132,9 +132,9 @@ pub fn run(
 /// placement contract, so it is never moved after); `Schema` is built here,
 /// above it, and deinits last.
 ///
-/// `cmd.targets` alias ARGV, which outlives this call: `Compile.Target.name`
-/// is borrowed for the compile's lifetime and `CompileResult.targets` keeps
-/// aliasing it, so a rendered target name is read straight out of argv.
+/// `cmd.targets` alias ARGV, which is fine: `Compile.Target.name` is
+/// borrowed for the compile call only — `CompileResult.targets` copies
+/// every name it keeps into the result's arena.
 fn runCommand(gpa: Allocator, io: Io, cmd: Args.Command, out: *Writer, err: *Writer) Error!u8 {
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();

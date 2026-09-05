@@ -82,8 +82,13 @@ pub const Error = TimeMap.Error;
 /// in the text).
 pub const MAX_DYNAMIC_CONTROLS = 64;
 
-/// Sentinel target id of an env-only document control (writes nothing).
-pub const NO_TARGET: u16 = std.math.maxInt(u16);
+/// Sentinel target id of an env-only document control (writes nothing) —
+/// `TrackTable.NO_TARGET`, re-exported for the wasm entry's range guard.
+pub const NO_TARGET: u16 = TrackTable.NO_TARGET;
+
+/// `Evaluator.init`'s error set: all allocation happens there, so the
+/// build phase can only exhaust memory. `Error` is the frame path's.
+pub const InitError = error{OutOfMemory};
 
 /// The most entries one frame can produce: every emit lane, every track,
 /// every document control, and every dynamic slot writing at once. The
@@ -162,7 +167,7 @@ pub const Evaluator = struct {
     /// to call this; a raw call takes on the placement / no-reassign /
     /// teardown-order obligations itself (see the struct doc). All
     /// allocation happens here; the frame path never touches the gpa.
-    pub fn init(gpa: std.mem.Allocator, result: *const Compile.CompileResult) error{OutOfMemory}!Evaluator {
+    pub fn init(gpa: std.mem.Allocator, result: *const Compile.CompileResult) InitError!Evaluator {
         std.debug.assert(result.table != null); // compile succeeded
         const table = &result.table.?;
         std.debug.assert(table.tracks.len <= TrackTable.MAX_TRACKS);

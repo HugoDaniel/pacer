@@ -48,6 +48,7 @@ export function clockOnlyHost(player) {
  * Alias of {@link clockOnlyHost} — the adapter's original name, kept
  * because published names never break. The pattern was never
  * Sointu-specific; new code should import `clockOnlyHost`.
+ * @deprecated Import {@link clockOnlyHost} instead.
  */
 export const sointuHost = clockOnlyHost;
 

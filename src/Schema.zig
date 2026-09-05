@@ -78,9 +78,9 @@ pub fn loadChecked(gpa: Allocator, source: [:0]const u8) Error!Schema {
     return self;
 }
 
-/// `loadChecked` without the assert. Exists so the assert can be shown to
-/// bite; production code calls `load` / `loadChecked`.
-pub fn loadSource(gpa: Allocator, source: [:0]const u8) Error!Schema {
+/// `loadChecked` without the assert. Not API: it exists so the test below
+/// can show the assert biting. Production code calls `load` / `loadChecked`.
+fn loadSource(gpa: Allocator, source: [:0]const u8) Error!Schema {
     const sources = [_][:0]const u8{source};
     return .{ .preloaded = try sjon.Host.preloadSchema(gpa, &sources) };
 }

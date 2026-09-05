@@ -133,8 +133,9 @@ pub const META_TRACK_LEN: usize = 24;
 pub const META_KEY_LEN: usize = 32;
 /// Fixed bytes per control record, before its id.
 pub const META_CONTROL_LEN: usize = 64;
-/// `target_id` of an env-only control in a meta record.
-pub const META_NO_TARGET: u16 = 0xffff;
+/// `target_id` of an env-only control in a meta record — the shared
+/// `TrackTable.NO_TARGET` sentinel, spelled on the wire (0xffff).
+pub const META_NO_TARGET: u16 = TrackTable.NO_TARGET;
 /// Frame header of a post-controls TLV section: `section_id`+`payload_len`.
 pub const META_SECTION_HEADER_LEN: usize = 8;
 /// `"SCEN"` read LE — the scenes section id in the meta section stream.
@@ -172,9 +173,10 @@ pub fn metaWorstCase(comptime id_allowance: usize) usize {
         META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_TEMPO_SEGMENTS * TEMPO_REC_LEN; // 'TMPO'
 }
 
-/// Most registries any host may join at load. Generous: pngine uniform
-/// tables run tens of fields, not hundreds.
-pub const MAX_TARGETS = 1024;
+/// Most targets any host may join at load — `Compile.MAX_TARGETS`, the
+/// one definition. Generous: pngine uniform tables run tens of fields,
+/// not hundreds.
+pub const MAX_TARGETS = Compile.MAX_TARGETS;
 
 /// Explicit error set: the destination buffer was too small.
 pub const Error = error{BufferTooSmall};
