@@ -11,8 +11,9 @@
 //! place the Driver, init it in place, don't move it.
 //!
 //! `result` and `evaluator` are deliberately pub with no forwarding
-//! shims — the Driver owns lifetime, not API. Callers reach `setBpm`,
-//! `setControl`, diagnostics, and meta encoding through the fields.
+//! shims — the Driver owns lifetime, not API. Callers reach the live
+//! nudges (`evaluator.setBpm` / `setControl`), the diagnostics
+//! (`result`), and meta encoding through the fields.
 //!
 //! One ring further out sits the `Schema` (`Schema.zig`): the preloaded
 //! manifest the result validated against, whose arenas the result's

@@ -520,10 +520,9 @@ fn renderCase(
     if (!try renderDiags(a, out, name, w, result)) return false;
     if (!result.ok()) return true;
 
-    // The meta block reflects the DOCUMENT — render it before any
-    // set-bpm/set-control directive mutates evaluator/transport state
-    // (the armed evaluator holds no transport state until a directive
-    // touches it, so arming at load kept this ordering intact).
+    // The meta block reflects the DOCUMENT: it is encoded from the table,
+    // which no directive can touch — set-bpm and set-control are evaluator
+    // state. Rendered first so the golden reads top-down.
     try renderMeta(a, w, result, doc);
 
     const ev = &driver.evaluator.?;
@@ -572,7 +571,7 @@ fn renderCase(
             w.print("(clear-control :index {d} :ok {})\n", .{ index, okc }) catch return error.OutOfMemory;
         },
         .set_bpm => |bits| {
-            const okc = result.setBpm(@bitCast(bits));
+            const okc = ev.setBpm(@bitCast(bits));
             w.print("(set-bpm :bpm \"{X:0>16}\" :ok {})\n", .{ bits, okc }) catch return error.OutOfMemory;
         },
         .register_control => |rc| {

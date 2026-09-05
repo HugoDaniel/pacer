@@ -39,9 +39,14 @@
 //! write buffer a pure function of time: whether a write exists at time t
 //! never depends on what was evaluated before.
 //!
-//! Controls are the one deliberate piece of API state: the buffer is a
-//! pure function of (time, control state) — same table, same tick, same
-//! held values ⇒ same bytes. Control writes land AFTER track writes and
+//! Controls and the tempo nudge are the deliberate pieces of API state,
+//! and both live HERE — the compiled table is never written after
+//! compile. The buffer is a pure function of (time, control state, bpm
+//! nudge): same table, same tick, same held values, same bpm ⇒ same
+//! bytes. `setBpm` rebuilds this evaluator's own `transport` copy (the
+//! seconds projection only; ticks are musical positions and stand still),
+//! so the table — and the `'PACM'` blob encoded from it — stays the
+//! document's truth. Control writes land AFTER track writes and
 //! consumers apply entries in order, so a pin outranks a track on the
 //! same target. A document control always writes (its `:value` is the
 //! document's authority; `setControl` replaces it until `clearControl`);
@@ -119,6 +124,11 @@ const ControlSlot = struct {
 pub const Evaluator = struct {
     arena: std.heap.ArenaAllocator,
     table: *const TrackTable,
+    /// The transport every frame projects through: a value copy of
+    /// `table.transport` taken at init, so `setBpm` can rebuild its map
+    /// without writing to the borrowed table. Its slices (`emit`,
+    /// `segments`, `map.segments`) still alias the table's arena.
+    transport: TrackTable.Transport,
     tree: *const sjon.Ast.Tree,
     schema: sjon.Schema.Schema,
     /// Per-track resume cursor, indexed by track position: the last
@@ -215,6 +225,7 @@ pub const Evaluator = struct {
         return .{
             .arena = arena,
             .table = table,
+            .transport = table.transport,
             .tree = &result.validated.result.tree,
             .schema = result.eval_schema,
             .seg_cache = seg_cache,
@@ -264,6 +275,28 @@ pub const Evaluator = struct {
         return index;
     }
 
+    /// Live tempo nudge (`drv_setBpm`): rebuild THIS evaluator's
+    /// seconds↔ticks projection at the new tempo. Runtime state like a held
+    /// control — the compiled table keeps the document's tempo (so does the
+    /// `'PACM'` blob), a fresh evaluator starts from it, and a reload resets
+    /// it. Musical positions are ticks and stay put — including positions
+    /// authored in `s`, which were converted at load with the load-time
+    /// tempo (the standard tempo-nudge semantic). False (no change) when
+    /// bpm is outside the manifest's 1..1000 bounds or the score carries a
+    /// tempo map — a mapped score's tempo truth is score text (segment bpms
+    /// are not one nudgeable scalar); edit the `(tempo …)` forms and reload
+    /// instead. Host input, so a result, never an assert.
+    pub fn setBpm(self: *Evaluator, bpm: f64) bool {
+        if (!std.math.isFinite(bpm) or bpm < 1 or bpm > 1000) return false;
+        const transport = &self.transport;
+        if (transport.map.segments.len > 1) return false;
+        transport.map = TimeMap.init(bpm, transport.map.beats_per_bar);
+        // Keep loop_secs coherent (the constant-score path never reads it,
+        // but a stale value is a trap for the next reader).
+        if (transport.dur) |d| transport.loop_secs = transport.map.secondsFromTick(d);
+        return true;
+    }
+
     /// Tear down BEFORE the borrowed `CompileResult` (borrow-whole rule).
     pub fn deinit(self: *Evaluator) void {
         self.arena.deinit();
@@ -282,7 +315,7 @@ pub const Evaluator = struct {
     /// Constant scores keep the historical convert-then-tick-wrap path
     /// bit-for-bit (the degenerate pin).
     pub fn evalSeconds(self: *Evaluator, seconds: f64) Error![]const Writes.Entry {
-        const transport = &self.table.transport;
+        const transport = &self.transport;
         const map = &transport.map;
         if (map.segments.len > 1 and transport.dur != null) {
             const loop_secs = transport.loop_secs.?; // compile computed it with dur
@@ -306,10 +339,11 @@ pub const Evaluator = struct {
         std.debug.assert(t_raw <= sjon.Pattern.MAX_TICK);
         std.debug.assert(t_raw >= -sjon.Pattern.MAX_TICK);
         const table = self.table;
+        const transport = &self.transport;
         var t = t_raw;
-        if (table.transport.dur) |dur| {
+        if (transport.dur) |dur| {
             std.debug.assert(dur > 0);
-            switch (table.transport.end) {
+            switch (transport.end) {
                 .loop => t = @mod(t, dur),
                 .hold => t = @min(t, dur),
             }
@@ -328,8 +362,8 @@ pub const Evaluator = struct {
         // in-order consumers. Each lane is its reserved name's env value at
         // the wrapped tick, truncated to f32 exactly as a scalar `:expr`
         // track (`ExprTrack.coerce`), so the two are bit-identical.
-        for (table.transport.emit) |lane| {
-            const v: f32 = @floatCast(ExprTrack.emitValue(&table.transport, t, lane.name));
+        for (transport.emit) |lane| {
+            const v: f32 = @floatCast(ExprTrack.emitValue(transport, t, lane.name));
             self.push(&n, .{
                 .target_id = lane.target_id,
                 .flags = lane.registry,
@@ -364,7 +398,7 @@ pub const Evaluator = struct {
                     // first event the write is OMITTED (like an expr-NaN /
                     // an out-of-window scene), keeping the buffer a pure
                     // function of time.
-                    if (evalTrigger(&table.transport.map, track, sched, t, &self.seg_cache[i])) |entry|
+                    if (evalTrigger(&transport.map, track, sched, t, &self.seg_cache[i])) |entry|
                         self.push(&n, entry);
                 },
                 .pattern => |node| {
@@ -426,7 +460,7 @@ pub const Evaluator = struct {
             fba.allocator(),
             self.tree,
             self.schema,
-            &self.table.transport,
+            &self.transport,
             self.ctl_bindings,
             node,
             t,
@@ -477,7 +511,7 @@ pub const Evaluator = struct {
         std.debug.assert(track.ncomp <= 4);
         var fba = std.heap.FixedBufferAllocator.init(self.scratch);
         var env_storage: ExprTrack.EnvStorage = undefined;
-        const env = ExprTrack.buildEnv(&env_storage, &self.table.transport, self.ctl_bindings, t, scene);
+        const env = ExprTrack.buildEnv(&env_storage, &self.transport, self.ctl_bindings, t, scene);
         var result = PatternTrack.queryCycle(fba.allocator(), self.tree, self.schema, node, t, env) catch {
             self.expr_failures += 1;
             return null;
@@ -1209,16 +1243,51 @@ test "setBpm rescales the seconds projection; the tick grid stands still" {
 
     // 1 s at 120 bpm = 2 beats → 0.5.
     try t_.expectEqual(@as(f32, 0.5), (try ev.evalSeconds(1.0))[0].value[0]);
-    try t_.expect(r.setBpm(60));
-    // 1 s at 60 bpm = 1 beat → 0.25; the borrowed evaluator sees it.
+    try t_.expect(ev.setBpm(60));
+    // 1 s at 60 bpm = 1 beat → 0.25.
     try t_.expectEqual(@as(f32, 0.25), (try ev.evalSeconds(1.0))[0].value[0]);
     // Tick-domain results are tempo-independent.
     const map = &r.table.?.transport.map;
     try t_.expectEqual(@as(f32, 0.5), ev.evalTicks(try map.tickFromBeats(2))[0].value[0]);
 
-    try t_.expect(!r.setBpm(0));
-    try t_.expect(!r.setBpm(std.math.nan(f64)));
-    try t_.expectEqual(@as(f64, 60), r.table.?.transport.map.bpm);
+    try t_.expect(!ev.setBpm(0));
+    try t_.expect(!ev.setBpm(std.math.nan(f64)));
+    try t_.expectEqual(@as(f64, 60), ev.transport.map.bpm);
+
+    // The nudge is evaluator state: the compiled table keeps the document's
+    // tempo, and a fresh evaluator over the same result starts from it.
+    try t_.expectEqual(@as(f64, 120), r.table.?.transport.map.bpm);
+    var fresh = try Evaluator.init(t_.allocator, &r);
+    defer fresh.deinit();
+    try t_.expectEqual(@as(f32, 0.5), (try fresh.evalSeconds(1.0))[0].value[0]);
+}
+
+test "setBpm refuses a mapped score (tempo truth is score text); a constant one keeps loop_secs coherent" {
+    var mapped = try compileScore(
+        \\(transport :bpm 120 :meter [4 4])
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target radius (key :at 0b :value 0))
+    );
+    defer mapped.deinit();
+    var mev = try Evaluator.init(t_.allocator, &mapped);
+    defer mev.deinit();
+    try t_.expect(!mev.setBpm(90));
+    try t_.expectEqual(@as(f64, 120), mev.transport.map.bpm);
+
+    var flat = try compileScore(
+        \\(transport :bpm 120 :dur 2bar :end loop)
+        \\(track :target radius (key :at 0b :value 0))
+    );
+    defer flat.deinit();
+    var fev = try Evaluator.init(t_.allocator, &flat);
+    defer fev.deinit();
+    try t_.expect(fev.setBpm(240));
+    try t_.expectEqual(@as(f64, 240), fev.transport.map.bpm);
+    // 2 bars = 1441440 ticks at 720720 tps = 2 s.
+    try t_.expectEqual(@as(?f64, 2.0), fev.transport.loop_secs);
+    // The table is untouched — 2 bars at the document's 120 bpm is 4 s.
+    try t_.expectEqual(@as(f64, 120), flat.table.?.transport.map.bpm);
+    try t_.expectEqual(@as(?f64, 4.0), flat.table.?.transport.loop_secs);
 }
 
 test "determinism holds under identical control state" {

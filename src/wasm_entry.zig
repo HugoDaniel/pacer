@@ -32,9 +32,9 @@
 //!       previously loaded table, evaluator, meta, and diags stay live;
 //!   3 out of memory.
 //! Reloading is safe at any time: once the arguments validate, the
-//! previous table and evaluator are torn down — including ALL control
-//! state (held values, dynamic slots); hosts re-apply held widgets after
-//! a reload. `drv_eval`/
+//! previous table and evaluator are torn down — including ALL runtime
+//! state (held control values, dynamic slots, a bpm nudge); hosts re-apply
+//! held widgets after a reload. `drv_eval`/
 //! `drv_evalTicks` return the encoded `'PACW'` length, or 0 when
 //! nothing is loaded / the host clock is out of range (non-finite or
 //! beyond the 2^53 tick ceiling).
@@ -235,8 +235,8 @@ fn liveEvaluator() ?*Eval.Evaluator {
 }
 
 export fn drv_setBpm(bpm: f64) u32 {
-    if (!loaded) return 1;
-    return if (driver.result.setBpm(bpm)) 0 else 1;
+    const ev = liveEvaluator() orelse return 1;
+    return if (ev.setBpm(bpm)) 0 else 1;
 }
 
 export fn drv_setControl(index: u32, x: f32, y: f32, z: f32, w: f32) u32 {

@@ -454,7 +454,9 @@ export class Pacer {
 
   /**
    * Live tempo nudge: rescales the seconds↔ticks projection; musical
-   * (tick) positions stand still. False outside 1..1000 bpm.
+   * (tick) positions stand still. False outside 1..1000 bpm, or on a
+   * score with a `(tempo …)` map (its tempo truth is the score text).
+   * Evaluator state like a held control: `reload` resets it.
    *
    * A nudge does NOT re-encode {@link Pacer#meta}: `meta.transport.bpm`
    * keeps reporting the *document* tempo (the score text is the

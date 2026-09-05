@@ -239,6 +239,10 @@ pub const Diagnostic = struct {
 /// (the struct is moved by value; interior pointers taken before the
 /// move would dangle), never be reassigned while borrowed, and outlive
 /// the evaluator.
+///
+/// Immutable once returned: every live nudge (`setBpm`, held controls) is
+/// `Eval.Evaluator` state, so the table — and the `'PACM'` blob encoded
+/// from it — is the document's truth for the result's whole life.
 pub const CompileResult = struct {
     validated: Validated,
     arena: std.heap.ArenaAllocator,
@@ -290,28 +294,6 @@ pub const CompileResult = struct {
             if (d.code == code) return d;
         }
         return null;
-    }
-
-    /// Live tempo nudge (`drv_setBpm`): rebuild the seconds↔ticks
-    /// projection at the new tempo. A live `Eval.Evaluator` borrowing
-    /// this result picks the change up on its next eval. Musical
-    /// positions are ticks and stay put — including positions authored
-    /// in `s`, which were converted at load with the load-time tempo
-    /// (the standard tempo-nudge semantic). False (no change) when no
-    /// table is loaded, bpm is outside the manifest's 1..1000 bounds, or
-    /// the score carries a tempo map — a mapped score's tempo truth is
-    /// score text (segment bpms are not one nudgeable scalar); edit the
-    /// `(tempo …)` forms and reload instead.
-    pub fn setBpm(self: *CompileResult, bpm: f64) bool {
-        if (!std.math.isFinite(bpm) or bpm < 1 or bpm > 1000) return false;
-        const tb = if (self.table) |*tb| tb else return false;
-        if (tb.transport.map.segments.len > 1) return false;
-        tb.transport.map = TimeMap.init(bpm, tb.transport.map.beats_per_bar);
-        // Keep the compile-time loop_secs constant coherent (the
-        // constant-score eval path never reads it, but a stale value is
-        // a trap for meta consumers).
-        if (tb.transport.dur) |d| tb.transport.loop_secs = tb.transport.map.secondsFromTick(d);
-        return true;
     }
 };
 
@@ -3341,30 +3323,6 @@ test "tempo-map: transport :dur in s converts from the origin; loop_secs is exac
     // 3 s = 2 s of 120 bpm (720720) + 1 s of 240 (720720) = 1441440.
     try t.expectEqual(@as(?i64, 1441440), r.table.?.transport.dur);
     try t.expectEqual(@as(?f64, 3.0), r.table.?.transport.loop_secs);
-}
-
-test "tempo-map: setBpm refuses a mapped score (tempo truth is score text)" {
-    var mapped = try compile(t.allocator, test_support.schema(),
-        \\(transport :bpm 120 :meter [4 4])
-        \\(tempo :at 4b :bpm 240)
-        \\(track :target circle-radius (key :at 0b :value 0))
-    , &test_targets);
-    defer mapped.deinit();
-    try t.expect(mapped.ok());
-    try t.expect(!mapped.setBpm(90));
-    try t.expectEqual(@as(f64, 120), mapped.table.?.transport.map.bpm);
-
-    // A constant score still nudges — and keeps loop_secs coherent.
-    var flat = try compile(t.allocator, test_support.schema(),
-        \\(transport :bpm 120 :dur 2bar :end loop)
-        \\(track :target circle-radius (key :at 0b :value 0))
-    , &test_targets);
-    defer flat.deinit();
-    try t.expect(flat.ok());
-    try t.expect(flat.setBpm(240));
-    try t.expectEqual(@as(f64, 240), flat.table.?.transport.map.bpm);
-    // 2 bars = 1441440 ticks at 720720 tps = 2 s.
-    try t.expectEqual(@as(?f64, 2.0), flat.table.?.transport.loop_secs);
 }
 
 test "tempo-map: a (tempo …) with no (transport …) is still transport_missing, never a crash" {
