@@ -1451,20 +1451,20 @@ fn finTunTap(fp: vec2f, dims: vec2f, aspect: f32, cenP: vec2f, halfP: f32, sBeat
   (layout auto)
   (vertex (module fs3) (entry vs))
   (fragment (module fs3) (entry fs)
-    (targets (target :format rgba16float))))
+    (targets (color-target :format rgba16float))))
 
 (render-pipeline :name rp4
   (layout auto)
   (vertex (module fs4) (entry vs))
   (fragment (module fs4) (entry fs)
-    (targets (target :format preferred-canvas-format))))
+    (targets (color-target :format preferred-canvas-format))))
 
 ; Dot layer: instanced billboards, black premultiplied-alpha over sceneTex. No depth.
 (render-pipeline :name rpDots
   (layout auto)
   (vertex (module dots) (entry vs))
   (fragment (module dots) (entry fs)
-    (targets (target :format rgba16float
+    (targets (color-target :format rgba16float
       (blend
         (color :src-factor one :dst-factor one-minus-src-alpha)
         (alpha :src-factor one :dst-factor one-minus-src-alpha))))))
@@ -1475,7 +1475,7 @@ fn finTunTap(fp: vec2f, dims: vec2f, aspect: f32, cenP: vec2f, halfP: f32, sBeat
   (layout auto)
   (vertex (module grid) (entry vs))
   (fragment (module grid) (entry fs)
-    (targets (target :format rgba16float
+    (targets (color-target :format rgba16float
       (blend
         (color :src-factor one :dst-factor one-minus-src-alpha)
         (alpha :src-factor one :dst-factor one-minus-src-alpha))))))
