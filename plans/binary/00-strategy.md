@@ -157,8 +157,9 @@ with this wave — nothing to wait on.
      (`src/RtSjon.zig`, the runtime's only `@import("sjon")`) and is
      gated in two layers — a syntactic allowlist auditor with
      mutation-proof fixtures, and a physical post-build artifact check
-     (empty import section, exact `prt_*` export set, no compiler
-     markers) — frozen in 02.
+     (import section empty or exactly the one statically unavoidable
+     `env.sjon_host_invoke_plugin` function import, exact `prt_*`
+     export set, no compiler markers) — frozen in 02.
   8. **Core-only expr capability, refused loudly, never silently.**
      `CompileResult.eval_schema` is core ⊕ the document's user plugins
      (`src/Compile.zig:263-272, 329-334`), so user-plugin expr heads are a
@@ -185,6 +186,23 @@ with this wave — nothing to wait on.
   `EvalCore.Context.schema` contract. Decisions 6–8 re-frozen above; the
   detailed mechanisms live in 01/02. No plan outside this wave touched;
   no SJON-owner work was added by any of it.
+
+- 2026-10-18 — The confirming review verified HIGH-1's traversal
+  design, MEDIUM-2, LOW-3, and both parent fixups as fixed, and raised
+  one residual finding, now applied as a docs-only amendment: layer
+  2(a)'s empty-import-section rule was unsatisfiable under the plan's
+  own build recipe, because `wasm_plugin_host` is hardcoded `true` for
+  the `sjon` module (`SJON/build.zig:64`) and the extern is statically
+  retained (`SJON/src/Expr.zig:2847-2852` into `invokeViaHostImport`).
+  The allowance is now the frozen exact set (empty or exactly
+  `env.sjon_host_invoke_plugin` at its source signature), stated in
+  02's build paragraph, layer 2(a) and its synthetic-module tests, the
+  P3 instantiate note, and the decision-7 mirror above.
+  `plugin-exec` (the native plugin runtime, off) and `wasm_plugin_host`
+  (the wasm host stub, on) are recorded as the two separate flags they
+  are. No build recipe change, no SJON-owner work; every gate remains a
+  plan gate — implementation is NOT STARTED and no WASM artifact has
+  been built or tested by this wave.
 
 ## Open issues
 

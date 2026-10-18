@@ -151,10 +151,24 @@ glue's discipline (`npm/pacer/src/index.js:16`).
 Build: `zig build wasm-rt` — the `wasm` recipe verbatim
 (`build.zig:69-98`): wasm32-freestanding, ReleaseSmall, rdynamic, entry
 disabled, the SJON dep resolved with `.@"plugin-exec" = false`
-(`build.zig:73-77`) so `wasm_plugin_invoker.zig`'s
-`if (native_plugin_exec) @import("PluginRuntime.zig")` branch
+(`build.zig:73-77`) — which gates the NATIVE plugin runtime only: on
+wasm32 it is forced false anyway (`SJON/build.zig:52-58`), so
+`wasm_plugin_invoker.zig`'s `if (native_plugin_exec)
+@import("PluginRuntime.zig")` branch
 (`SJON/src/wasm_plugin_invoker.zig:72`) is false and the plugin-runtime
-chain never links.
+chain never links. The wasm plugin host stub is a SEPARATE option and is
+not ours to unset: `wasm_plugin_host` — whether the artifact declares
+the host-invoker import — is hardcoded `true` for the `sjon` module via
+an `addOption` literal, not a `b.option` (`SJON/build.zig:64`), so
+pacer's dependency args cannot override it — two separate flags, never
+one. The extern is statically retained regardless:
+`Expr.applyFunction` dispatches `wasm_export_name` funcs on a runtime
+branch with no comptime gate (`SJON/src/Expr.zig:2847-2852`), and on
+wasm32 `invoke` compiles to `invokeViaHostImport`
+(`SJON/src/wasm_plugin_invoker.zig:159-172`), which references
+`extern "env" fn sjon_host_invoke_plugin` (`:78-80`). The artifact
+therefore declares exactly one import; layer 2(a) freezes that
+allowance instead of pretending the section can be empty.
 
 **Closure gate — one crossing, two layers (final-review HIGH-1).**
 SJON's auditor cannot be ported as-is: pacer reaches SJON through a
@@ -225,16 +239,37 @@ and proves the shipped artifact physically:
 - **Layer 2 — `tools/check_rt_artifact.zig`, the physical gate.** The
   text scan has stated blind spots (indented imports, dynamically built
   names); the shipped bytes do not. The tool reads the BUILT
-  `pacer-rt.wasm` and fails unless: (a) its **import section is empty**
-  — a freestanding artifact with no host bridge declares nothing, and a
-  linked plugin-invoker extern or any lazily-referenced forbidden chain
-  surfaces right here; (b) its **export set equals the frozen `prt_*`
+  `pacer-rt.wasm` and fails unless: (a) its **import section is EMPTY
+  or holds exactly one function import** — module `env`, name
+  `sjon_host_invoke_plugin`, signature `(req_ptr: u32, req_len: u32)
+  callconv(.c) ?[*]u8` as declared at
+  `SJON/src/wasm_plugin_invoker.zig:78-80`. That single import is
+  statically unavoidable (the build paragraph above) and dynamically
+  inert: the frozen core(+pattern) binary schema provides no plugin
+  implementations — neither `plugins/core.zig` nor `plugins/pattern.zig`
+  declares a `wasm_export_name` func — and `pacer pack` refuses
+  unsupported plugin heads (decision 8), so the import has no legal
+  execution route in a normal valid score; even a corrupt state that
+  reached it lands in the clean `PluginFuncAllocFailed` failure path
+  (`SJON/src/wasm_plugin_invoker.zig:214-220`) — a diagnostic, never
+  plugin execution. The allowance is a frozen exact set: a second
+  import, the right name with a wrong kind, module, or signature, or
+  any lazily-referenced forbidden chain surfacing as an extra import —
+  fails loudly right here; (b) its **export set equals the frozen `prt_*`
   list** — rdynamic would leak a stray `pub`; (c) a frozen MARKER list
   — distinctive compiler-only string constants (diagnostic texts,
   schema JSON keys) — appears NOWHERE in the artifact, with the control
   direction asserted the same run: every marker must be present in the
   full `pacer.wasm`, so a stale marker fails too. Section parsing and
-  the marker scan are unit-tested against synthetic module bytes. Layer
+  the marker scan are unit-tested against synthetic module bytes — the
+  import rule's edges included: a synthetic module with an empty import
+  section passes, one holding exactly the single inert
+  `env.sjon_host_invoke_plugin` function import at the frozen signature
+  passes, and a wrong kind, module, name, or signature — or any import
+  beyond the one — is rejected. The signature is asserted, not just the
+  name: the glue's instantiation must bind a stub matching what the
+  artifact declares, so the runtime knows the signature instantiation
+  will expect. Layer
   2 is what makes layer 1's blind spots acceptable instead of hidden:
   anything the scanner misses that is actually referenced gets linked —
   Zig's lazy analysis and DCE see to that — and its imports, exports,
@@ -275,8 +310,17 @@ canonical `'PACT'` via the shared encoder), `load(pacbBytes)` in place of
 decoder is shared with index.js (extract the decode half into a leaf both
 import — no format change; the runtime already validated the section via
 01's reader before serving it, so the shared decode is not the trust
-boundary); `route.js`/`lane.js` reused untouched; no
-`reload(text)` exists on the class (asserted by test). Views are re-taken
+boundary); `route.js`/`lane.js` reused untouched. Instantiation binds
+the one allowed import (layer 2(a)) as the same inert stub the full
+driver already ships — `env.sjon_host_invoke_plugin: () => 0`
+(`npm/pacer/src/index.js:84`; the `WebAssembly.instantiate` call at
+`:144-148` passes it) — matching the frozen signature. A valid packed
+score never reaches it (no plugin implementations in the schema,
+unsupported heads refused at pack); if it is invoked anyway, the
+stub's null return maps to the clean `PluginFuncAllocFailed` failure
+(`SJON/src/wasm_plugin_invoker.zig:214-220`) — a diagnostic/drop,
+never plugin execution. No `reload(text)` exists on the class
+(asserted by test). Views are re-taken
 from `exports.memory.buffer` on every call — never cached across loads
 (memory growth invalidates them; `index.js:16` states the discipline).
 Exports map gains `"./rt"`; `types.js` gains `PacerRtExports` (the
