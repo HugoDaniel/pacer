@@ -71,3 +71,11 @@ Quality follow-on: the **elegance wave** lives in [`elegance/`](elegance/README.
 review's findings, two of them (writes-cap, meta-cap-pin) release-relevant before
 the 0.2.0 tag. It inherits this file's execution discipline; its own ordering and
 status board are in `elegance/README.md`.
+
+Playback follow-on: the **binary wave** lives in [`binary/`](binary/README.md)
+(created 2026-10-18, planning only — execution not started) — the `'PACB'`
+compiled-score format, a playback-only `pacer-rt.wasm` with no compiler in its
+import closure, byte-level text-vs-binary parity, and a measured (not promised)
+size/perf story with the decision left to the user. Its SJON prerequisite is a
+pacer-local handoff, unfiled. It inherits this file's execution discipline; its
+strategy board is `binary/00-strategy.md`.
