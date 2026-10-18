@@ -28,6 +28,11 @@ pub const Schema = @import("Schema.zig");
 /// `'PACT'` target-registry codec leaf: std-only encode/decode of the
 /// host→driver target join, shared by `Abi` and (later) the binary runtime.
 pub const PactCodec = @import("PactCodec.zig");
+/// `'PACB'` compiled-score container: data-at-rest format constants,
+/// header/directory validation, caps and the worst-case sizer (Phase 2
+/// subgroup T2.1). Section payload decoding is not exposed yet — see the
+/// module header for the interim boundary.
+pub const Pacb = @import("Pacb.zig");
 /// Score compiler: preloaded schema → `sjon.validateDocument` → the
 /// compiled `TrackTable` (targets joined, ticks converted, programs
 /// deduped), with pacer's own wire-stable diagnostic codes.
@@ -62,6 +67,7 @@ pub const Abi = @import("Abi.zig");
 test {
     _ = Schema;
     _ = PactCodec;
+    _ = Pacb;
     _ = Compile;
     _ = TimeMap;
     _ = Easing;
@@ -127,4 +133,55 @@ test "sjon PatternQuery reachable: a fastcat literal subdivides one cycle" {
         try std.testing.expectEqual(@as(i64, @intCast(i)) * step, h.timing.part.begin);
         try std.testing.expectEqual(@as(i64, @intCast(i + 1)) * step, h.timing.part.end);
     }
+}
+
+test "Pacb: the frozen PACM worst-case term restates Abi.metaWorstCase" {
+    // `Pacb` must never import `Abi` (the decoder side cannot drag the
+    // compiler in), so its PACM term is a frozen copy. Root can import both
+    // without a cycle: this is the equality gate the copy depends on.
+    inline for ([_]usize{ 0, 1, 16, 64, 256 }) |str_allowance| {
+        try std.testing.expectEqual(
+            Abi.metaWorstCase(str_allowance),
+            Pacb.pacmWorstCase(str_allowance),
+        );
+    }
+}
+
+test "Pacb: frozen cap and header copies match their source definitions" {
+    try std.testing.expectEqual(
+        @as(usize, PactCodec.MAX_TARGETS),
+        Pacb.MAX_TARGETS,
+    );
+    try std.testing.expectEqual(
+        PactCodec.TARGETS_HEADER_LEN,
+        Pacb.PACT_HEADER_LEN,
+    );
+    try std.testing.expectEqual(
+        @as(usize, TrackTable.MAX_TRACKS),
+        Pacb.MAX_TRACKS,
+    );
+    try std.testing.expectEqual(
+        @as(usize, TrackTable.MAX_KEYS),
+        Pacb.MAX_KEYS,
+    );
+    try std.testing.expectEqual(
+        @as(usize, TrackTable.MAX_EASE_PROGRAMS),
+        Pacb.MAX_EASE_PROGRAMS,
+    );
+    try std.testing.expectEqual(
+        @as(usize, TrackTable.MAX_CONTROLS),
+        Pacb.MAX_CONTROLS,
+    );
+    try std.testing.expectEqual(
+        @as(usize, TrackTable.MAX_SCENES),
+        Pacb.MAX_SCENES,
+    );
+    try std.testing.expectEqual(
+        @as(usize, TrackTable.MAX_TEMPO_SEGMENTS),
+        Pacb.MAX_TEMPO_SEGMENTS,
+    );
+    try std.testing.expectEqual(
+        @as(usize, @typeInfo(TrackTable.EmitName).@"enum".fields.len),
+        Pacb.EMIT_LANE_CAP,
+    );
 }

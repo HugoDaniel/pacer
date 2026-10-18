@@ -9,7 +9,8 @@ byte-identical through the codec extraction. `Compile.Code` gains variants
 (append-only) for pack refusals — audited via `zig build audit-diagnostics`.
 **Gates:** `zig build verify` every phase; `zig build fuzz` from Phase 4;
 determinism gate — pack the same score twice ⇒ byte-identical output.
-**Created 2026-10-18; Phase 1 complete 2026-10-18; phases 2–4 not started.**
+**Created 2026-10-18; Phase 1 complete 2026-10-18; Phase 2 in progress
+(T2.1 landed 2026-10-18, T2.2–T2.8 open); phases 3–4 not started.**
 
 ## Why
 
@@ -477,3 +478,23 @@ _(created 2026-10-18; entries appended per phase)_
   empty. Frozen-bytes, duplicate-name and
   empty/overlong-name characterization tests added; no wire byte changed and
   no corpus goldens were regenerated.
+
+- **2026-10-18 — Phase 2 started (T2.1 only; phase NOT complete).**
+  `src/Pacb.zig` now owns the `'PACB'` container header, the exact
+  directory validator, the frozen 14-kind id/width/order table, the
+  append-only `RefusalCode` set (`u16` from birth), the v1 caps
+  (`MAX_PAYLOAD_BYTES` 256 KiB, `MAX_PAYL_BYTES` 4 MiB,
+  `MAX_TICK_ENTRIES` 131072 with its producer derivation), `parseDirectory`,
+  and `pacbWorstCase`/`pacmWorstCase` (comptime arithmetic; the PACM term
+  equality-asserted against `Abi.metaWorstCase` in `src/root.zig`). RED:
+  the root export consumer failed on missing `src/Pacb.zig`, then 10 named
+  semantic directory-mutation tests failed against the header-only skeleton.
+  GREEN: `zig build test` 7/7 steps, **306/306 tests (245 root + 61 CLI)**;
+  `zig build verify` 15/15 (**245 native, 37 corpus/0 failed, 93 node/0
+  skipped**, score-docs and cli-golden current); `zig build cli-golden` 4/4
+  with an empty `git diff --exit-code src/cli/testdata corpus
+  docs/score-language.md`. `parseDirectory` is an INTERIM directory-only
+  view: the whole-blob `decode`/`DecodedScore` API is deliberately not
+  exposed until every section stage validates, and transport, registry,
+  records, ease/control, payload, PACM, and coherence remain T2.2–T2.8.
+  No corpus/CLI golden byte changed; no encoder/CLI/runtime/npm work.

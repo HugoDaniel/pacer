@@ -97,7 +97,7 @@ decided by gates, not by size.
 | Wave | Item | Status |
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
-| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) landed; phases 2–4 open |
+| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) landed; Phase 2 in progress (T2.1 header/directory/caps landed, T2.2–T2.8 open); phases 3–4 open |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |
@@ -109,9 +109,11 @@ decided by gates, not by size.
 
 ## What's next
 
-→ Plan 01 Phase 2 (decoder + validator). Phase 1 (the `'PACT'` codec
-extraction, T1.1) landed 2026-10-18 with its zero-diff gate; phases 2–4
-await their separate plan correction before execution.
+→ Plan 01 T2.2 (`'TRAN'` + `'TMPO'` transport decode). Phase 2 is IN
+PROGRESS, not complete: T2.1 landed the `'PACB'` header/directory/caps
+skeleton only; `decode`/`DecodedScore` and every section semantic remain
+open (T2.2–T2.8). Phase 1 (the `'PACT'` codec extraction, T1.1) landed
+2026-10-18 with its zero-diff gate.
 
 ## Decision log
 
