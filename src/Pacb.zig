@@ -70,20 +70,24 @@
 //! the container header, the directory validator, the frozen caps,
 //! `pacbWorstCase`, the T2.2 transport stage (`decodeTransport`:
 //! `'TRAN'`/`'TMPO'` domains, then the `TimeMap` rebuild in compile's own
-//! op order), and the T2.3 registry-identity stage (`decodeRegistry`:
+//! op order), the T2.3 registry-identity stage (`decodeRegistry`:
 //! `'REGS'`/`'DECL'` + the `pact_fnv` fast-reject, with
 //! `canonicalPactEquals` as the load-time identity check 02's `prt_load`
-//! calls). Stages expose owned, validated, typed results —
-//! `parseDirectory` is still a structure-only view, `decodeTransport`
-//! still leaves `emit` empty (`'EMIT'` lands in T2.4), and the id-bound
-//! consumers of the registry join land with `'TRAK'`/`'CTRL'`/`'EMIT'`
-//! (T2.4/T2.5). The whole-blob `decode(...) DecodedScore` entry point is
-//! deliberately absent until every section stage validates (T2.8):
-//! returning a successful score before records/payloads/PACM are
-//! validated would be a lying API.
+//! calls), and the T2.4 record-sections stage (`decodeRecords`:
+//! `'TRAK'`/`'KEYS'`/`'TICK'`/`'EMIT'`/`'SCEN'` — tracks, keys, scenes,
+//! emit lanes; the id-bound consumers of the registry join for
+//! `'TRAK'`/`'EMIT'` land here, `'CTRL'`'s with T2.5). Stages expose
+//! owned, validated, typed results — `parseDirectory` is still a
+//! structure-only view, `TransportStage.transport.emit` stays empty
+//! (`RecordsStage.emit` holds the lanes until T2.8's assembly), and
+//! `DecodedSource.expr`/`pattern` stay empty (payloads are T2.6's; the
+//! wire spans ride `RecordsStage.payload_spans`). The whole-blob
+//! `decode(...) DecodedScore` entry point is deliberately absent until
+//! every section stage validates (T2.8): returning a successful score
+//! before ease/controls/payloads/PACM are validated would be a lying API.
 //!
 //! Imports: std, sjon (`Pattern.MAX_TICK`), `PactCodec`, `TimeMap`,
-//! `TrackTable` (the T2.2+T2.3 subset of the frozen end-state list).
+//! `TrackTable` (the T2.2+T2.3+T2.4 subset of the frozen end-state list).
 //! Later stages add `Easing` and `Pacm` as their GREEN needs them; this
 //! file must NEVER import `Compile`, `Abi`, `Schema`, or `Driver` — the
 //! one test that compares decoded transport against the compiler
@@ -843,6 +847,471 @@ pub fn decodeRegistry(
         .host_targets = host_targets,
         .declared_targets = declared_targets,
         .pact_fnv = pact_fnv,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// T2.4 — record sections stage ('TRAK' + 'KEYS' + 'TICK' + 'EMIT' + 'SCEN')
+// ---------------------------------------------------------------------------
+
+/// Frozen `source` ordinals — copied constants, not a live reference to
+/// `'PACM'`'s `MetaTrackRec` values (`src/Abi.zig:36-39`);
+/// `src/root.zig` equality-asserts the copy against `Abi.TrackSourceKind`.
+pub const SOURCE_KEYS: u8 = 0;
+pub const SOURCE_EXPR: u8 = 1;
+pub const SOURCE_TRIGGER: u8 = 2;
+pub const SOURCE_PATTERN: u8 = 3;
+
+/// Frozen `trig_kind` ordinals (0 periodic, 1 explicit), wire-stable with
+/// `TrackTable.Trigger`'s tag order; also asserted in `src/root.zig`.
+pub const TRIG_PERIODIC: u8 = 0;
+pub const TRIG_EXPLICIT: u8 = 1;
+
+/// One `(scene …)` window, decoder-side: the span-carrying field of
+/// `TrackTable.Scene` never crosses the wire (§A O-a), so this is the
+/// whole 16-byte `'SCEN'` record.
+pub const DecodedScene = struct { start_tick: i64, dur_ticks: i64 };
+
+/// A track's value source, decoder-side (frozen for the wave, §A O-a —
+/// do NOT "upgrade" to `TrackTable.Source`, whose expr/pattern arms hold
+/// AST indexes into a tree this side never has). The `keys` arm's run
+/// indexes `RecordsStage.keys`; the `trigger` arm mirrors
+/// `TrackTable.Trigger` verbatim, its `.at` schedule an arena copy of
+/// the track's `'TICK'` slice. The `expr`/`pattern` arms carry the
+/// track's `'PAYL'` bytes — EMPTY at this stage: payload validation and
+/// copies are T2.6's; until then `RecordsStage.payload_spans` carries
+/// the wire slice for that consumer.
+pub const DecodedSource = union(enum) {
+    keys: struct { start: u32, len: u32 },
+    expr: []const u8,
+    trigger: TrackTable.Trigger,
+    pattern: []const u8,
+};
+
+/// One `'TRAK'` row (frozen representation, T2.1).
+pub const DecodedTrack = struct {
+    target_id: u16,
+    registry: u8,
+    ncomp: u8,
+    scene: u16,
+    source: DecodedSource,
+};
+
+/// A payload slice exactly as the `'TRAK'` record spells it — the T2.4
+/// carry for the T2.6 `'PAYL'` consumer, which owns its bounds check and
+/// its arena copy.
+pub const PayloadSpan = struct { off: u32, len: u32 };
+
+/// Owned record-sections stage result. Everything it returns lives in
+/// its arena — never a pointer into the input buffer, never a dangling
+/// local — until T2.8's final `DecodedScore` arena carries it all.
+pub const RecordsStage = struct {
+    arena: std.heap.ArenaAllocator,
+    tracks: []const DecodedTrack,
+    keys: []const TrackTable.Key,
+    scenes: []const DecodedScene,
+    /// `'EMIT'` lanes in document (section) order — what T2.8 folds into
+    /// the decoded transport (`TransportStage.transport.emit` stays
+    /// empty; this stage owns the lanes).
+    emit: []const TrackTable.EmitLane,
+    /// Parallel to `tracks`; meaningful only for expr/pattern sources.
+    payload_spans: []const PayloadSpan,
+
+    pub fn deinit(self: *RecordsStage) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+fn readU16(bytes: []const u8, at: usize) u16 {
+    return std.mem.readInt(u16, bytes[at..][0..2], .little);
+}
+
+fn readF32(bytes: []const u8, at: usize) f32 {
+    return @bitCast(readU32(bytes, at));
+}
+
+/// Bounds-defended section payload view. Every stage documents that
+/// `directory` is `parseDirectory`'s view of the SAME `bytes`; this
+/// guard keeps a mismatched caller buffer a refusal instead of a panic —
+/// decode never traps, even on API misuse.
+fn sectionPayload(bytes: []const u8, section: *const Section, refusal: ?*Refusal) DecodeError![]const u8 {
+    if (section.off > bytes.len or section.len > bytes.len - section.off) {
+        return fail(refusal, .directory_malformed, section.off);
+    }
+    return bytes[section.off..][0..section.len];
+}
+
+const JoinEntry = struct { registry: u8, ncomp: u8 };
+
+/// The `(registry, ncomp)` of join entry `id` — host entries walked out
+/// of the registry stage's owned canonical `'PACT'` bytes (the names live
+/// there; identity is T2.3's byte compare, this is the triple lookup),
+/// declared entries from its `'DECL'` records. The caller has proven
+/// `id < host + declared`; the walk bounds-guards itself anyway, so even
+/// a mismatched stage argument is a null, never a trap.
+fn joinEntry(registry: *const RegistryStage, id: u16) ?JoinEntry {
+    if (id < registry.host_targets) {
+        var p: usize = PactCodec.TARGETS_HEADER_LEN;
+        var i: u32 = 0;
+        while (i < id) : (i += 1) {
+            if (registry.regs.len - p < 4) return null;
+            const name_len: usize = std.mem.readInt(u16, registry.regs[p + 2 ..][0..2], .little);
+            if (registry.regs.len - p < 4 + name_len) return null;
+            p += 4 + name_len;
+        }
+        if (registry.regs.len - p < 4) return null;
+        return .{ .ncomp = registry.regs[p], .registry = registry.regs[p + 1] };
+    }
+    const decl_id = @as(usize, id) - registry.host_targets;
+    if (decl_id >= registry.declared.len) return null;
+    const rec = registry.declared[decl_id];
+    return .{ .ncomp = rec.ncomp, .registry = rec.registry };
+}
+
+/// Decode and validate the record sections. PRECONDITIONS: `directory`
+/// is `parseDirectory(bytes, …)`'s result and `registry` is
+/// `decodeRegistry(…, bytes, &directory, …)`'s result for those same
+/// `bytes` (the stage reads `'TRAK'` join bindings through it); the
+/// section-payload guard above turns a mismatched pair into a refusal,
+/// never a trap. Validation, in order: counts over caps; canonical
+/// presence (a present section here is never degenerate); the
+/// `'KEYS'`/`'TICK'` iff-consumers cross-check; per-record domains —
+/// source/trig_kind/ncomp ordinals, the registry join bound + the exact
+/// `(registry, ncomp)` triple of the joined entry (host join from
+/// `'REGS'` bytes, declared from `'DECL'` records), `scene` `NO_SCENE`
+/// or `< 'SCEN'` count (G10), per-source unused-field zero slack —
+/// key runs (≥ 1 key, strictly ascending, lanes ≥ ncomp zero,
+/// slice-bounded) and trigger schedules (periodic `every > 0`;
+/// explicit non-empty, strictly ascending, `|tick| ≤ MAX_TICK`,
+/// slice-bounded, and non-overlapping — the section is the
+/// concatenation of every schedule); scene window ends checked-added;
+/// `'EMIT'` lane ordinals ≤ 4, unique (G10), reserved zero, joined.
+/// `'KEYS'` `ease_ref` is checked against the synthesized linear default
+/// when `'EASE'` is absent (T2.5 owns the real-table bound); `'EASE'`,
+/// `'CTRL'`, `'STRS'` and `'PAYL'` are later stages' sections.
+pub fn decodeRecords(
+    gpa: std.mem.Allocator,
+    bytes: []const u8,
+    directory: *const Directory,
+    registry: *const RegistryStage,
+    refusal: ?*Refusal,
+) DecodeError!RecordsStage {
+    const trak_sec = directory.find(.trak);
+    const keys_sec = directory.find(.keys);
+    const tick_sec = directory.find(.tick);
+    const emit_sec = directory.find(.emit);
+    const scen_sec = directory.find(.scen);
+    const ease_present = directory.find(.ease) != null;
+
+    // Counts over caps ('TICK''s cap is the T2.1 directory check —
+    // count×width exactness first, then ≤ MAX_TICK_ENTRIES).
+    if (trak_sec) |s| {
+        if (s.count.? > MAX_TRACKS) return fail(refusal, .cap_exceeded, s.off);
+    }
+    if (keys_sec) |s| {
+        if (s.count.? > MAX_KEYS) return fail(refusal, .cap_exceeded, s.off);
+    }
+    if (scen_sec) |s| {
+        if (s.count.? > MAX_SCENES) return fail(refusal, .cap_exceeded, s.off);
+    }
+    if (emit_sec) |s| {
+        // The EmitName field-count ceiling `Eval` asserts (G10).
+        if (s.count.? > EMIT_LANE_CAP) return fail(refusal, .cap_exceeded, s.off);
+    }
+
+    // Canonical presence: a present record section is never degenerate
+    // (the zero case is the omitted section).
+    inline for (.{ trak_sec, keys_sec, tick_sec, emit_sec, scen_sec }) |maybe| {
+        if (maybe) |s| {
+            if (s.count.? == 0) return fail(refusal, .non_canonical, s.off);
+        }
+    }
+
+    // Cross-section presence is CHECKED, not implied: 'KEYS' iff a keys
+    // track exists, 'TICK' iff an explicit-trigger track does. The
+    // pre-scan reads only the source/trig_kind bytes — validating those
+    // two ordinals first (shape before cross-section coherence) so a
+    // corrupt ordinal never misreports as a presence contradiction.
+    const trak_count: usize = if (trak_sec) |s| s.count.? else 0;
+    var has_keys_track = false;
+    var has_explicit = false;
+    if (trak_sec) |s| {
+        _ = try sectionPayload(bytes, s, refusal);
+        for (0..trak_count) |i| {
+            const at = s.off + 4 + i * TRAK_REC_LEN;
+            const src = bytes[at + 4];
+            const kind = bytes[at + 5];
+            if (src > SOURCE_PATTERN) {
+                return fail(refusal, .record_invalid, at + 4);
+            }
+            if (kind > TRIG_EXPLICIT) {
+                return fail(refusal, .record_invalid, at + 5);
+            }
+            if (src == SOURCE_KEYS) {
+                has_keys_track = true;
+            } else if (src == SOURCE_TRIGGER and kind == TRIG_EXPLICIT) {
+                has_explicit = true;
+            }
+        }
+    }
+    if ((keys_sec != null) != has_keys_track) {
+        return fail(refusal, .non_canonical, if (keys_sec) |s| s.off else payloadStart(directory));
+    }
+    if ((tick_sec != null) != has_explicit) {
+        return fail(refusal, .non_canonical, if (tick_sec) |s| s.off else payloadStart(directory));
+    }
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    const scen_count: usize = if (scen_sec) |s| s.count.? else 0;
+    var scenes: []const DecodedScene = &.{};
+    if (scen_sec) |s| {
+        _ = try sectionPayload(bytes, s, refusal);
+        const recs = a.alloc(DecodedScene, scen_count) catch return error.OutOfMemory;
+        for (recs, 0..) |*rec, i| {
+            const at = s.off + 4 + i * SCEN_REC_LEN;
+            const start = readI64(bytes, at);
+            const dur = readI64(bytes, at + 8);
+            // The window end is the one check compile makes of the pair
+            // (`tick_overflow`); decode refuses the same class. Grid
+            // bounds on the individual fields are producer consequences
+            // (`posToTick*`), not compile asserts — not re-derived here.
+            _ = std.math.add(i64, start, dur) catch
+                return fail(refusal, .scene_invalid, at);
+            rec.* = .{ .start_tick = start, .dur_ticks = dur };
+        }
+        scenes = recs;
+    }
+
+    const keys_count: usize = if (keys_sec) |s| s.count.? else 0;
+    var keys: []const TrackTable.Key = &.{};
+    if (keys_sec) |s| {
+        _ = try sectionPayload(bytes, s, refusal);
+        const recs = a.alloc(TrackTable.Key, keys_count) catch return error.OutOfMemory;
+        for (recs, 0..) |*rec, i| {
+            const at = s.off + 4 + i * KEYS_REC_LEN;
+            if (readU16(bytes, at + 26) != 0) {
+                return fail(refusal, .record_invalid, at + 26);
+            }
+            const ease_ref = readU16(bytes, at + 24);
+            if (!ease_present and ease_ref != 0) {
+                // 'EASE' absent ⇒ the program table is the synthesized
+                // linear default alone; any other index dangles. (T2.5
+                // owns the bound against the real table.)
+                return fail(refusal, .ease_invalid, at + 24);
+            }
+            rec.* = .{
+                .at = readI64(bytes, at),
+                .value = .{
+                    readF32(bytes, at + 8),
+                    readF32(bytes, at + 12),
+                    readF32(bytes, at + 16),
+                    readF32(bytes, at + 20),
+                },
+                .ease_ref = ease_ref,
+            };
+        }
+        keys = recs;
+    }
+
+    const tick_count: usize = if (tick_sec) |s| s.count.? else 0;
+    if (tick_sec) |s| _ = try sectionPayload(bytes, s, refusal);
+
+    const tracks = a.alloc(DecodedTrack, trak_count) catch return error.OutOfMemory;
+    const spans = a.alloc(PayloadSpan, trak_count) catch return error.OutOfMemory;
+    // The join bound every target_id is held against; `joinEntry` turns
+    // an id inside it into the exact (registry, ncomp) triple.
+    const join_size: u64 = @as(u64, registry.host_targets) + registry.declared_targets;
+    // 'TICK' is the concatenation of every explicit schedule: slices in
+    // track order never overlap (each new slice starts at or after the
+    // previous one's end).
+    var prev_tick_end: ?u64 = null;
+    if (trak_sec) |s| {
+        for (0..trak_count) |i| {
+            const at = s.off + 4 + i * TRAK_REC_LEN;
+            const target_id = readU16(bytes, at);
+            const trak_registry = bytes[at + 2];
+            const ncomp = bytes[at + 3];
+            const source = bytes[at + 4];
+            const trig_kind = bytes[at + 5];
+            const scene = readU16(bytes, at + 6);
+            const key_start = readU32(bytes, at + 8);
+            const key_len = readU32(bytes, at + 12);
+            const payload_off = readU32(bytes, at + 16);
+            const payload_len = readU32(bytes, at + 20);
+            const trig_every = readI64(bytes, at + 24);
+            const trig_offset = readI64(bytes, at + 32);
+
+            // source/trig_kind ordinals were validated by the pre-scan
+            // (shape before cross-section coherence); ncomp rides here.
+            if (ncomp < 1 or ncomp > 4) {
+                return fail(refusal, .record_invalid, at + 3);
+            }
+
+            // Registry binding: the id is inside the join, and the
+            // record's (registry, ncomp) is the joined entry's exact
+            // triple — host join ('REGS' names) or 'DECL' record.
+            if (@as(u64, target_id) >= join_size) {
+                return fail(refusal, .registry_mismatch, at);
+            }
+            const entry = joinEntry(registry, target_id) orelse
+                return fail(refusal, .registry_mismatch, at);
+            if (entry.registry != trak_registry or entry.ncomp != ncomp) {
+                return fail(refusal, .registry_mismatch, at + 2);
+            }
+
+            // `scene`: NO_SCENE or a valid index into THIS 'SCEN' table
+            // (the table invariant; the count is cap-checked above, so
+            // this subsumes MAX_SCENES — G10).
+            if (scene != TrackTable.NO_SCENE and @as(usize, scene) >= scen_count) {
+                return fail(refusal, .scene_invalid, at + 6);
+            }
+
+            var track: DecodedTrack = .{
+                .target_id = target_id,
+                .registry = trak_registry,
+                .ncomp = ncomp,
+                .scene = scene,
+                .source = undefined,
+            };
+            spans[i] = .{ .off = 0, .len = 0 };
+
+            switch (source) {
+                SOURCE_KEYS => {
+                    // Unused-by-source fields must be zero.
+                    if (trig_every != 0) return fail(refusal, .record_invalid, at + 24);
+                    if (trig_offset != 0) return fail(refusal, .record_invalid, at + 32);
+                    if (payload_off != 0) return fail(refusal, .record_invalid, at + 16);
+                    if (payload_len != 0) return fail(refusal, .record_invalid, at + 20);
+                    if (key_len < 1) {
+                        return fail(refusal, .key_invalid, at + 12);
+                    }
+                    const run_end = @as(u64, key_start) + key_len;
+                    if (run_end > keys_count) {
+                        return fail(refusal, .key_invalid, at + 8);
+                    }
+                    const run = keys[@intCast(key_start)..][0..@intCast(key_len)];
+                    for (run, 0..) |key, k| {
+                        const key_at = keys_sec.?.off + 4 + (@as(usize, key_start) + k) * KEYS_REC_LEN;
+                        if (k > 0 and key.at <= run[k - 1].at) {
+                            return fail(refusal, .key_invalid, key_at);
+                        }
+                        var lane: usize = ncomp;
+                        while (lane < 4) : (lane += 1) {
+                            if (key.value[lane] != 0) {
+                                return fail(refusal, .key_invalid, key_at + 8 + lane * 4);
+                            }
+                        }
+                    }
+                    track.source = .{ .keys = .{ .start = key_start, .len = key_len } };
+                },
+                SOURCE_EXPR, SOURCE_PATTERN => {
+                    if (trig_every != 0) return fail(refusal, .record_invalid, at + 24);
+                    if (trig_offset != 0) return fail(refusal, .record_invalid, at + 32);
+                    if (key_start != 0) return fail(refusal, .record_invalid, at + 8);
+                    if (key_len != 0) return fail(refusal, .record_invalid, at + 12);
+                    spans[i] = .{ .off = payload_off, .len = payload_len };
+                    track.source = if (source == SOURCE_EXPR) .{ .expr = &.{} } else .{ .pattern = &.{} };
+                },
+                SOURCE_TRIGGER => {
+                    if (payload_off != 0) return fail(refusal, .record_invalid, at + 16);
+                    if (payload_len != 0) return fail(refusal, .record_invalid, at + 20);
+                    if (trig_kind == TRIG_PERIODIC) {
+                        if (key_start != 0) return fail(refusal, .record_invalid, at + 8);
+                        if (key_len != 0) return fail(refusal, .record_invalid, at + 12);
+                        // The compile rule: a positive interval.
+                        if (trig_every <= 0) {
+                            return fail(refusal, .trigger_invalid, at + 24);
+                        }
+                        track.source = .{ .trigger = .{ .periodic = .{
+                            .every = trig_every,
+                            .offset = trig_offset,
+                        } } };
+                    } else {
+                        if (trig_every != 0) return fail(refusal, .record_invalid, at + 24);
+                        if (trig_offset != 0) return fail(refusal, .record_invalid, at + 32);
+                        if (key_len < 1) {
+                            return fail(refusal, .trigger_invalid, at + 12);
+                        }
+                        const run_end = @as(u64, key_start) + key_len;
+                        if (run_end > tick_count) {
+                            return fail(refusal, .trigger_invalid, at + 8);
+                        }
+                        if (prev_tick_end) |end| {
+                            if (key_start < end) {
+                                return fail(refusal, .trigger_invalid, at + 8);
+                            }
+                        }
+                        prev_tick_end = run_end;
+                        const sched = a.alloc(TrackTable.Tick, @intCast(key_len)) catch
+                            return error.OutOfMemory;
+                        for (sched, 0..) |*slot, k| {
+                            const tick_at = tick_sec.?.off + 4 + (@as(usize, key_start) + k) * TICK_REC_LEN;
+                            const tick = readI64(bytes, tick_at);
+                            if (k > 0 and tick <= sched[k - 1]) {
+                                return fail(refusal, .trigger_invalid, tick_at);
+                            }
+                            if (tick > sjon.Pattern.MAX_TICK or tick < -sjon.Pattern.MAX_TICK) {
+                                return fail(refusal, .trigger_invalid, tick_at);
+                            }
+                            slot.* = tick;
+                        }
+                        track.source = .{ .trigger = .{ .at = sched } };
+                    }
+                },
+                else => unreachable, // source ≤ SOURCE_PATTERN checked above
+            }
+            tracks[i] = track;
+        }
+    }
+
+    var emit: []const TrackTable.EmitLane = &.{};
+    if (emit_sec) |s| {
+        _ = try sectionPayload(bytes, s, refusal);
+        const lanes = a.alloc(TrackTable.EmitLane, s.count.?) catch return error.OutOfMemory;
+        var seen: u8 = 0; // one bit per EmitName ordinal (count ≤ 5 here)
+        for (lanes, 0..) |*lane, i| {
+            const at = s.off + 4 + i * EMIT_REC_LEN;
+            if (readU32(bytes, at + 4) != 0) {
+                return fail(refusal, .record_invalid, at + 4);
+            }
+            const name = std.enums.fromInt(TrackTable.EmitName, bytes[at]) orelse
+                return fail(refusal, .record_invalid, at);
+            // Lane uniqueness is compile-enforced and `Eval` leans on it
+            // (src/Eval.zig:184-186) — decode proves it (G10).
+            const bit = @as(u8, 1) << @as(u3, @intCast(bytes[at]));
+            if (seen & bit != 0) {
+                return fail(refusal, .record_invalid, at);
+            }
+            seen |= bit;
+            const target_id = readU16(bytes, at + 2);
+            if (@as(u64, target_id) >= join_size) {
+                return fail(refusal, .registry_mismatch, at + 2);
+            }
+            const entry = joinEntry(registry, target_id) orelse
+                return fail(refusal, .registry_mismatch, at + 2);
+            if (entry.registry != bytes[at + 1]) {
+                return fail(refusal, .registry_mismatch, at + 1);
+            }
+            lane.* = .{
+                .name = name,
+                .target_id = target_id,
+                .registry = bytes[at + 1],
+            };
+        }
+        emit = lanes;
+    }
+
+    return .{
+        .arena = arena,
+        .tracks = tracks,
+        .keys = keys,
+        .scenes = scenes,
+        .emit = emit,
+        .payload_spans = spans,
     };
 }
 
@@ -2076,6 +2545,833 @@ test "Pacb: REGS structural defects refuse registry_mismatch" {
         defer t.allocator.free(buf);
         putU32(buf, regs_at + 4, 0xdeadbeef);
         try expectRegistryRefusal(buf, .registry_mismatch);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T2.4 — record-section stage tests ('TRAK' + 'KEYS' + 'TICK' + 'EMIT' +
+// 'SCEN')
+// ---------------------------------------------------------------------------
+
+fn putF32(buf: []u8, at: usize, value: f32) void {
+    std.mem.writeInt(u32, buf[at..][0..4], @bitCast(value), .little);
+}
+
+/// One `'TRAK'` record as the section spells it (40 B: target_id u16,
+/// registry u8, ncomp u8, source u8, trig_kind u8, scene u16, key_start
+/// u32, key_len u32, payload_off u32, payload_len u32, trig_every i64,
+/// trig_offset i64).
+const TrakRec = struct {
+    target_id: u16 = 0,
+    registry: u8 = 0,
+    ncomp: u8 = 1,
+    source: u8 = SOURCE_KEYS,
+    trig_kind: u8 = TRIG_PERIODIC,
+    scene: u16 = TrackTable.NO_SCENE,
+    key_start: u32 = 0,
+    key_len: u32 = 0,
+    payload_off: u32 = 0,
+    payload_len: u32 = 0,
+    trig_every: i64 = 0,
+    trig_offset: i64 = 0,
+};
+
+/// One `'KEYS'` record (28 B: at i64, value f32×4, ease_ref u16, pad u16).
+const KeyRec = struct {
+    at: i64 = 0,
+    value: [4]f32 = .{ 0, 0, 0, 0 },
+    ease_ref: u16 = 0,
+};
+
+/// One `'EMIT'` record (8 B: name u8, registry u8, target_id u16,
+/// reserved u32).
+const EmitRec = struct {
+    name: u8 = 0,
+    registry: u8 = 0,
+    target_id: u16 = 0,
+    reserved: u32 = 0,
+};
+
+/// One `'SCEN'` record (16 B: start_tick i64, dur_ticks i64).
+const ScenRec = struct { start_tick: i64 = 0, dur_ticks: i64 = 0 };
+
+/// Optional means absent; a NON-NULL EMPTY slice spells a present
+/// zero-count section (the canonical-presence mutation under test).
+const RecordsSpec = struct {
+    transport: TransportSpec = .{},
+    tmpo: []const TmpoRec = &.{},
+    regs: ?[]const u8 = null,
+    decl: []const DeclRec = &.{},
+    emit: ?[]const EmitRec = null,
+    trak: ?[]const TrakRec = null,
+    keys: ?[]const KeyRec = null,
+    tick: ?[]const i64 = null,
+    scen: ?[]const ScenRec = null,
+};
+
+/// Absolute payload offsets of the record sections (0 = absent; every
+/// present payload starts at least at the 184-byte all-kinds boundary).
+const RecordsLayout = struct {
+    emit: u32 = 0,
+    trak: u32 = 0,
+    keys: u32 = 0,
+    tick: u32 = 0,
+    scen: u32 = 0,
+};
+
+const BuiltFixture = struct { buf: []u8, layout: RecordsLayout };
+
+/// The T2.4 fixture builder: canonical order throughout, offsets derived
+/// by summation, one mutation applied per test afterwards (via the spec
+/// records or a byte patch through `layout`).
+fn buildRecordsFixture(
+    alloc: std.mem.Allocator,
+    spec: RecordsSpec,
+) !BuiltFixture {
+    const has_tmpo = spec.tmpo.len > 0;
+    const has_decl = spec.decl.len > 0;
+    var n: usize = 2; // TRAN + PACM
+    if (spec.regs != null) n += 1;
+    if (has_decl) n += 1;
+    if (spec.emit != null) n += 1;
+    if (has_tmpo) n += 1;
+    if (spec.trak != null) n += 1;
+    if (spec.keys != null) n += 1;
+    if (spec.tick != null) n += 1;
+    if (spec.scen != null) n += 1;
+
+    var pos: usize = HEADER_LEN + n * DIRECTORY_ENTRY_LEN;
+    const tran_off = pos;
+    pos += TRAN_REC_LEN;
+    const regs_off = pos;
+    const regs_len: usize = if (spec.regs) |r| 4 + r.len else 0;
+    pos += regs_len;
+    const decl_off = pos;
+    const decl_len: usize = if (has_decl) 4 + spec.decl.len * DECL_REC_LEN else 0;
+    pos += decl_len;
+    const emit_off = pos;
+    const emit_len: usize = if (spec.emit) |e| 4 + e.len * EMIT_REC_LEN else 0;
+    pos += emit_len;
+    const tmpo_off = pos;
+    const tmpo_len: usize = if (has_tmpo) 4 + spec.tmpo.len * TMPO_REC_LEN else 0;
+    pos += tmpo_len;
+    const trak_off = pos;
+    const trak_len: usize = if (spec.trak) |tr| 4 + tr.len * TRAK_REC_LEN else 0;
+    pos += trak_len;
+    const keys_off = pos;
+    const keys_len: usize = if (spec.keys) |ks| 4 + ks.len * KEYS_REC_LEN else 0;
+    pos += keys_len;
+    const tick_off = pos;
+    const tick_len: usize = if (spec.tick) |tk| 4 + tk.len * TICK_REC_LEN else 0;
+    pos += tick_len;
+    const scen_off = pos;
+    const scen_len: usize = if (spec.scen) |sc| 4 + sc.len * SCEN_REC_LEN else 0;
+    pos += scen_len;
+    const pacm_off = pos;
+    const pacm_len: usize = 40;
+
+    const buf = try alloc.alloc(u8, pacm_off + pacm_len);
+    @memset(buf, 0);
+    writeHeader(buf, n, 0);
+
+    var index: usize = 0;
+    writeDirEntry(buf, index, .tran, tran_off, TRAN_REC_LEN);
+    index += 1;
+    if (spec.regs) |r| {
+        writeDirEntry(buf, index, .regs, regs_off, regs_len);
+        putU32(buf, regs_off, @intCast(r.len));
+        @memcpy(buf[regs_off + 4 ..][0..r.len], r);
+        index += 1;
+    }
+    if (has_decl) {
+        writeDirEntry(buf, index, .decl, decl_off, decl_len);
+        putU32(buf, decl_off, @intCast(spec.decl.len));
+        for (spec.decl, 0..) |rec, i| {
+            const at = decl_off + 4 + i * DECL_REC_LEN;
+            buf[at] = rec.registry;
+            buf[at + 1] = rec.ncomp;
+            putU16(buf, at + 2, 0); // pad
+        }
+        index += 1;
+    }
+    if (spec.emit) |lanes| {
+        writeDirEntry(buf, index, .emit, emit_off, emit_len);
+        putU32(buf, emit_off, @intCast(lanes.len));
+        for (lanes, 0..) |rec, i| {
+            const at = emit_off + 4 + i * EMIT_REC_LEN;
+            putU8(buf, at, rec.name);
+            putU8(buf, at + 1, rec.registry);
+            putU16(buf, at + 2, rec.target_id);
+            putU32(buf, at + 4, rec.reserved);
+        }
+        index += 1;
+    }
+    if (has_tmpo) {
+        writeDirEntry(buf, index, .tmpo, tmpo_off, tmpo_len);
+        putU32(buf, tmpo_off, @intCast(spec.tmpo.len));
+        for (spec.tmpo, 0..) |rec, i| {
+            const at = tmpo_off + 4 + i * TMPO_REC_LEN;
+            putI64(buf, at, rec.tick);
+            putF64(buf, at + 8, rec.bpm);
+        }
+        index += 1;
+    }
+    if (spec.trak) |traks| {
+        writeDirEntry(buf, index, .trak, trak_off, trak_len);
+        putU32(buf, trak_off, @intCast(traks.len));
+        for (traks, 0..) |rec, i| {
+            const at = trak_off + 4 + i * TRAK_REC_LEN;
+            putU16(buf, at, rec.target_id);
+            putU8(buf, at + 2, rec.registry);
+            putU8(buf, at + 3, rec.ncomp);
+            putU8(buf, at + 4, rec.source);
+            putU8(buf, at + 5, rec.trig_kind);
+            putU16(buf, at + 6, rec.scene);
+            putU32(buf, at + 8, rec.key_start);
+            putU32(buf, at + 12, rec.key_len);
+            putU32(buf, at + 16, rec.payload_off);
+            putU32(buf, at + 20, rec.payload_len);
+            putI64(buf, at + 24, rec.trig_every);
+            putI64(buf, at + 32, rec.trig_offset);
+        }
+        index += 1;
+    }
+    if (spec.keys) |ks| {
+        writeDirEntry(buf, index, .keys, keys_off, keys_len);
+        putU32(buf, keys_off, @intCast(ks.len));
+        for (ks, 0..) |rec, i| {
+            const at = keys_off + 4 + i * KEYS_REC_LEN;
+            putI64(buf, at, rec.at);
+            putF32(buf, at + 8, rec.value[0]);
+            putF32(buf, at + 12, rec.value[1]);
+            putF32(buf, at + 16, rec.value[2]);
+            putF32(buf, at + 20, rec.value[3]);
+            putU16(buf, at + 24, rec.ease_ref);
+            putU16(buf, at + 26, 0); // pad
+        }
+        index += 1;
+    }
+    if (spec.tick) |ticks| {
+        writeDirEntry(buf, index, .tick, tick_off, tick_len);
+        putU32(buf, tick_off, @intCast(ticks.len));
+        for (ticks, 0..) |tick, i| {
+            putI64(buf, tick_off + 4 + i * TICK_REC_LEN, tick);
+        }
+        index += 1;
+    }
+    if (spec.scen) |scs| {
+        writeDirEntry(buf, index, .scen, scen_off, scen_len);
+        putU32(buf, scen_off, @intCast(scs.len));
+        for (scs, 0..) |rec, i| {
+            const at = scen_off + 4 + i * SCEN_REC_LEN;
+            putI64(buf, at, rec.start_tick);
+            putI64(buf, at + 8, rec.dur_ticks);
+        }
+        index += 1;
+    }
+    writeDirEntry(buf, n - 1, .pacm, pacm_off, pacm_len);
+    writeTranRecord(buf, tran_off, spec.transport);
+
+    return .{ .buf = buf, .layout = .{
+        .emit = if (spec.emit != null) @intCast(emit_off) else 0,
+        .trak = if (spec.trak != null) @intCast(trak_off) else 0,
+        .keys = if (spec.keys != null) @intCast(keys_off) else 0,
+        .tick = if (spec.tick != null) @intCast(tick_off) else 0,
+        .scen = if (spec.scen != null) @intCast(scen_off) else 0,
+    } };
+}
+
+/// The shared base fixture: the `host_two` join plus one declared target
+/// `(registry 1, ncomp 2)` (join size 3), one track of every source kind
+/// (keys on id 0 in scene 0, expr on id 1, periodic trigger on declared
+/// id 2, explicit trigger on id 0), two scenes, two emit lanes, three
+/// keys, three explicit ticks.
+const RecordsBase = struct {
+    trak: [4]TrakRec,
+    keys: [3]KeyRec,
+    tick: [3]i64,
+    emit: [2]EmitRec,
+    scen: [2]ScenRec,
+};
+
+fn baseRecords() RecordsBase {
+    return .{
+        .trak = .{
+            .{ .target_id = 0, .registry = 0, .ncomp = 3, .source = SOURCE_KEYS, .scene = 0, .key_start = 0, .key_len = 3 },
+            .{ .target_id = 1, .registry = 1, .ncomp = 1, .source = SOURCE_EXPR, .payload_off = 0, .payload_len = 12 },
+            .{ .target_id = 2, .registry = 1, .ncomp = 2, .source = SOURCE_TRIGGER, .trig_kind = TRIG_PERIODIC, .trig_every = 480, .trig_offset = 120 },
+            .{ .target_id = 0, .registry = 0, .ncomp = 3, .source = SOURCE_TRIGGER, .trig_kind = TRIG_EXPLICIT, .key_start = 0, .key_len = 3 },
+        },
+        .keys = .{
+            .{ .at = 0, .value = .{ 0.1, 0.2, 0.3, 0 } },
+            .{ .at = 360360, .value = .{ 0.25, 0.5, 0.75, 0 } },
+            .{ .at = 720720, .value = .{ 1, 0, -1, 0 } },
+        },
+        .tick = .{ 5, 500, 5000 },
+        .emit = .{
+            .{ .name = 0, .registry = 0, .target_id = 0 }, // beat
+            .{ .name = 4, .registry = 1, .target_id = 1 }, // t
+        },
+        .scen = .{
+            .{ .start_tick = 0, .dur_ticks = 720720 },
+            .{ .start_tick = 1441440, .dur_ticks = 360360 },
+        },
+    };
+}
+
+const base_decl = [_]DeclRec{.{ .registry = 1, .ncomp = 2 }};
+
+/// `'TRAN'` fields matching the base join (host 2 + declared 1), with the
+/// identity checksum over the actual `'REGS'` bytes.
+fn hostJoinSpec(regs: []const u8) TransportSpec {
+    return .{ .host_targets = 2, .declared_targets = 1, .pact_fnv = fnv(regs) };
+}
+
+/// Base fixture from a (possibly mutated) base record set.
+fn buildBaseFixture(
+    alloc: std.mem.Allocator,
+    base: *const RecordsBase,
+    regs: []const u8,
+) !BuiltFixture {
+    return buildRecordsFixture(alloc, .{
+        .transport = hostJoinSpec(regs),
+        .regs = regs,
+        .decl = &base_decl,
+        .emit = &base.emit,
+        .trak = &base.trak,
+        .keys = &base.keys,
+        .tick = &base.tick,
+        .scen = &base.scen,
+    });
+}
+
+fn expectRecordsRefusal(bytes: []const u8, code: RefusalCode) !void {
+    var refusal: Refusal = undefined;
+    const directory = try parseDirectory(bytes, null);
+    var registry = try decodeRegistry(t.allocator, bytes, &directory, &refusal);
+    defer registry.deinit();
+    const decoded = decodeRecords(t.allocator, bytes, &directory, &registry, &refusal);
+    if (decoded) |payload| {
+        var stage = payload;
+        stage.deinit();
+        return error.WronglyAccepted;
+    } else |err| {
+        try t.expectEqual(error.Refused, err);
+        try t.expectEqual(code, refusal.code);
+    }
+}
+
+test "Pacb: a clean records fixture decodes owned tracks, keys, scenes and emit" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseRecords();
+    const built = try buildBaseFixture(t.allocator, &base, regs);
+    defer t.allocator.free(built.buf);
+
+    const directory = try parseDirectory(built.buf, null);
+    var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+    defer registry.deinit();
+    var stage = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+    defer stage.deinit();
+
+    // Expected values are fixed literals, independent of the builder's
+    // arithmetic (the builder only places bytes; these pin the decode).
+    try t.expectEqual(@as(usize, 4), stage.tracks.len);
+    try t.expectEqual(@as(u16, 0), stage.tracks[0].target_id);
+    try t.expectEqual(@as(u8, 0), stage.tracks[0].registry);
+    try t.expectEqual(@as(u8, 3), stage.tracks[0].ncomp);
+    try t.expectEqual(@as(u16, 0), stage.tracks[0].scene);
+    try t.expect(stage.tracks[0].source == .keys);
+    try t.expectEqual(@as(u32, 0), stage.tracks[0].source.keys.start);
+    try t.expectEqual(@as(u32, 3), stage.tracks[0].source.keys.len);
+
+    try t.expect(stage.tracks[1].source == .expr);
+    try t.expectEqual(@as(usize, 0), stage.tracks[1].source.expr.len); // T2.6 fills
+    try t.expectEqual(@as(u32, 0), stage.payload_spans[1].off);
+    try t.expectEqual(@as(u32, 12), stage.payload_spans[1].len);
+
+    try t.expect(stage.tracks[2].source == .trigger);
+    switch (stage.tracks[2].source.trigger) {
+        .periodic => |p| {
+            try t.expectEqual(@as(i64, 480), p.every);
+            try t.expectEqual(@as(i64, 120), p.offset);
+        },
+        else => return error.UnexpectedArm,
+    }
+
+    try t.expect(stage.tracks[3].source == .trigger);
+    switch (stage.tracks[3].source.trigger) {
+        .at => |at| {
+            try t.expectEqual(@as(usize, 3), at.len);
+            try t.expectEqualSlices(i64, &.{ 5, 500, 5000 }, at);
+        },
+        else => return error.UnexpectedArm,
+    }
+
+    try t.expectEqual(@as(usize, 3), stage.keys.len);
+    try t.expectEqual(@as(i64, 0), stage.keys[0].at);
+    try t.expectEqual(@as(f32, 0.1), stage.keys[0].value[0]);
+    try t.expectEqual(@as(f32, 0.2), stage.keys[0].value[1]);
+    try t.expectEqual(@as(f32, 0.3), stage.keys[0].value[2]);
+    try t.expectEqual(@as(f32, 0), stage.keys[0].value[3]);
+    try t.expectEqual(@as(i64, 360360), stage.keys[1].at);
+    try t.expectEqual(@as(f32, 0.5), stage.keys[1].value[1]);
+    try t.expectEqual(@as(i64, 720720), stage.keys[2].at);
+    try t.expectEqual(@as(f32, -1), stage.keys[2].value[2]);
+    try t.expectEqual(@as(u16, 0), stage.keys[2].ease_ref);
+
+    try t.expectEqual(@as(usize, 2), stage.scenes.len);
+    try t.expectEqual(DecodedScene{ .start_tick = 0, .dur_ticks = 720720 }, stage.scenes[0]);
+    try t.expectEqual(DecodedScene{ .start_tick = 1441440, .dur_ticks = 360360 }, stage.scenes[1]);
+
+    try t.expectEqual(@as(usize, 2), stage.emit.len);
+    try t.expectEqual(
+        TrackTable.EmitLane{ .name = .beat, .target_id = 0, .registry = 0 },
+        stage.emit[0],
+    );
+    try t.expectEqual(
+        TrackTable.EmitLane{ .name = .t, .target_id = 1, .registry = 1 },
+        stage.emit[1],
+    );
+
+    // The stage owns everything it returns (the borrow-vs-own contract
+    // until T2.8's final arena): clobber the input, values survive.
+    @memset(built.buf, 0xAA);
+    try t.expectEqual(@as(usize, 4), stage.tracks.len);
+    try t.expectEqual(@as(u32, 3), stage.tracks[0].source.keys.len);
+    try t.expectEqualSlices(i64, &.{ 5, 500, 5000 }, stage.tracks[3].source.trigger.at);
+    try t.expectEqual(@as(i64, 360360), stage.keys[1].at);
+    try t.expectEqual(@as(f32, 0.75), stage.keys[1].value[2]);
+    try t.expectEqual(@as(i64, 1441440), stage.scenes[1].start_tick);
+    try t.expectEqual(TrackTable.EmitName.t, stage.emit[1].name);
+    try t.expectEqual(@as(u32, 12), stage.payload_spans[1].len);
+}
+
+test "Pacb: record-section counts over their caps refuse cap_exceeded" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // 'TRAK' over MAX_TRACKS (257 expr rows — compact, no keys needed).
+    {
+        const many = try t.allocator.alloc(TrakRec, MAX_TRACKS + 1);
+        defer t.allocator.free(many);
+        for (many) |*rec| rec.* = baseRecords().trak[1];
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .trak = many,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .cap_exceeded);
+    }
+    // 'KEYS' over MAX_KEYS.
+    {
+        var base = baseRecords();
+        base.trak[0].key_len = MAX_KEYS + 1;
+        const many = try t.allocator.alloc(KeyRec, MAX_KEYS + 1);
+        defer t.allocator.free(many);
+        for (many, 0..) |*rec, i| rec.* = .{ .at = @intCast(i) };
+        const spec: RecordsSpec = .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .trak = &base.trak,
+            .emit = &base.emit,
+            .scen = &base.scen,
+            .keys = many,
+        };
+        const built = try buildRecordsFixture(t.allocator, spec);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .cap_exceeded);
+    }
+    // 'SCEN' over MAX_SCENES.
+    {
+        const many = try t.allocator.alloc(ScenRec, MAX_SCENES + 1);
+        defer t.allocator.free(many);
+        for (many) |*rec| rec.* = .{ .start_tick = 0, .dur_ticks = 4 };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &.{EmitRec{}},
+            .scen = many,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .cap_exceeded);
+    }
+    // 'EMIT' over the five-lane ceiling (G10).
+    {
+        const lanes = [_]EmitRec{
+            .{ .name = 0 }, .{ .name = 1 }, .{ .name = 2 },
+            .{ .name = 3 }, .{ .name = 4 }, .{ .name = 0 },
+        };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &lanes,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .cap_exceeded);
+    }
+}
+
+test "Pacb: present zero-count record sections refuse non_canonical" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const sections = [_]struct { name: []const u8, spec: RecordsSpec }{
+        .{ .name = "TRAK", .spec = .{ .transport = hostJoinSpec(regs), .regs = regs, .decl = &base_decl, .trak = &.{} } },
+        .{ .name = "KEYS", .spec = .{ .transport = hostJoinSpec(regs), .regs = regs, .decl = &base_decl, .emit = &.{EmitRec{}}, .trak = &.{baseRecords().trak[1]}, .keys = &.{} } },
+        .{ .name = "SCEN", .spec = .{ .transport = hostJoinSpec(regs), .regs = regs, .decl = &base_decl, .emit = &.{EmitRec{}}, .scen = &.{} } },
+    };
+    for (sections) |case| {
+        const built = try buildRecordsFixture(t.allocator, case.spec);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .non_canonical);
+    }
+}
+
+test "Pacb: source and trig_kind ordinals out of range refuse record_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    {
+        var base = baseRecords();
+        base.trak[0].source = 4;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .record_invalid);
+    }
+    {
+        var base = baseRecords();
+        base.trak[2].trig_kind = 2;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .record_invalid);
+    }
+}
+
+test "Pacb: TRAK ncomp outside 1..4 refuses record_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    for ([_]u8{ 0, 5 }) |ncomp| {
+        var base = baseRecords();
+        base.trak[0].ncomp = ncomp;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .record_invalid);
+    }
+}
+
+test "Pacb: per-source non-zero slack refuses record_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const mutations = [_]struct { index: usize, field: []const u8, value: u64 }{
+        .{ .index = 0, .field = "trig_every", .value = 1 }, // keys track
+        .{ .index = 0, .field = "payload_off", .value = 4 }, // keys track
+        .{ .index = 1, .field = "key_len", .value = 1 }, // expr track
+        .{ .index = 2, .field = "payload_len", .value = 8 }, // periodic trigger
+        .{ .index = 3, .field = "trig_offset", .value = 7 }, // explicit trigger
+        .{ .index = 1, .field = "pattern_trig_every", .value = 2 }, // pattern track
+    };
+    for (mutations) |m| {
+        var base = baseRecords();
+        if (std.mem.eql(u8, m.field, "pattern_trig_every")) {
+            base.trak[m.index].source = SOURCE_PATTERN;
+            base.trak[m.index].trig_every = @intCast(m.value);
+        } else if (std.mem.eql(u8, m.field, "trig_every")) {
+            base.trak[m.index].trig_every = @intCast(m.value);
+        } else if (std.mem.eql(u8, m.field, "trig_offset")) {
+            base.trak[m.index].trig_offset = @intCast(m.value);
+        } else if (std.mem.eql(u8, m.field, "payload_off")) {
+            base.trak[m.index].payload_off = @intCast(m.value);
+        } else if (std.mem.eql(u8, m.field, "payload_len")) {
+            base.trak[m.index].payload_len = @intCast(m.value);
+        } else if (std.mem.eql(u8, m.field, "key_len")) {
+            base.trak[m.index].key_len = @intCast(m.value);
+        }
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .record_invalid);
+    }
+}
+
+test "Pacb: a track outside the join or with a wrong triple refuses registry_mismatch" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    {
+        var base = baseRecords();
+        base.trak[0].target_id = 3; // join size is host 2 + declared 1
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .registry_mismatch);
+    }
+    {
+        var base = baseRecords();
+        base.trak[0].registry = 1; // host entry 0 is (registry 0, ncomp 3)
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .registry_mismatch);
+    }
+    {
+        var base = baseRecords();
+        base.trak[0].ncomp = 2; // host entry 0 is (registry 0, ncomp 3)
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .registry_mismatch);
+    }
+}
+
+test "Pacb: scene must be NO_SCENE or index the SCEN table" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    {
+        // Shaped-valid against MAX_SCENES but out of range for THIS
+        // table (2 rows) — the G10 correction.
+        var base = baseRecords();
+        base.trak[0].scene = 63;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .scene_invalid);
+    }
+    {
+        // No 'SCEN' section at all: only NO_SCENE passes.
+        var base = baseRecords();
+        base.trak[0].scene = 1;
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &base.emit,
+            .trak = &base.trak,
+            .keys = &base.keys,
+            .tick = &base.tick,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .scene_invalid);
+    }
+}
+
+test "Pacb: a keys run needs at least one key and must not overrun KEYS" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    {
+        var base = baseRecords();
+        base.trak[0].key_len = 0;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .key_invalid);
+    }
+    {
+        var base = baseRecords();
+        base.trak[0].key_start = 2; // 2 + 3 > 3 keys
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .key_invalid);
+    }
+}
+
+test "Pacb: keys must ascend strictly with lanes at or above ncomp zero" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    {
+        var base = baseRecords();
+        base.keys[1].at = 0; // ties keys[0]
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .key_invalid);
+    }
+    {
+        var base = baseRecords();
+        base.keys[1].at = -720720; // descending
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .key_invalid);
+    }
+    {
+        // A scalar target (host entry 1: ncomp 1) whose value writes
+        // lane 1 — the fixed unused lanes rule.
+        var base = baseRecords();
+        base.trak[0] = .{ .target_id = 1, .registry = 1, .ncomp = 1, .source = SOURCE_KEYS, .scene = 0, .key_start = 0, .key_len = 3 };
+        base.keys[1].value = .{ 0.5, 0.25, 0, 0 };
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .key_invalid);
+    }
+}
+
+test "Pacb: a periodic trigger needs a positive every" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    for ([_]i64{ 0, -480 }) |every| {
+        var base = baseRecords();
+        base.trak[2].trig_every = every;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .trigger_invalid);
+    }
+}
+
+test "Pacb: an explicit schedule is non-empty, ascending, tick-bounded, slice-bounded" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    {
+        var base = baseRecords();
+        base.trak[3].key_len = 0; // empty schedule
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .trigger_invalid);
+    }
+    {
+        var base = baseRecords();
+        base.tick[1] = 5; // ties tick[0]
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .trigger_invalid);
+    }
+    {
+        var base = baseRecords();
+        base.tick[1] = (1 << 53) + 1; // beyond the tick ceiling
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .trigger_invalid);
+    }
+    {
+        var base = baseRecords();
+        base.trak[3].key_start = 1; // 1 + 3 > 3 ticks
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .trigger_invalid);
+    }
+}
+
+test "Pacb: overlapping explicit schedules refuse trigger_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseRecords();
+    // Track 3 slices ticks[0..2); this second explicit track slices
+    // ticks[1..3) — individually valid, overlapping as schedules.
+    base.trak[1] = .{ .target_id = 1, .registry = 1, .ncomp = 1, .source = SOURCE_TRIGGER, .trig_kind = TRIG_EXPLICIT, .key_start = 1, .key_len = 2 };
+    const built = try buildBaseFixture(t.allocator, &base, regs);
+    defer t.allocator.free(built.buf);
+    try expectRecordsRefusal(built.buf, .trigger_invalid);
+}
+
+test "Pacb: a non-zero ease_ref with EASE absent refuses ease_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseRecords();
+    base.keys[1].ease_ref = 3; // the synthesized table is linear alone
+    const built = try buildBaseFixture(t.allocator, &base, regs);
+    defer t.allocator.free(built.buf);
+    try expectRecordsRefusal(built.buf, .ease_invalid);
+}
+
+test "Pacb: a non-zero KEYS pad refuses record_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseRecords();
+    const built = try buildBaseFixture(t.allocator, &base, regs);
+    defer t.allocator.free(built.buf);
+    putU16(built.buf, built.layout.keys + 4 + KEYS_REC_LEN + 26, 1); // key 1 pad
+    try expectRecordsRefusal(built.buf, .record_invalid);
+}
+
+test "Pacb: a scene window end overflow refuses scene_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseRecords();
+    base.scen[1] = .{ .start_tick = 1 << 53, .dur_ticks = std.math.maxInt(i64) };
+    const built = try buildBaseFixture(t.allocator, &base, regs);
+    defer t.allocator.free(built.buf);
+    try expectRecordsRefusal(built.buf, .scene_invalid);
+}
+
+test "Pacb: EMIT lanes enforce ordinal, uniqueness, reserved zero and the join" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const cases = [_]struct { code: RefusalCode, lanes: []const EmitRec }{
+        .{ .code = .record_invalid, .lanes = &.{ .{ .name = 5 }, .{ .name = 1 } } }, // ordinal > 4
+        .{ .code = .record_invalid, .lanes = &.{ .{ .name = 0 }, .{ .name = 0 } } }, // duplicate beat
+        .{ .code = .record_invalid, .lanes = &.{.{ .name = 0, .reserved = 1 }} }, // reserved pad
+        .{ .code = .registry_mismatch, .lanes = &.{.{ .name = 0, .target_id = 3 }} }, // out of join
+        .{ .code = .registry_mismatch, .lanes = &.{.{ .name = 0, .target_id = 0, .registry = 1 }} }, // wrong registry
+    };
+    for (cases) |case| {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = case.lanes,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, case.code);
+    }
+}
+
+test "Pacb: KEYS and TICK presence must match their track consumers" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseRecords();
+
+    // 'KEYS' present with no keys track (expr + periodic only).
+    {
+        const trak = base.trak[1..3];
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &base.emit,
+            .trak = trak,
+            .keys = &base.keys,
+            .scen = &base.scen,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .non_canonical);
+    }
+    // A keys track with 'KEYS' absent.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &base.emit,
+            .trak = &base.trak,
+            .tick = &base.tick,
+            .scen = &base.scen,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .non_canonical);
+    }
+    // 'TICK' present with no explicit trigger.
+    {
+        const trak = base.trak[0..3];
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &base.emit,
+            .trak = trak,
+            .keys = &base.keys,
+            .tick = &base.tick,
+            .scen = &base.scen,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .non_canonical);
+    }
+    // An explicit trigger with 'TICK' absent.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &base.emit,
+            .trak = &base.trak,
+            .keys = &base.keys,
+            .scen = &base.scen,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .non_canonical);
     }
 }
 

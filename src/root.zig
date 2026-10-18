@@ -185,3 +185,40 @@ test "Pacb: frozen cap and header copies match their source definitions" {
         Pacb.EMIT_LANE_CAP,
     );
 }
+
+test "Pacb: frozen record ordinals match their source definitions" {
+    // The wire `source` ordinals are frozen copies of 'PACM''s
+    // MetaTrackRec values (`Abi.TrackSourceKind`), and `trig_kind`
+    // mirrors `TrackTable.Trigger`'s tag order — copies because `Pacb`
+    // must never import `Abi`. Root imports both sides with no cycle:
+    // this is the equality gate the copies depend on.
+    try std.testing.expectEqual(
+        @as(u8, @intFromEnum(Abi.TrackSourceKind.keys)),
+        Pacb.SOURCE_KEYS,
+    );
+    try std.testing.expectEqual(
+        @as(u8, @intFromEnum(Abi.TrackSourceKind.expr)),
+        Pacb.SOURCE_EXPR,
+    );
+    try std.testing.expectEqual(
+        @as(u8, @intFromEnum(Abi.TrackSourceKind.trigger)),
+        Pacb.SOURCE_TRIGGER,
+    );
+    try std.testing.expectEqual(
+        @as(u8, @intFromEnum(Abi.TrackSourceKind.pattern)),
+        Pacb.SOURCE_PATTERN,
+    );
+    const TrigTag = @typeInfo(TrackTable.Trigger).@"union".tag_type.?;
+    try std.testing.expectEqual(
+        @as(u8, @intFromEnum(TrigTag.periodic)),
+        Pacb.TRIG_PERIODIC,
+    );
+    try std.testing.expectEqual(
+        @as(u8, @intFromEnum(TrigTag.at)),
+        Pacb.TRIG_EXPLICIT,
+    );
+    // 'EMIT' name ordinals decode straight into `TrackTable.EmitName`
+    // (no copy); the wire order is the enum's own: beat=0 … t=4.
+    try std.testing.expectEqual(@as(u8, 0), @intFromEnum(TrackTable.EmitName.beat));
+    try std.testing.expectEqual(@as(u8, 4), @intFromEnum(TrackTable.EmitName.t));
+}

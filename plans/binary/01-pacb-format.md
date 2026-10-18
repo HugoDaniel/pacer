@@ -10,7 +10,7 @@ byte-identical through the codec extraction. `Compile.Code` gains variants
 **Gates:** `zig build verify` every phase; `zig build fuzz` from Phase 4;
 determinism gate — pack the same score twice ⇒ byte-identical output.
 **Created 2026-10-18; Phase 1 complete 2026-10-18; Phase 2 in progress
-(T2.1–T2.3 landed 2026-10-18, T2.4–T2.8 open); phases 3–4 not started.**
+(T2.1–T2.4 landed 2026-10-18, T2.5–T2.8 open); phases 3–4 not started.**
 
 ## Why
 
@@ -572,3 +572,56 @@ _(created 2026-10-18; entries appended per phase)_
   ease/control, payload, PACM reader, and coherence remain T2.4–T2.8; no
   `decode`/`DecodedScore`, no corpus/CLI golden byte changed, no
   encoder/CLI/runtime/npm work.
+
+- **2026-10-18 — Phase 2 continued (T2.4 only; phase NOT complete).**
+  `src/Pacb.zig` gained the record-sections stage:
+  `decodeRecords(gpa, bytes, directory, registry, refusal)
+  DecodeError!RecordsStage` — an owned, arena-backed result (`deinit`)
+  carrying `tracks: []const DecodedTrack` (the frozen T2.1
+  representation), `keys: []const TrackTable.Key`, `scenes:
+  []const DecodedScene`, `emit: []const TrackTable.EmitLane` (document
+  order; `TransportStage.transport.emit` stays empty until T2.8 folds
+  them in), and `payload_spans` parallel to tracks — the wire
+  `(payload_off, payload_len)` carry for T2.6, whose copies will fill
+  the still-empty `DecodedSource.expr`/`pattern` arms. Validation:
+  counts over caps (TRAK 256, KEYS 4096, SCEN 64, EMIT ≤ 5 lanes — G10;
+  TICK's cap is T2.1's directory check); canonical presence (a present
+  section is never count-0); `'KEYS'` iff a keys track exists and
+  `'TICK'` iff an explicit-trigger track does (a source/trig_kind
+  ordinals pre-scan owns those two ordinal checks so a shape defect
+  never misreports as a presence contradiction); per record: `ncomp ∈
+  1..4`; the registry-join bound plus the EXACT `(registry, ncomp)`
+  triple of the joined entry — host ids walked out of the stage's owned
+  `'REGS'` bytes, declared ids read from `'DECL'` — refusing
+  `registry_mismatch`; `scene` `NO_SCENE` or `<` the actual `'SCEN'`
+  count (G10 — NOT `MAX_SCENES`); per-source unused-field zero slack
+  (`trig_every/offset` zero for keys/expr/pattern; `payload_off/len`
+  zero for keys/periodic; `key_start/len` zero for expr/pattern); keys
+  runs ≥ 1, slice-bounded through checked u64 adds, strictly ascending,
+  value lanes ≥ ncomp zero; periodic `every > 0`; explicit schedules
+  non-empty, slice-bounded (checked adds), strictly ascending,
+  `|tick| ≤ MAX_TICK`, and non-overlapping in track order (`'TICK'` is
+  the concatenation of every schedule); scene window ends
+  checked-added; `'KEYS'` `ease_ref` must be 0 when `'EASE'` is absent
+  (the synthesized linear default; T2.5 owns the real-table bound);
+  `'EMIT'` lanes: ordinal ≤ 4, unique per name (Eval leans on
+  uniqueness — G10), reserved zero, joined by id AND registry. Section
+  payloads are read through a bounds-defended helper, so a mismatched
+  `directory`/`bytes` pair is a refusal, never a trap (the documented
+  same-buffer precondition plus its defense). RED: genuine
+  missing-export compile errors on `decodeRecords`/`SOURCE_*`/
+  `TRIG_*`, then 17 named WronglyAccepted FAILs against the
+  carry/copy-only increment (one fixture-slice bug found on the way — a
+  presence subcase still held the keys track — fixed, RED re-run clean;
+  one Zig-0.16 reflection-name fix in the root test's tag lookup).
+  GREEN: `zig fmt --check` clean; `zig build test` 7/7 steps,
+  **351/351 tests (290 root + 61 CLI)**; `zig build verify` 15/15 (290
+  native, 37 corpus/0 failed, 93 node/0 skipped, score-docs and
+  cli-golden current); corpus/CLI/docs drift vs `90dc758` zero. The
+  frozen ordinal copies (`SOURCE_*` against `Abi.TrackSourceKind`,
+  `TRIG_*` against `TrackTable.Trigger`'s tag order) are
+  equality-asserted in `src/root.zig` — import-cycle-safe, the same
+  pattern as the worst-case assert. Ease/controls
+  (`'EASE'`/`'STRS'`/`'CTRL'`), payload (`'PAYL'`), the PACM reader,
+  and coherence remain T2.5–T2.8; no `decode`/`DecodedScore`, no
+  corpus/CLI golden byte changed, no encoder/CLI/runtime/npm work.
