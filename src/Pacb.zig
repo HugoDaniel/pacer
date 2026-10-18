@@ -66,8 +66,9 @@
 //!     the packer refuses loudly with the measured count. The text path
 //!     itself stays uncapped.
 //!
-//! INTERIM PHASE-2 BOUNDARY — no production use. This file currently owns
-//! the container header, the directory validator, the frozen caps,
+//! PHASE 2 COMPLETE (decoder wave) — the section stages plus the T2.8
+//! whole-blob assembly. This file owns the container header, the
+//! directory validator, the frozen caps,
 //! `pacbWorstCase`, the T2.2 transport stage (`decodeTransport`:
 //! `'TRAN'`/`'TMPO'` domains, then the `TimeMap` rebuild in compile's own
 //! op order), the T2.3 registry-identity stage (`decodeRegistry`:
@@ -79,34 +80,42 @@
 //! `'TRAK'`/`'EMIT'` land there, `'CTRL'`'s with T2.5), the T2.5
 //! ease/control stage (`decodeEaseControls`: `'EASE'` program
 //! invariants + the synthesized linear default, `'STRS'`' sorted unique
-//! non-reserved id table, `'CTRL'` join/env-only coherence), and the
-//! T2.6 payload stage (`decodePayloads`: `'PAYL'` arithmetic/caps/
+//! non-reserved id table, `'CTRL'` join/env-only coherence), the T2.6
+//! payload stage (`decodePayloads`: `'PAYL'` arithmetic/caps/
 //! span discipline + the per-payload single-root structural walk over
 //! `sjon.BinaryCursor`, schema-free, producing the per-track arena
-//! copies). Stages expose owned, validated, typed results —
-//! `parseDirectory` is still a structure-only view,
-//! `TransportStage.transport.emit` stays empty (`RecordsStage.emit`
-//! holds the lanes until T2.8's assembly), and
-//! `DecodedSource.expr`/`pattern` stay empty in `RecordsStage`
-//! (`PayloadStage.payloads` carries the validated copies parallel to
-//! the tracks until T2.8's assembly zips them in). The whole-blob
-//! `decode(...) DecodedScore` entry point is deliberately absent until
-//! every section stage validates (T2.8): returning a successful score
-//! before the PACM cross-check would be a lying API.
+//! copies), and the T2.8 whole-blob assembly (`decode` →
+//! `DecodedScore` + `verifyRouting`, the PACM coherence cross-check).
+//! The stages remain individually public — each owns its section's
+//! validation — and `decode` is the only entry point that can return a
+//! score: it never returns one the embedded PACM has not cross-checked
+//! (`pacm_fnv` fast reject → `Pacm.decode` → `verifyRouting`).
+//!
+//! OWNERSHIP (`decode`): the score's arena is created FIRST and its
+//! allocator is handed to every stage as that stage's `gpa` — a clean
+//! ownership transfer, not a copy chain: each stage's sub-arena
+//! allocates inside memory the returned score already owns, so the
+//! stage structs die at return with their memory retained, no stage
+//! arena can outlive `score.deinit()` (the one free), and a failed
+//! stage's errdefer plus the outer errdefer leak nothing. Everything
+//! the score exposes — registry bytes, control ids, payload copies,
+//! trigger schedules, transport segments, the metadata blob — lives in
+//! that one arena; nothing aliases the input buffer. The stages' own
+//! standalone contracts (borrow-vs-own, `deinit`) are unchanged: a
+//! caller that passes an ordinary allocator still gets a
+//! self-contained stage.
 //!
 //! Imports: std, sjon (`Pattern.MAX_TICK`, `BinaryCursor`, `Binary`),
-//! `PactCodec`, `TimeMap`, `TrackTable`, `Easing` (the
-//! T2.2+T2.3+T2.4+T2.5+T2.6 subset of the frozen end-state list).
-//! Later stages add `Pacm` as their GREEN needs it; this file must
-//! NEVER import `Compile`, `Abi`, `Schema`, or `Driver` — the one test
-//! that compares decoded transport against the compiler (`decoded
-//! transport equals the compiled transport field-for-field`) imports
-//! `Compile`/`test_support` INSIDE its test body only, so a normal
-//! (non-test) build never analyses them through this file; that
-//! textual cohabitation is the recorded plan-02 import seam, not
-//! strict closure. The frozen `ExprTrack.reserved_names` copy lives
-//! here for the same reason (asserted against its source in
-//! `src/root.zig`).
+//! `PactCodec`, `TimeMap`, `TrackTable`, `Easing`, `Pacm` (the frozen
+//! end-state set). This file must NEVER import `Compile`, `Abi`,
+//! `Schema`, or `Driver` — the compiler-oracle tests (`decoded
+//! transport equals the compiled transport`, the T2.8 ownership and
+//! coherence suite) import `Compile`/`test_support`/`Abi`/`ExprTrack`
+//! INSIDE test bodies only, so a normal (non-test) build never
+//! analyses them through this file; that textual cohabitation is the
+//! recorded plan-02 import seam, not strict closure. The frozen
+//! `ExprTrack.reserved_names` copy lives here for the same reason
+//! (asserted against its source in `src/root.zig`).
 
 const std = @import("std");
 const sjon = @import("sjon");
@@ -114,6 +123,7 @@ const PactCodec = @import("PactCodec.zig");
 const TimeMap = @import("TimeMap.zig");
 const TrackTable = @import("TrackTable.zig");
 const Easing = @import("Easing.zig");
+const Pacm = @import("Pacm.zig");
 
 /// `"PACB"` read as a little-endian u32.
 pub const MAGIC: u32 = 0x42434150;
@@ -2167,6 +2177,296 @@ fn walkPayloadStructurally(
     }
 }
 
+// ---------------------------------------------------------------------------
+// T2.8 — whole-blob decode: DecodedScore assembly + PACM coherence
+// ---------------------------------------------------------------------------
+
+/// The whole decoded score: every stage's owned result assembled into
+/// ONE arena-backed value (the T2.1 §A O-a repr, plus the header's
+/// `required_features` word and the embedded `'PACM'` blob — carried
+/// owned for the future stages that route on them: 02's runtime, the
+/// T3.1 encoder's self-check). No AST anywhere: the `expr`/`pattern`
+/// arms are payload byte slices, `trigger` an arena-owned schedule,
+/// `keys` the flat stream — the decoded score is data at rest,
+/// evaluable but never a compiled tree.
+pub const DecodedScore = struct {
+    arena: std.heap.ArenaAllocator,
+    /// The header's feature word (bit0 = pattern tracks), already
+    /// cross-checked against the track table by `decodeRecords`.
+    required_features: u32,
+    /// The final transport: the T2.2 rebuild with `'EMIT'` folded in
+    /// (the lanes were `RecordsStage.emit`, arena-owned like everything
+    /// else).
+    transport: TrackTable.Transport,
+    tracks: []const DecodedTrack,
+    keys: []const TrackTable.Key,
+    programs: []const Easing.Program,
+    controls: []const DecodedControl,
+    scenes: []const DecodedScene,
+    regs: []const u8,
+    declared: []const Decl,
+    /// Deep, arena-owned copy of the embedded `'PACM'` blob — the one
+    /// byte range the section stages never copied (they validate the
+    /// sections; the metadata is copied once, here).
+    pacm: []const u8,
+    pact_fnv: u64,
+    pacm_fnv: u64,
+
+    pub fn deinit(self: *DecodedScore) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+/// Bit-for-bit `[4]f32` lane equality. Both wires spell one producer
+/// pass, so equal BITS are the coherence predicate — `==` would misread
+/// a NaN lane present on both sides as a lie.
+fn lanesEq(a: [4]f32, b: [4]f32) bool {
+    for (a, b) |x, y| {
+        if (@as(u32, @bitCast(x)) != @as(u32, @bitCast(y))) return false;
+    }
+    return true;
+}
+
+/// The PACM↔section coherence cross-check (T2.8; placement per the
+/// focused ruling — here, not in std-only `Pacm`). Compares every
+/// ROUTING field the two spellings of one compile must agree on —
+/// transport scalars, counts, per-track identity + the per-source
+/// key-range rule (B1/G9: a keys track's PACM range IS the `'TRAK'`
+/// fields; every other source's meta range is the constant `(0,0)`,
+/// never compared against a real `'TICK'` slice), key content, control
+/// identity/values, the shared scene fields, and `'EASE'`/`'TMPO'`
+/// presence + content. Documented spans and source strings (name spans,
+/// value spans, track spans) are TRUSTED, never cross-checked: the
+/// decoder has no source text, and those fields are anchors for a
+/// consumer that does. Returns the refusal code (always
+/// `meta_incoherent` today) or null when the metadata tells the truth.
+pub fn verifyRouting(view: *const Pacm.MetaView, score: *const DecodedScore) ?RefusalCode {
+    // Transport scalars: the PACM header restates 'TRAN''s truth.
+    if (@as(u64, @bitCast(view.bpm)) != @as(u64, @bitCast(score.transport.map.bpm))) {
+        return .meta_incoherent;
+    }
+    if (view.beats_per_bar != score.transport.map.beats_per_bar) {
+        return .meta_incoherent;
+    }
+    if (view.dur != score.transport.dur) return .meta_incoherent;
+    if (view.end_loop != (score.transport.end == .loop)) return .meta_incoherent;
+
+    // Counts: three more spellings of one table.
+    if (view.trackCount() != score.tracks.len) return .meta_incoherent;
+    if (view.keyCount() != score.keys.len) return .meta_incoherent;
+    if (view.controlCount() != score.controls.len) return .meta_incoherent;
+
+    // Per-track identity + the per-source key-range rule (B1/G9).
+    for (score.tracks, 0..) |track, i| {
+        const meta = view.track(i);
+        if (meta.target_id != track.target_id) return .meta_incoherent;
+        if (meta.registry != track.registry) return .meta_incoherent;
+        if (meta.ncomp != track.ncomp) return .meta_incoherent;
+        switch (track.source) {
+            // A keys track's PACM range IS the 'TRAK' fields.
+            .keys => |ks| {
+                if (meta.source != .keys) return .meta_incoherent;
+                if (meta.key_start != ks.start) return .meta_incoherent;
+                if (meta.key_len != ks.len) return .meta_incoherent;
+            },
+            // Every other source's meta range is the constant (0,0) —
+            // `Abi.encodeMeta`'s own spelling (`src/Abi.zig:437-440`);
+            // it is never compared against a real 'TICK' slice, which
+            // 'TRAK' carries for an explicit trigger.
+            .expr, .trigger, .pattern => {
+                const want: u8 = switch (track.source) {
+                    .expr => SOURCE_EXPR,
+                    .trigger => SOURCE_TRIGGER,
+                    .pattern => SOURCE_PATTERN,
+                    .keys => unreachable,
+                };
+                if (@intFromEnum(meta.source) != want) return .meta_incoherent;
+                if (meta.key_start != 0 or meta.key_len != 0) return .meta_incoherent;
+            },
+        }
+    }
+
+    // Key content: the flat stream, at + value lanes (bit-equal — both
+    // spellings come from one producer pass; a NaN lane on both sides
+    // is agreement, not a lie).
+    for (score.keys, 0..) |key, i| {
+        const meta = view.key(i);
+        if (meta.at != key.at) return .meta_incoherent;
+        if (!lanesEq(meta.value, key.value)) return .meta_incoherent;
+    }
+
+    // Controls: identity (id, target presence + triple, ncomp, kind)
+    // and value lanes; min/max compare presence AND lanes (the absent
+    // side is zero-spelled on both wires, but a flag lie refuses even
+    // when the lanes happen to be zero).
+    var it = view.controls();
+    for (score.controls) |ctl| {
+        const meta = it.next() orelse return .meta_incoherent;
+        if (!std.mem.eql(u8, meta.id, ctl.id)) return .meta_incoherent;
+        if (ctl.target) |tg| {
+            if (meta.target_id == null or meta.target_id.? != tg.id) {
+                return .meta_incoherent;
+            }
+            if (meta.registry != tg.registry) return .meta_incoherent;
+        } else {
+            if (meta.target_id != null) return .meta_incoherent;
+            if (meta.registry != 0) return .meta_incoherent;
+        }
+        if (meta.ncomp != ctl.ncomp) return .meta_incoherent;
+        if (@intFromEnum(meta.kind) != @intFromEnum(ctl.kind)) return .meta_incoherent;
+        if (!lanesEq(meta.value, ctl.value)) return .meta_incoherent;
+        if ((meta.min == null) != (ctl.min == null)) return .meta_incoherent;
+        if (meta.min != null and !lanesEq(meta.min.?, ctl.min.?)) return .meta_incoherent;
+        if ((meta.max == null) != (ctl.max == null)) return .meta_incoherent;
+        if (meta.max != null and !lanesEq(meta.max.?, ctl.max.?)) return .meta_incoherent;
+    }
+
+    // Scenes: the shared window fields; the name span is a documented
+    // source string — trusted, never cross-checked.
+    if (view.sceneCount() != score.scenes.len) return .meta_incoherent;
+    for (score.scenes, 0..) |scene, i| {
+        const meta = view.scene(i);
+        if (meta.start_tick != scene.start_tick) return .meta_incoherent;
+        if (meta.dur_ticks != scene.dur_ticks) return .meta_incoherent;
+    }
+
+    // 'EASE': presence parity first — a present 'EASE' section is the
+    // only way programs.len > 1 (the synthesized linear default alone is
+    // the omitted case) — then content: every program field, and the
+    // refs array as a second spelling of the key stream's ease_ref
+    // fields (elementwise, like the PACB-side stage rule).
+    const ease_present = score.programs.len > 1;
+    if ((view.ease != null) != ease_present) return .meta_incoherent;
+    if (ease_present) {
+        if (view.easeProgramCount() != score.programs.len) return .meta_incoherent;
+        for (score.programs, 0..) |*prog, i| {
+            const meta = view.easeProgram(i);
+            if (meta.len != prog.len) return .meta_incoherent;
+            for (meta.stages, prog.stages) |ms, ps| {
+                if (@as(u32, @bitCast(ms.t_end)) != @as(u32, @bitCast(ps.t_end))) return .meta_incoherent;
+                if (@as(u32, @bitCast(ms.v_base)) != @as(u32, @bitCast(ps.v_base))) return .meta_incoherent;
+                if (@as(u32, @bitCast(ms.v_span)) != @as(u32, @bitCast(ps.v_span))) return .meta_incoherent;
+                if (ms.ops_len != ps.ops_len) return .meta_incoherent;
+                for (ms.ops, ps.ops) |mo, po| {
+                    if (mo.code != @intFromEnum(po.code)) return .meta_incoherent;
+                    if (!lanesEq(mo.params, po.params)) return .meta_incoherent;
+                }
+            }
+        }
+        if (view.easeRefCount() != score.keys.len) return .meta_incoherent;
+        for (score.keys, 0..) |key, i| {
+            if (view.easeRef(i) != key.ease_ref) return .meta_incoherent;
+        }
+    }
+
+    // 'TMPO': presence parity, then the authored segment table.
+    const tmpo_present = score.transport.segments.len > 1;
+    if ((view.tmpo != null) != tmpo_present) return .meta_incoherent;
+    if (tmpo_present) {
+        if (view.tempoCount() != score.transport.segments.len) return .meta_incoherent;
+        for (score.transport.segments, 0..) |seg, i| {
+            const meta = view.tempoSeg(i);
+            if (meta.tick != seg.start_tick) return .meta_incoherent;
+            if (@as(u64, @bitCast(meta.bpm)) != @as(u64, @bitCast(seg.bpm))) {
+                return .meta_incoherent;
+            }
+        }
+    }
+
+    return null;
+}
+
+/// Decode one whole `'PACB'` buffer into an owned score. Validation is
+/// the full staged chain — directory, transport, registry identity,
+/// records, ease/control, payloads — closed by the PACM coherence
+/// cross-check (`pacm_fnv` fast reject, `Pacm.decode` structural,
+/// `verifyRouting` semantic). Refusal classes: structural garbage in
+/// the embedded PACM ⇒ `meta_malformed`; every PACM↔section
+/// disagreement (including the checksum alone) ⇒ `meta_incoherent`; a
+/// missing required `'PACM'` ⇒ `non_canonical`; earlier classes per
+/// their owning stage. The returned score owns every byte it exposes
+/// (see OWNERSHIP in the module header); `bytes` may be freed or
+/// clobbered the moment `decode` returns.
+pub fn decode(
+    gpa: std.mem.Allocator,
+    bytes: []const u8,
+    refusal: ?*Refusal,
+) DecodeError!DecodedScore {
+    var directory = try parseDirectory(bytes, refusal);
+    const pacm_sec = directory.find(.pacm) orelse
+        return fail(refusal, .non_canonical, payloadStart(&directory));
+
+    // OWNERSHIP TRANSFER, not a copy chain: the score's arena is created
+    // first and every stage receives ITS allocator as the stage's `gpa`,
+    // so each stage's sub-arena allocates inside memory the returned
+    // score already owns. The stage structs die at return with their
+    // memory retained — `score.deinit()` is the one free — and on any
+    // failure path the errdefer below (the local copy of the same arena
+    // state; the partially built score is never returned) releases
+    // everything the stages allocated. No stage arena can dangle.
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    const transport = try decodeTransport(a, bytes, &directory, refusal);
+    const registry = try decodeRegistry(a, bytes, &directory, refusal);
+    const records = try decodeRecords(a, bytes, &directory, &registry, refusal);
+    const ease = try decodeEaseControls(a, bytes, &directory, &records, &registry, refusal);
+    const payloads = try decodePayloads(a, bytes, &directory, &records, refusal);
+
+    // Assembly: zip the validated payload copies into the still-empty
+    // expr/pattern arms and fold `'EMIT'` into the transport.
+    const tracks = a.alloc(DecodedTrack, records.tracks.len) catch return error.OutOfMemory;
+    for (records.tracks, payloads.payloads, tracks) |rec, payload, *out| {
+        out.* = rec;
+        switch (out.source) {
+            .expr => out.source = .{ .expr = payload },
+            .pattern => out.source = .{ .pattern = payload },
+            .keys, .trigger => {},
+        }
+    }
+    var final_transport = transport.transport;
+    final_transport.emit = records.emit;
+
+    // The metadata blob is the one thing the stages never copied: own it.
+    const pacm_payload = try sectionPayload(bytes, pacm_sec, refusal);
+    const pacm_copy = a.dupe(u8, pacm_payload) catch return error.OutOfMemory;
+
+    const score: DecodedScore = .{
+        .arena = arena,
+        .required_features = directory.required_features,
+        .transport = final_transport,
+        .tracks = tracks,
+        .keys = records.keys,
+        .programs = ease.programs,
+        .controls = ease.controls,
+        .scenes = records.scenes,
+        .regs = registry.regs,
+        .declared = registry.declared,
+        .pacm = pacm_copy,
+        .pact_fnv = registry.pact_fnv,
+        .pacm_fnv = transport.pacm_fnv,
+    };
+
+    // The PACM coherence close, cheap-to-dear: the 'TRAN' fast-reject
+    // checksum first (it must agree with the full walk — and catch the
+    // case only it can see, a lying checksum over an honest blob), then
+    // the structural decode, then the field-for-field cross-check. The
+    // view borrows the INPUT bytes (`Pacm`'s contract) and is read only
+    // here, before `decode` returns.
+    const tran_sec = directory.find(.tran).?; // decodeTransport proved presence
+    if (score.pacm_fnv != fnv1a64(pacm_payload)) {
+        return fail(refusal, .meta_incoherent, tran_sec.off + 48);
+    }
+    const view = Pacm.decode(pacm_payload) orelse
+        return fail(refusal, .meta_malformed, pacm_sec.off);
+    if (verifyRouting(&view, &score)) |code| {
+        return fail(refusal, code, pacm_sec.off);
+    }
+    return score;
+}
+
 /// Frozen copy of `Abi.metaWorstCase`'s arithmetic: the largest `'PACM'`
 /// blob at every cap, given a per-control-id `str_allowance`. `Pacb` never
 /// imports `Abi`; `src/root.zig` equality-asserts this function against
@@ -3643,6 +3943,12 @@ const RecordsSpec = struct {
     ctrl: ?[]const CtrlRec = null,
     /// `'PAYL'` payload region bytes (T2.6), written verbatim.
     payl: ?[]const u8 = null,
+    /// `'PACM'` bytes (T2.8): null keeps the historical 40-byte zero
+    /// stub (unchecked placeholder), a slice writes the real blob.
+    pacm: ?[]const u8 = null,
+    /// Omit the `'PACM'` section entirely — the T2.8 required-presence
+    /// mutation. (A non-null `pacm` overrides it.)
+    pacm_absent: bool = false,
     /// The header `required_features` word (producer truth: bit0 iff a
     /// pattern track rides `trak`). Zero by default — fixtures without
     /// pattern tracks.
@@ -3654,7 +3960,10 @@ const RecordsSpec = struct {
 
 /// Absolute payload offsets of the record sections (0 = absent; every
 /// present payload starts at least at the 184-byte all-kinds boundary).
+/// `tran`/`pacm` are always present in a built fixture unless
+/// `pacm_absent` spelled the omission (then `pacm` is 0).
 const RecordsLayout = struct {
+    tran: u32 = 0,
     emit: u32 = 0,
     trak: u32 = 0,
     keys: u32 = 0,
@@ -3664,6 +3973,7 @@ const RecordsLayout = struct {
     scen: u32 = 0,
     strs: u32 = 0,
     payl: u32 = 0,
+    pacm: u32 = 0,
 };
 
 const BuiltFixture = struct { buf: []u8, layout: RecordsLayout };
@@ -3690,6 +4000,7 @@ fn buildRecordsFixture(
     if (spec.scen != null) n += 1;
     if (spec.strs != null) n += 1;
     if (spec.payl != null) n += 1;
+    if (spec.pacm_absent) n -= 1; // TRAN + PACM is the floor of 2
 
     var pos: usize = HEADER_LEN + n * DIRECTORY_ENTRY_LEN;
     const tran_off = pos;
@@ -3739,7 +4050,7 @@ fn buildRecordsFixture(
     const payl_len: usize = if (spec.payl) |p| 4 + p.len else 0;
     pos += payl_len;
     const pacm_off = pos;
-    const pacm_len: usize = 40;
+    const pacm_len: usize = if (spec.pacm_absent) 0 else if (spec.pacm) |p| p.len else 40;
 
     const buf = try alloc.alloc(u8, pacm_off + pacm_len);
     @memset(buf, 0);
@@ -3892,10 +4203,16 @@ fn buildRecordsFixture(
         @memcpy(buf[payl_off + 4 ..][0..payload_region.len], payload_region);
         index += 1;
     }
-    writeDirEntry(buf, n - 1, .pacm, pacm_off, pacm_len);
+    if (!spec.pacm_absent) {
+        writeDirEntry(buf, n - 1, .pacm, pacm_off, pacm_len);
+        if (spec.pacm) |p| @memcpy(buf[pacm_off..][0..p.len], p);
+        // null (the historical placeholder) leaves the 40 stub bytes
+        // zeroed, exactly as before T2.8.
+    }
     writeTranRecord(buf, tran_off, spec.transport);
 
     return .{ .buf = buf, .layout = .{
+        .tran = @intCast(tran_off),
         .emit = if (spec.emit != null) @intCast(emit_off) else 0,
         .trak = if (spec.trak != null) @intCast(trak_off) else 0,
         .keys = if (spec.keys != null) @intCast(keys_off) else 0,
@@ -3905,6 +4222,7 @@ fn buildRecordsFixture(
         .scen = if (spec.scen != null) @intCast(scen_off) else 0,
         .strs = if (spec.strs != null) @intCast(strs_off) else 0,
         .payl = if (spec.payl != null) @intCast(payl_off) else 0,
+        .pacm = if (spec.pacm_absent) 0 else @intCast(pacm_off),
     } };
 }
 
@@ -6044,4 +6362,954 @@ test "Pacb: KNOWN GAP — tree-trailing comments payloads currently refuse" {
     const built = try buildPayloadFixture(t.allocator, payload, regs);
     defer t.allocator.free(built.buf);
     try expectPayloadRefusal(built.buf, .payload_malformed);
+}
+
+// ---------------------------------------------------------------------------
+// T2.8 — whole-blob decode tests: assembly, ownership, PACM coherence
+// ---------------------------------------------------------------------------
+//
+// Every fixture here is REAL: the embedded PACM is `Abi.encodeMeta`'s
+// output over a score compiled in-test through `test_support.schema()`
+// (the Compile/test_support/Abi/ExprTrack imports stay function-local —
+// the recorded plan-02 import seam, so a non-test build never analyses
+// them through this file), and the PACB sections are the test-side
+// mirror of what the T3.1 encoder will emit for the same result.
+// Coherence mutations patch the embedded PACM bytes IN PLACE and then
+// RECOMPUTE `'TRAN'`'s pacm_fnv, so every refusal observed is the
+// semantic predicate's own — never the checksum's. The fnv-only case
+// is spelled separately (blob untouched, checksum lied about).
+
+/// The host join every full-fixture score compiles against: one scalar
+/// visual target, one 3-lane visual target, one scalar audio target.
+const full_host = [_]PactCodec.Target{
+    .{ .name = "circle-radius", .ncomp = 1 },
+    .{ .name = "tint", .ncomp = 3 },
+    .{ .name = "boom", .ncomp = 1, .registry = 1 },
+};
+
+/// The everything score: keys (scened, eased) + expr + explicit trigger
+/// + a targeted control + an env-only control + a tempo map + a scene.
+const full_source: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+    \\(tempo :at 8b :bpm 160)
+    \\(scene :name drop :at 2bar :dur 2bar
+    \\  (track :target circle-radius
+    \\    (key :at 0b :value 30)
+    \\    (key :at 4b :value 140 :ease (steps :n 8))))
+    \\(track :target tint :expr [1 0 0])
+    \\(trigger :target boom :at [1b 2b 4b])
+    \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
+    \\(control :id sway :value 0.12)
+;
+
+/// Same score, linear easing only — the PACM omits `'EASE'` (the
+/// programs table is the default alone).
+const linear_source: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+    \\(tempo :at 8b :bpm 160)
+    \\(scene :name drop :at 2bar :dur 2bar
+    \\  (track :target circle-radius
+    \\    (key :at 0b :value 30)
+    \\    (key :at 4b :value 140)))
+    \\(track :target tint :expr [1 0 0])
+    \\(trigger :target boom :at [1b 2b 4b])
+    \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
+    \\(control :id sway :value 0.12)
+;
+
+/// Same score, constant tempo — the PACM omits `'TMPO'`.
+const flat_source: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+    \\(scene :name drop :at 2bar :dur 2bar
+    \\  (track :target circle-radius
+    \\    (key :at 0b :value 30)
+    \\    (key :at 4b :value 140 :ease (steps :n 8))))
+    \\(track :target tint :expr [1 0 0])
+    \\(trigger :target boom :at [1b 2b 4b])
+    \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
+    \\(control :id sway :value 0.12)
+;
+
+/// One more control — `control_count` 3 against the full score's 2.
+const extra_control_source: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+    \\(tempo :at 8b :bpm 160)
+    \\(scene :name drop :at 2bar :dur 2bar
+    \\  (track :target circle-radius
+    \\    (key :at 0b :value 30)
+    \\    (key :at 4b :value 140 :ease (steps :n 8))))
+    \\(track :target tint :expr [1 0 0])
+    \\(trigger :target boom :at [1b 2b 4b])
+    \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
+    \\(control :id sway :value 0.12)
+    \\(control :id extra :value 0.5)
+;
+
+/// One more key — `key_count` 3 against the full score's 2.
+const extra_key_source: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+    \\(tempo :at 8b :bpm 160)
+    \\(scene :name drop :at 2bar :dur 2bar
+    \\  (track :target circle-radius
+    \\    (key :at 0b :value 30)
+    \\    (key :at 4b :value 140 :ease (steps :n 8))
+    \\    (key :at 6b :value 90)))
+    \\(track :target tint :expr [1 0 0])
+    \\(trigger :target boom :at [1b 2b 4b])
+    \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
+    \\(control :id sway :value 0.12)
+;
+
+/// One more track — `track_count` 4 against the full score's 3.
+const extra_track_source: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+    \\(tempo :at 8b :bpm 160)
+    \\(scene :name drop :at 2bar :dur 2bar
+    \\  (track :target circle-radius
+    \\    (key :at 0b :value 30)
+    \\    (key :at 4b :value 140 :ease (steps :n 8))))
+    \\(track :target tint :expr [1 0 0])
+    \\(track :target circle-radius :expr 0.5)
+    \\(trigger :target boom :at [1b 2b 4b])
+    \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
+    \\(control :id sway :value 0.12)
+;
+
+/// A compile result plus its real `'PACM'` bytes, moved into place
+/// together (the result is borrowed by pointer afterwards, never moved
+/// again — the compile-result borrow rule).
+const ScoreAndPacm = struct {
+    r: @import("Compile.zig").CompileResult,
+    pacm: []u8,
+};
+
+fn compileOk(
+    alloc: std.mem.Allocator,
+    source: [:0]const u8,
+    host: []const PactCodec.Target,
+) !@import("Compile.zig").CompileResult {
+    const Compile = @import("Compile.zig");
+    const test_support = @import("test_support.zig");
+    var r = try Compile.compile(alloc, test_support.schema(), source, host);
+    if (!r.ok()) return error.FixtureCompileFailed;
+    return r;
+}
+
+fn compileWithPacm(
+    alloc: std.mem.Allocator,
+    source: [:0]const u8,
+    host: []const PactCodec.Target,
+) !ScoreAndPacm {
+    var r = try compileOk(alloc, source, host);
+    errdefer r.deinit();
+    const pacm = try encodePacm(alloc, &r);
+    return .{ .r = r, .pacm = pacm };
+}
+
+/// The real producer's `'PACM'` bytes for one compiled fixture score.
+fn encodePacm(alloc: std.mem.Allocator, r: anytype) ![]u8 {
+    const Abi = @import("Abi.zig");
+    const buf = try alloc.alloc(u8, Abi.metaEncodedLen(r));
+    _ = try Abi.encodeMeta(r, buf);
+    return buf;
+}
+
+/// `'STRS'` canonical sort order as a `std.mem.sort` comparator.
+fn strsLess(_: void, a: []const u8, b: []const u8) bool {
+    return strsEntryLess(a, b);
+}
+
+/// Build a whole `'PACB'` whose every section mirrors one compile
+/// result — the test-side twin of the T3.1 encoder's mirror: `'TRAN'`
+/// from the transport (+ both checksums over the real bytes), `'REGS'`
+/// the canonical host `'PACT'`, `'DECL'` the merged join's tail, the
+/// record sections from the table, `'EASE'`/`'SCEN'` per the canonical
+/// presence rules, `'STRS'` the sorted control ids, `'PAYL'` the given
+/// payload bytes (one per expr/pattern track, in track order), and the
+/// given PACM blob verbatim (the coherent case passes the same result's
+/// own emission; the coherence tests pass another score's).
+fn buildScoreFixture(
+    alloc: std.mem.Allocator,
+    r: anytype,
+    host: []const PactCodec.Target,
+    payloads: []const []const u8,
+    pacm: []const u8,
+) !BuiltFixture {
+    const table = &r.table.?;
+    const want = &table.transport;
+
+    const regs = try encodePact(alloc, host);
+    defer alloc.free(regs);
+    const decl_recs = try alloc.alloc(DeclRec, r.targets.len - host.len);
+    defer alloc.free(decl_recs);
+    for (decl_recs, r.targets[host.len..]) |*rec, tgt| {
+        rec.* = .{ .registry = tgt.registry, .ncomp = tgt.ncomp };
+    }
+    const tmpo_recs = try alloc.alloc(TmpoRec, want.segments.len);
+    defer alloc.free(tmpo_recs);
+    for (tmpo_recs, want.segments) |*rec, seg| {
+        rec.* = .{ .tick = seg.start_tick, .bpm = seg.bpm };
+    }
+    const emit_recs = try alloc.alloc(EmitRec, want.emit.len);
+    defer alloc.free(emit_recs);
+    for (emit_recs, want.emit) |*rec, lane| {
+        rec.* = .{
+            .name = @intFromEnum(lane.name),
+            .registry = lane.registry,
+            .target_id = lane.target_id,
+        };
+    }
+    const trak_recs = try alloc.alloc(TrakRec, table.tracks.len);
+    defer alloc.free(trak_recs);
+    const key_recs = try alloc.alloc(KeyRec, table.keys.len);
+    defer alloc.free(key_recs);
+    for (key_recs, table.keys) |*rec, key| {
+        rec.* = .{ .at = key.at, .value = key.value, .ease_ref = key.ease_ref };
+    }
+    var tick_total: usize = 0;
+    for (table.tracks) |track| switch (track.source) {
+        .trigger => |trig| switch (trig) {
+            .at => |ats| tick_total += ats.len,
+            .periodic => {},
+        },
+        else => {},
+    };
+    const tick_recs = try alloc.alloc(i64, tick_total);
+    defer alloc.free(tick_recs);
+    const scen_recs = try alloc.alloc(ScenRec, table.scenes.len);
+    defer alloc.free(scen_recs);
+    for (scen_recs, table.scenes) |*rec, scene| {
+        rec.* = .{ .start_tick = scene.start_tick, .dur_ticks = scene.dur_ticks };
+    }
+    const ctrl_recs = try alloc.alloc(CtrlRec, table.controls.len);
+    defer alloc.free(ctrl_recs);
+    const strs_ids = try alloc.alloc([]const u8, table.controls.len);
+    defer alloc.free(strs_ids);
+    for (strs_ids, table.controls) |*slot, ctl| slot.* = ctl.id;
+    std.mem.sort([]const u8, strs_ids, {}, strsLess);
+    for (ctrl_recs, table.controls) |*rec, ctl| {
+        var flags: u8 = 0;
+        if (ctl.min != null) flags |= 1;
+        if (ctl.max != null) flags |= 2;
+        rec.* = .{
+            .id = ctl.id,
+            .target_id = if (ctl.target) |tg| tg.id else TrackTable.NO_TARGET,
+            .registry = if (ctl.target) |tg| tg.registry else 0,
+            .ncomp = ctl.ncomp,
+            .type = @intFromEnum(ctl.kind),
+            .flags = flags,
+            .value = ctl.value,
+            .min = ctl.min orelse .{ 0, 0, 0, 0 },
+            .max = ctl.max orelse .{ 0, 0, 0, 0 },
+        };
+    }
+
+    // 'TRAK' rows + the concatenated 'TICK'/'PAYL' regions, cursoring
+    // through the payload/tick streams exactly as the encoder will.
+    var payl_cursor: u32 = 0;
+    var tick_cursor: u32 = 0;
+    var payl_i: usize = 0;
+    var tick_i: usize = 0;
+    for (trak_recs, table.tracks) |*rec, track| {
+        rec.* = .{
+            .target_id = track.target_id,
+            .registry = track.registry,
+            .ncomp = track.ncomp,
+            .scene = track.scene,
+        };
+        switch (track.source) {
+            .keys => |ks| {
+                rec.source = SOURCE_KEYS;
+                rec.key_start = ks.start;
+                rec.key_len = ks.len;
+            },
+            .expr, .pattern => {
+                const bytes = payloads[payl_i];
+                payl_i += 1;
+                rec.source = if (track.source == .expr) SOURCE_EXPR else SOURCE_PATTERN;
+                rec.payload_off = payl_cursor;
+                rec.payload_len = @intCast(bytes.len);
+                payl_cursor += @intCast(bytes.len);
+            },
+            .trigger => |trig| switch (trig) {
+                .periodic => |p| {
+                    rec.source = SOURCE_TRIGGER;
+                    rec.trig_kind = TRIG_PERIODIC;
+                    rec.trig_every = p.every;
+                    rec.trig_offset = p.offset;
+                },
+                .at => |ats| {
+                    rec.source = SOURCE_TRIGGER;
+                    rec.trig_kind = TRIG_EXPLICIT;
+                    rec.key_start = tick_cursor;
+                    rec.key_len = @intCast(ats.len);
+                    tick_cursor += @intCast(ats.len);
+                    for (ats) |at| {
+                        tick_recs[tick_i] = at;
+                        tick_i += 1;
+                    }
+                },
+            },
+        }
+    }
+
+    var payl_region_len: usize = 0;
+    for (payloads) |p| payl_region_len += p.len;
+    const payl_region = try alloc.alloc(u8, payl_region_len);
+    defer alloc.free(payl_region);
+    {
+        var off: usize = 0;
+        for (payloads) |p| {
+            @memcpy(payl_region[off..][0..p.len], p);
+            off += p.len;
+        }
+    }
+
+    var features: u32 = 0;
+    for (table.tracks) |track| {
+        if (track.source == .pattern) features = FEATURE_PATTERN_TRACKS;
+    }
+
+    return buildRecordsFixture(alloc, .{
+        .transport = .{
+            .bpm = want.map.bpm,
+            .beats_per_bar = want.map.beats_per_bar,
+            .dur = want.dur,
+            .end_loop = want.end == .loop,
+            .host_targets = @intCast(host.len),
+            .declared_targets = @intCast(r.targets.len - host.len),
+            .pact_fnv = fnv(regs),
+            .pacm_fnv = fnv(pacm),
+        },
+        .tmpo = if (want.segments.len > 1) tmpo_recs else &.{},
+        .regs = regs,
+        .decl = decl_recs,
+        .emit = if (emit_recs.len > 0) emit_recs else null,
+        .trak = trak_recs,
+        .keys = if (key_recs.len > 0) key_recs else null,
+        .tick = if (tick_recs.len > 0) tick_recs else null,
+        .scen = if (scen_recs.len > 0) scen_recs else null,
+        .ease = if (table.programs.len > 1) table.programs else null,
+        .strs = if (strs_ids.len > 0) strs_ids else null,
+        .ctrl = if (ctrl_recs.len > 0) ctrl_recs else null,
+        .payl = if (payl_region.len > 0) payl_region else null,
+        .features = features,
+        .pacm = pacm,
+    });
+}
+
+fn expectDecodeRefusal(bytes: []const u8, code: RefusalCode) !void {
+    var refusal: Refusal = undefined;
+    const decoded = decode(t.allocator, bytes, &refusal);
+    if (decoded) |payload| {
+        var score = payload;
+        score.deinit();
+        return error.WronglyAccepted;
+    } else |err| {
+        try t.expectEqual(error.Refused, err);
+        try t.expectEqual(code, refusal.code);
+    }
+}
+
+/// Recompute `'TRAN'`'s pacm_fnv over the CURRENT embedded PACM bytes —
+/// the step every semantic coherence mutation takes so the checksum
+/// never masks the predicate under test.
+fn repointPacmFnv(buf: []u8, layout: RecordsLayout) void {
+    putU64(buf, layout.tran + 48, fnv(buf[layout.pacm..]));
+}
+
+/// Offset of a TLV section FRAME (`[id][len]` header included) inside
+/// a PACM blob, walked exactly as `Pacm.decode` walks it.
+fn pacmSectionOff(pacm: []const u8, id: u32) usize {
+    const track_count = readU32(pacm, 28);
+    const key_count = readU32(pacm, 32);
+    const control_count = readU32(pacm, 36);
+    var pos: usize = 40 + @as(usize, track_count) * 24 + @as(usize, key_count) * 32;
+    for (0..control_count) |_| {
+        const id_len: usize = readU16(pacm, pos + 6);
+        pos += 64 + id_len;
+    }
+    while (pos < pacm.len) {
+        const sid = readU32(pacm, pos);
+        if (sid == id) return pos;
+        pos += 8 + readU32(pacm, pos + 4);
+    }
+    unreachable; // the fixture's PACM carries the section
+}
+
+/// The three-line Eval key-segment math (`evalKeyTrack`'s interior
+/// case), spelled inline so the test IS the text-path oracle — never a
+/// re-use of decoder code.
+fn interpKeys(
+    keys: []const TrackTable.Key,
+    programs: []const Easing.Program,
+    ncomp: u8,
+    at: i64,
+) [4]f32 {
+    var i: usize = 0;
+    while (i + 1 < keys.len - 1 and keys[i + 1].at <= at) : (i += 1) {}
+    const a = &keys[i];
+    const b = &keys[i + 1];
+    const u = @as(f64, @floatFromInt(at - a.at)) / @as(f64, @floatFromInt(b.at - a.at));
+    const e = programs[b.ease_ref].eval(u);
+    var out: [4]f32 = .{ 0, 0, 0, 0 };
+    for (0..ncomp) |c| {
+        const av: f64 = a.value[c];
+        const bv: f64 = b.value[c];
+        out[c] = @floatCast(av + (bv - av) * e);
+    }
+    return out;
+}
+
+test "Pacb: decode assembles a full compiled score and owns it after the input is clobbered" {
+    const ExprTrack = @import("ExprTrack.zig");
+    const PPC = sjon.Pattern.PPC;
+
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const table = &a.r.table.?;
+    const want = &table.transport;
+
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+
+    var score = try decode(t.allocator, built.buf, null);
+    defer score.deinit();
+
+    // OWNERSHIP: every read below happens after the input is gone.
+    @memset(built.buf, 0xAA);
+
+    // --- header + transport, field-for-field against the compile ---
+    try t.expectEqual(@as(u32, 0), score.required_features);
+    try t.expectEqual(@as(u64, @bitCast(want.map.bpm)), @as(u64, @bitCast(score.transport.map.bpm)));
+    try t.expectEqual(want.map.beats_per_bar, score.transport.map.beats_per_bar);
+    try t.expectEqual(want.map.ticks_per_beat, score.transport.map.ticks_per_beat);
+    try t.expectEqual(
+        @as(u64, @bitCast(want.map.ticks_per_second)),
+        @as(u64, @bitCast(score.transport.map.ticks_per_second)),
+    );
+    try t.expectEqual(want.dur, score.transport.dur);
+    try t.expectEqual(want.end, score.transport.end);
+    try t.expectEqual(want.emit.len, score.transport.emit.len);
+    try t.expectEqual(want.segments.len, score.transport.segments.len);
+    for (want.segments, score.transport.segments) |w, g| {
+        try t.expectEqual(w.start_tick, g.start_tick);
+        try t.expectEqual(@as(u64, @bitCast(w.bpm)), @as(u64, @bitCast(g.bpm)));
+    }
+    try t.expectEqual(want.map.segments.len, score.transport.map.segments.len);
+    for (want.map.segments, score.transport.map.segments) |w, g| {
+        try t.expectEqual(w.start_tick, g.start_tick);
+        try t.expectEqual(@as(u64, @bitCast(w.bpm)), @as(u64, @bitCast(g.bpm)));
+        try t.expectEqual(@as(u64, @bitCast(w.start_sec)), @as(u64, @bitCast(g.start_sec)));
+        try t.expectEqual(@as(u64, @bitCast(w.tps)), @as(u64, @bitCast(g.tps)));
+    }
+    try t.expectEqual(
+        @as(u64, @bitCast(want.loop_secs.?)),
+        @as(u64, @bitCast(score.transport.loop_secs.?)),
+    );
+
+    // --- registry identity ---
+    const regs = try encodePact(t.allocator, &full_host);
+    defer t.allocator.free(regs);
+    try t.expectEqualSlices(u8, regs, score.regs);
+    try t.expectEqual(@as(usize, 0), score.declared.len);
+    try t.expectEqual(fnv(regs), score.pact_fnv);
+    try t.expectEqual(fnv(a.pacm), score.pacm_fnv);
+    try t.expectEqualSlices(u8, a.pacm, score.pacm);
+
+    // --- tracks, keys, programs, controls, scenes ---
+    try t.expectEqual(table.tracks.len, score.tracks.len);
+    var expr_idx: usize = 0;
+    var keys_idx: usize = 0;
+    var trig_idx: usize = 0;
+    for (table.tracks, score.tracks, 0..) |w, g, i| {
+        try t.expectEqual(w.target_id, g.target_id);
+        try t.expectEqual(w.registry, g.registry);
+        try t.expectEqual(w.ncomp, g.ncomp);
+        try t.expectEqual(w.scene, g.scene);
+        switch (w.source) {
+            .keys => |wks| {
+                keys_idx = i;
+                try t.expectEqual(wks.start, g.source.keys.start);
+                try t.expectEqual(wks.len, g.source.keys.len);
+            },
+            .expr => {
+                expr_idx = i;
+                try t.expectEqualSlices(u8, expr_bin, g.source.expr);
+            },
+            .trigger => |wtrig| {
+                trig_idx = i;
+                switch (wtrig) {
+                    .periodic => |wp| {
+                        const gp = g.source.trigger.periodic;
+                        try t.expectEqual(wp.every, gp.every);
+                        try t.expectEqual(wp.offset, gp.offset);
+                    },
+                    .at => |wats| try t.expectEqualSlices(i64, wats, g.source.trigger.at),
+                }
+            },
+            .pattern => return error.UnexpectedPatternTrack,
+        }
+    }
+    try t.expectEqual(@as(usize, 3), score.tracks.len);
+
+    try t.expectEqual(table.keys.len, score.keys.len);
+    for (table.keys, score.keys) |w, g| {
+        try t.expectEqual(w.at, g.at);
+        try t.expectEqual(w.value, g.value);
+        try t.expectEqual(w.ease_ref, g.ease_ref);
+    }
+    // Literal pins, independent of the builder's arithmetic: the scened
+    // keys are absolute (scene start 2bar folded in), 30 → 140 eased by
+    // the steps program (index 1).
+    try t.expectEqual(@as(usize, 2), score.keys.len);
+    try t.expectEqual(@as(i64, 2 * PPC), score.keys[0].at);
+    try t.expectEqual(@as(i64, 3 * PPC), score.keys[1].at);
+    try t.expectEqual(@as(f32, 30), score.keys[0].value[0]);
+    try t.expectEqual(@as(f32, 140), score.keys[1].value[0]);
+    try t.expectEqual(@as(u16, 1), score.keys[1].ease_ref);
+
+    try t.expectEqual(table.programs.len, score.programs.len);
+    for (table.programs, score.programs) |w, g| try t.expect(std.meta.eql(w, g));
+
+    try t.expectEqual(table.controls.len, score.controls.len);
+    for (table.controls, score.controls) |w, g| {
+        try t.expectEqualStrings(w.id, g.id);
+        try t.expectEqual(w.target == null, g.target == null);
+        if (w.target) |wt| {
+            try t.expectEqual(wt.id, g.target.?.id);
+            try t.expectEqual(wt.registry, g.target.?.registry);
+        }
+        try t.expectEqual(w.ncomp, g.ncomp);
+        try t.expectEqual(w.kind, g.kind);
+        try t.expectEqual(w.value, g.value);
+        try t.expectEqual(w.min == null, g.min == null);
+        if (w.min) |wm| try t.expectEqual(wm, g.min.?);
+        try t.expectEqual(w.max == null, g.max == null);
+        if (w.max) |wm| try t.expectEqual(wm, g.max.?);
+    }
+    try t.expectEqualStrings("knob", score.controls[0].id);
+    try t.expectEqualStrings("sway", score.controls[1].id);
+
+    try t.expectEqual(table.scenes.len, score.scenes.len);
+    for (table.scenes, score.scenes) |w, g| {
+        try t.expectEqual(w.start_tick, g.start_tick);
+        try t.expectEqual(w.dur_ticks, g.dur_ticks);
+    }
+    try t.expectEqual(@as(i64, 2 * PPC), score.scenes[0].start_tick);
+    try t.expectEqual(@as(i64, 2 * PPC), score.scenes[0].dur_ticks); // :dur 2bar
+
+    // The explicit trigger schedule: 1b/2b/4b on the 4/4 grid.
+    try t.expectEqualSlices(i64, &.{ PPC / 4, PPC / 2, PPC }, score.tracks[trig_idx].source.trigger.at);
+
+    // --- eval: the decoded expr payload vs the text path, tick 0 ---
+    var want_bindings: [TrackTable.MAX_CONTROLS]ExprTrack.ControlBinding = undefined;
+    for (table.controls, 0..) |ctl, i| {
+        want_bindings[i] = ExprTrack.ControlBinding.fromControl(ctl);
+    }
+    const want_vec = try ExprTrack.evalAt(
+        t.allocator,
+        &a.r.validated.result.tree,
+        a.r.eval_schema,
+        want,
+        want_bindings[0..table.controls.len],
+        table.tracks[expr_idx].source.expr,
+        0,
+        null,
+        table.tracks[expr_idx].ncomp,
+    );
+
+    var got_bindings: [TrackTable.MAX_CONTROLS]ExprTrack.ControlBinding = undefined;
+    for (score.controls, 0..) |ctl, i| {
+        got_bindings[i] = .{ .name = ctl.id, .value = ctl.value, .ncomp = ctl.ncomp };
+    }
+    var storage: ExprTrack.EnvStorage = undefined;
+    const env = ExprTrack.buildEnv(&storage, &score.transport, got_bindings[0..score.controls.len], 0, null);
+    var bres = try sjon.Expr.evalBinary(t.allocator, score.tracks[expr_idx].source.expr, env, a.r.eval_schema);
+    defer bres.deinit();
+    try t.expect(bres.value == .vector);
+    try t.expectEqual(@as(usize, 3), bres.value.vector.len);
+    var got_vec: [4]f32 = .{ 0, 0, 0, 0 };
+    // Same widening as the text path's `coerce` (`toF64` + f32 cast):
+    // integer-tagged literals ride `.integer_i64`, not `.number`.
+    for (bres.value.vector, 0..) |v, i| {
+        got_vec[i] = @floatCast(v.toF64() orelse return error.UnexpectedValue);
+    }
+    try t.expectEqual(want_vec, got_vec);
+    try t.expectEqual([4]f32{ 1, 0, 0, 0 }, got_vec);
+
+    // --- keys interpolation at two interior ticks, text-path oracle ---
+    const dec_run = score.keys[score.tracks[keys_idx].source.keys.start..][0..score.tracks[keys_idx].source.keys.len];
+    const text_run = table.trackKeys(&table.tracks[keys_idx]);
+    const t1 = text_run[0].at + @divTrunc(text_run[1].at - text_run[0].at, 2);
+    const t2 = text_run[0].at + @divTrunc(text_run[1].at - text_run[0].at, 4);
+    try t.expectEqual(
+        interpKeys(text_run, table.programs, table.tracks[keys_idx].ncomp, t1),
+        interpKeys(dec_run, score.programs, score.tracks[keys_idx].ncomp, t1),
+    );
+    try t.expectEqual(
+        interpKeys(text_run, table.programs, table.tracks[keys_idx].ncomp, t2),
+        interpKeys(dec_run, score.programs, score.tracks[keys_idx].ncomp, t2),
+    );
+    // Structural landing: at a key tick the key's own value, bit-exact.
+    try t.expectEqual(text_run[0].value, dec_run[0].value);
+}
+
+test "Pacb: decode refuses a missing required PACM section (non_canonical)" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const built = try buildRecordsFixture(t.allocator, .{
+        .transport = hostJoinSpec(regs),
+        .regs = regs,
+        .pacm_absent = true,
+    });
+    defer t.allocator.free(built.buf);
+    try expectDecodeRefusal(built.buf, .non_canonical);
+}
+
+test "Pacb: decode refuses structurally malformed embedded PACM (meta_malformed)" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+
+    // T2.7's garbage classes, embedded: a broken magic, and a track key
+    // range overrunning the key stream. Both with the checksum
+    // repointed, so the structural decoder is what refuses.
+    built.buf[built.layout.pacm] ^= 0xff;
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_malformed);
+    built.buf[built.layout.pacm] ^= 0xff;
+
+    putU32(built.buf, built.layout.pacm + 40 + 12, 99); // track 0 key_len
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_malformed);
+}
+
+test "Pacb: a wrong pacm_fnv alone refuses meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+
+    // The blob is untouched and fully coherent; ONLY 'TRAN''s checksum
+    // lies — the fast reject's own case (it must agree with the full
+    // check, and catch what only it can see).
+    putU64(built.buf, built.layout.tran + 48, fnv(a.pacm) ^ 1);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+}
+
+test "Pacb: PACM transport lies refuse meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+    const pacm = built.buf[built.layout.pacm..];
+
+    // bpm f64 @8 (one lane byte), beats_per_bar u16 @24, dur i64 @16,
+    // end-loop flag bit @26 — each alone, checksum repointed each time.
+    pacm[9] ^= 0x01;
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    pacm[9] ^= 0x01;
+
+    putU16(pacm, 24, 5);
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putU16(pacm, 24, 4);
+
+    putI64(pacm, 16, 8 * sjon.Pattern.PPC + 1);
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putI64(pacm, 16, 8 * sjon.Pattern.PPC);
+
+    pacm[26] ^= 0b10;
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    pacm[26] ^= 0b10;
+}
+
+test "Pacb: PACM count lies refuse meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+
+    // A sibling score's PACM is structurally valid but disagrees on one
+    // count: an extra track / key / control against the same sections.
+    inline for (.{ extra_track_source, extra_key_source, extra_control_source }) |source| {
+        var v = try compileWithPacm(t.allocator, source, &full_host);
+        defer v.r.deinit();
+        defer t.allocator.free(v.pacm);
+        const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, v.pacm);
+        defer t.allocator.free(built.buf);
+        try expectDecodeRefusal(built.buf, .meta_incoherent);
+    }
+}
+
+test "Pacb: per-track PACM lies refuse meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+    const pacm = built.buf[built.layout.pacm..];
+    // Offsets are RELATIVE to the PACM blob. Compile emits top-level
+    // tracks, then scene children, then top-level triggers — index the
+    // records by KIND, never by position.
+    var keys_i: usize = 0;
+    for (a.r.table.?.tracks, 0..) |track, i| {
+        if (track.source == .keys) keys_i = i;
+    }
+    const tr0: usize = 40 + keys_i * 24; // the keys track's PACM record
+
+    putU16(pacm, tr0 + 0, 1); // target_id 0 → 1 (tint's id)
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putU16(pacm, tr0 + 0, 0);
+
+    pacm[tr0 + 2] = 1; // registry 0 → 1
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    pacm[tr0 + 2] = 0;
+
+    pacm[tr0 + 3] = 2; // ncomp 1 → 2
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    pacm[tr0 + 3] = 1;
+
+    pacm[tr0 + 4] = SOURCE_EXPR; // source keys → expr
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    pacm[tr0 + 4] = SOURCE_KEYS;
+}
+
+test "Pacb: the per-source key-range rule refuses meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+    const pacm = built.buf[built.layout.pacm..];
+    // Track records indexed by kind (compile order is top-level tracks,
+    // then scene children, then triggers — never positional).
+    var keys_i: usize = 0;
+    var expr_i: usize = 0;
+    var trig_i: usize = 0;
+    for (a.r.table.?.tracks, 0..) |track, i| {
+        switch (track.source) {
+            .keys => keys_i = i,
+            .expr => expr_i = i,
+            .trigger => trig_i = i,
+            .pattern => {},
+        }
+    }
+    const trk: usize = 40; // track array base, relative to the blob
+
+    // keys source: the PACM range must EQUAL the 'TRAK' fields — a len
+    // lie (still structurally inside the stream) refuses.
+    putU32(pacm, trk + keys_i * 24 + 12, 1); // key_len 2 → 1
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putU32(pacm, trk + keys_i * 24 + 12, 2);
+
+    // expr source: the meta range must be (0,0) — the B1 zero-rule.
+    // (Never compared against a real 'TICK' slice: 'TRAK' carries that
+    // one.)
+    putU32(pacm, trk + expr_i * 24 + 8, 1); // key_start 0 → 1
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putU32(pacm, trk + expr_i * 24 + 8, 0);
+
+    // trigger source: same zero-rule.
+    putU32(pacm, trk + trig_i * 24 + 8, 1); // key_start 0 → 1
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putU32(pacm, trk + trig_i * 24 + 8, 0);
+}
+
+test "Pacb: PACM key-content lies refuse meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+    const pacm = built.buf[built.layout.pacm..];
+    // Key array base (past the 3 track records), relative to the blob.
+    const keys: usize = 40 + 3 * 24;
+
+    putI64(pacm, keys + 32, 3 * sjon.Pattern.PPC + 1); // key 1 at
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putI64(pacm, keys + 32, 3 * sjon.Pattern.PPC);
+
+    putF32(pacm, keys + 32 + 8, 141); // key 1 value[0]
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putF32(pacm, keys + 32 + 8, 140);
+}
+
+test "Pacb: PACM control lies refuse meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+    const pacm = built.buf[built.layout.pacm..];
+    // Control 0 ("knob", 64 B + 4 id bytes) right after the key stream,
+    // relative to the blob.
+    const ctl: usize = 40 + 3 * 24 + 2 * 32;
+
+    putF32(pacm, ctl + 8, 0.41); // value[0] 0.4 → 0.41
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putF32(pacm, ctl + 8, 0.4);
+
+    putU16(pacm, ctl, TrackTable.NO_TARGET); // env-only lie
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putU16(pacm, ctl, 0);
+
+    pacm[ctl + 64 + 3] = 'c'; // id "knob" → "knoc" (not a 'STRS' entry)
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    pacm[ctl + 64 + 3] = 'b';
+}
+
+test "Pacb: PACM scene payload divergence refuses meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+    const pacm = built.buf[built.layout.pacm..];
+
+    // 'SCEN' shared fields (start_tick/dur_ticks); the name span is a
+    // documented source string — trusted, never cross-checked.
+    const scen = pacmSectionOff(pacm, 0x4e454353); // "SCEN"
+    putI64(pacm, scen + 8 + 4, 2 * sjon.Pattern.PPC + 1); // scene 0 start
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+}
+
+test "Pacb: PACM EASE divergence refuses meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+    const pacm = built.buf[built.layout.pacm..];
+
+    // Program bytes: program 1's stage 0, op 0, param 0 (the steps
+    // count, 8.0). The refs array: ref[1] (1 → 0).
+    const ease = pacmSectionOff(pacm, 0x45534145); // "EASE"
+    const prog1_stage0_op0_param0 = ease + 8 + 4 + 772 + 4 + 16 + 4;
+    putF32(pacm, prog1_stage0_op0_param0, 8.5);
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+    putF32(pacm, prog1_stage0_op0_param0, 8);
+
+    const refs = ease + 8 + 4 + 2 * 772 + 4; // 2 programs in this fixture
+    putU16(pacm, refs + 2, 0); // ref[1] 1 → 0
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+}
+
+test "Pacb: PACM TMPO divergence refuses meta_incoherent" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+    const pacm = built.buf[built.layout.pacm..];
+
+    // Segment 1's bpm (160 → 161, still in domain and ascending).
+    const tmpo = pacmSectionOff(pacm, 0x4f504d54); // "TMPO"
+    putF64(pacm, tmpo + 8 + 16 + 8, 161);
+    repointPacmFnv(built.buf, built.layout);
+    try expectDecodeRefusal(built.buf, .meta_incoherent);
+}
+
+test "Pacb: EASE and TMPO presence contradictions refuse meta_incoherent" {
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+
+    // Sections from the linear-only score (legitimately no 'EASE'
+    // section) + the full score's PACM (carries 'EASE'): the
+    // absent-one-side contradiction, spelled without touching either
+    // blob's structure.
+    {
+        var lin = try compileWithPacm(t.allocator, linear_source, &full_host);
+        defer lin.r.deinit();
+        defer t.allocator.free(lin.pacm);
+        var a = try compileWithPacm(t.allocator, full_source, &full_host);
+        defer a.r.deinit();
+        defer t.allocator.free(a.pacm);
+        const built = try buildScoreFixture(t.allocator, &lin.r, &full_host, &.{expr_bin}, a.pacm);
+        defer t.allocator.free(built.buf);
+        try expectDecodeRefusal(built.buf, .meta_incoherent);
+    }
+
+    // Sections from the mapless score (no 'TMPO' section) + the full
+    // score's PACM (carries 'TMPO').
+    {
+        var flat = try compileWithPacm(t.allocator, flat_source, &full_host);
+        defer flat.r.deinit();
+        defer t.allocator.free(flat.pacm);
+        var a = try compileWithPacm(t.allocator, full_source, &full_host);
+        defer a.r.deinit();
+        defer t.allocator.free(a.pacm);
+        const built = try buildScoreFixture(t.allocator, &flat.r, &full_host, &.{expr_bin}, a.pacm);
+        defer t.allocator.free(built.buf);
+        try expectDecodeRefusal(built.buf, .meta_incoherent);
+    }
+}
+
+test "Pacb: every prefix of the full fixture refuses without trapping" {
+    var a = try compileWithPacm(t.allocator, full_source, &full_host);
+    defer a.r.deinit();
+    defer t.allocator.free(a.pacm);
+    const expr_bin = try toBinaryCompact(t.allocator, "[1 0 0]");
+    defer t.allocator.free(expr_bin);
+    const built = try buildScoreFixture(t.allocator, &a.r, &full_host, &.{expr_bin}, a.pacm);
+    defer t.allocator.free(built.buf);
+
+    for (0..built.buf.len) |n| {
+        var refusal: Refusal = undefined;
+        const decoded = decode(t.allocator, built.buf[0..n], &refusal);
+        if (decoded) |payload| {
+            var score = payload;
+            score.deinit();
+            return error.WronglyAccepted;
+        } else |err| {
+            try t.expectEqual(error.Refused, err);
+        }
+    }
 }

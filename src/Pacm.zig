@@ -56,12 +56,11 @@
 //! * ALIASING: every slice the view returns (a section payload, a
 //!   control id) aliases the caller's blob. The view borrows, never
 //!   owns; `Pacb` copies whatever it keeps past the borrow.
-//! * `verifyRouting` is deliberately NOT here: the plan's typed
-//!   signature takes a `*const Pacb.DecodedScore`, which would make
-//!   this file import `Pacb` — a std-only violation and an import
-//!   cycle. T2.8 owns the wiring (plan §T2.8 "wire verifyRouting");
-//!   the conflict is recorded in the T2.7 report rather than silently
-//!   loosened.
+//! * `verifyRouting` lives in `Pacb.zig` (the resolved placement, per
+//!   the focused ruling): its typed signature takes a
+//!   `*const Pacb.DecodedScore`, which would make this file import
+//!   `Pacb` — a std-only violation and an inverted dependency direction.
+//!   The wiring landed with T2.8; this reader stays std-only.
 
 const std = @import("std");
 
