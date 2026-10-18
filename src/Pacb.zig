@@ -73,35 +73,41 @@
 //! op order), the T2.3 registry-identity stage (`decodeRegistry`:
 //! `'REGS'`/`'DECL'` + the `pact_fnv` fast-reject, with
 //! `canonicalPactEquals` as the load-time identity check 02's `prt_load`
-//! calls), and the T2.4 record-sections stage (`decodeRecords`:
+//! calls), the T2.4 record-sections stage (`decodeRecords`:
 //! `'TRAK'`/`'KEYS'`/`'TICK'`/`'EMIT'`/`'SCEN'` — tracks, keys, scenes,
 //! emit lanes; the id-bound consumers of the registry join for
-//! `'TRAK'`/`'EMIT'` land here, `'CTRL'`'s with T2.5). Stages expose
-//! owned, validated, typed results — `parseDirectory` is still a
+//! `'TRAK'`/`'EMIT'` land there, `'CTRL'`'s with T2.5), and the T2.5
+//! ease/control stage (`decodeEaseControls`: `'EASE'` program
+//! invariants + the synthesized linear default, `'STRS'`' sorted unique
+//! non-reserved id table, `'CTRL'` join/env-only coherence). Stages
+//! expose owned, validated, typed results — `parseDirectory` is still a
 //! structure-only view, `TransportStage.transport.emit` stays empty
 //! (`RecordsStage.emit` holds the lanes until T2.8's assembly), and
 //! `DecodedSource.expr`/`pattern` stay empty (payloads are T2.6's; the
 //! wire spans ride `RecordsStage.payload_spans`). The whole-blob
 //! `decode(...) DecodedScore` entry point is deliberately absent until
 //! every section stage validates (T2.8): returning a successful score
-//! before ease/controls/payloads/PACM are validated would be a lying API.
+//! before payloads/PACM are validated would be a lying API.
 //!
 //! Imports: std, sjon (`Pattern.MAX_TICK`), `PactCodec`, `TimeMap`,
-//! `TrackTable` (the T2.2+T2.3+T2.4 subset of the frozen end-state list).
-//! Later stages add `Easing` and `Pacm` as their GREEN needs them; this
-//! file must NEVER import `Compile`, `Abi`, `Schema`, or `Driver` — the
-//! one test that compares decoded transport against the compiler
-//! (`decoded transport equals the compiled transport field-for-field`)
-//! imports `Compile`/`test_support` INSIDE its test body only, so a
-//! normal (non-test) build never analyses them through this file; that
-//! textual cohabitation is the recorded plan-02 import seam, not strict
-//! closure.
+//! `TrackTable`, `Easing` (the T2.2+T2.3+T2.4+T2.5 subset of the frozen
+//! end-state list). Later stages add `Pacm` and the sjon binary-cursor
+//! surface as their GREEN needs them; this file must NEVER import
+//! `Compile`, `Abi`, `Schema`, or `Driver` — the one test that compares
+//! decoded transport against the compiler (`decoded transport equals
+//! the compiled transport field-for-field`) imports `Compile`/
+//! `test_support` INSIDE its test body only, so a normal (non-test)
+//! build never analyses them through this file; that textual
+//! cohabitation is the recorded plan-02 import seam, not strict
+//! closure. The frozen `ExprTrack.reserved_names` copy lives here for
+//! the same reason (asserted against its source in `src/root.zig`).
 
 const std = @import("std");
 const sjon = @import("sjon");
 const PactCodec = @import("PactCodec.zig");
 const TimeMap = @import("TimeMap.zig");
 const TrackTable = @import("TrackTable.zig");
+const Easing = @import("Easing.zig");
 
 /// `"PACB"` read as a little-endian u32.
 pub const MAGIC: u32 = 0x42434150;
@@ -1313,6 +1319,476 @@ pub fn decodeRecords(
         .emit = emit,
         .payload_spans = spans,
     };
+}
+
+// ---------------------------------------------------------------------------
+// T2.5 — ease/control stage ('EASE' + 'STRS' + 'CTRL')
+// ---------------------------------------------------------------------------
+
+/// Wire stage-record width inside an `'EASE'` program (frozen copy of
+/// `Abi.META_EASE_STAGE_LEN`; the comptime pin below ties it into
+/// `PACM_EASE_PROGRAM_LEN`).
+const PACM_EASE_STAGE_LEN: usize = 96;
+/// Wire op-record width inside an `'EASE'` stage (frozen copy of
+/// `Abi.META_EASE_OP_LEN`).
+const PACM_EASE_OP_LEN: usize = 20;
+
+comptime {
+    std.debug.assert(PACM_EASE_PROGRAM_LEN == 4 + Easing.MAX_STAGES * PACM_EASE_STAGE_LEN);
+    std.debug.assert(PACM_EASE_STAGE_LEN == 16 + Easing.MAX_OPS * PACM_EASE_OP_LEN);
+}
+
+/// Frozen copy of `ExprTrack.reserved_names` — the time-env binding
+/// names a `'STRS'` control id must never shadow. `Pacb` does not
+/// import `ExprTrack` (the decoder stays out of the eval closure);
+/// `src/root.zig` equality-asserts the copy against its source.
+pub const reserved_control_names = [_][]const u8{
+    "t", "tick", "beat", "bar", "cycle", "phase", "bpm", "dur", "scene-beat", "scene-phase",
+};
+
+fn isReservedControlName(name: []const u8) bool {
+    for (reserved_control_names) |reserved| {
+        if (std.mem.eql(u8, reserved, name)) return true;
+    }
+    return false;
+}
+
+/// `'STRS'` sort order: by length first, then bytes — the canonical
+/// spelling the packer emits and decode requires.
+fn strsEntryLess(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return a.len < b.len;
+    return std.mem.order(u8, a, b) == .lt;
+}
+
+/// One decoded `(control …)` pin (frozen T2.1 representation, §A O-a:
+/// the span-carrying `value_span` of `TrackTable.Control` never crosses
+/// the wire). `id` is an arena-owned copy out of the `'STRS'` entries.
+pub const DecodedControl = struct {
+    id: []const u8,
+    /// Resolved write target (same load-time join as tracks), or null
+    /// for an env-only control (`target_id == NO_TARGET` on the wire).
+    target: ?TrackTable.ControlTarget,
+    ncomp: u8,
+    kind: TrackTable.ControlType,
+    /// Document `:value`, zero-padded like `TrackTable.Key.value`.
+    value: [4]f32,
+    /// Optional widget range — the record's flag bit decides presence.
+    min: ?[4]f32,
+    max: ?[4]f32,
+};
+
+/// Owned ease/control stage result. `programs` is the verbatim `'EASE'`
+/// program table — or the synthesized shared linear default alone when
+/// `'EASE'` is absent (the canonical-presence rule) — and `controls`
+/// the decoded pins with ids copied out of `'STRS'`. Everything lives
+/// in the stage's arena, never aliasing the input buffer, until T2.8's
+/// final `DecodedScore` arena carries it all.
+pub const EaseControlStage = struct {
+    arena: std.heap.ArenaAllocator,
+    programs: []const Easing.Program,
+    controls: []const DecodedControl,
+
+    pub fn deinit(self: *EaseControlStage) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+/// The shared linear default, spelled exactly as compile spells it
+/// (`Easing.primitive(.{ .code = .linear })`, `src/Compile.zig:491-493`):
+/// a parameterless primitive cannot fail to build, so this is a
+/// constant construction, never a user-input assert.
+fn linearDefaultProgram() Easing.Program {
+    return Easing.primitive(.{ .code = .linear }) catch unreachable;
+}
+
+/// Decode and validate the ease/control stage: the `'EASE'` program
+/// table (`Program.eval` asserts its own invariants, so every
+/// precondition is a checked refusal here first — `src/Easing.zig:162-170`),
+/// the `'STRS'` control-id table, and the `'CTRL'` records joined
+/// against the registry identity. Validation order: caps, canonical
+/// presence (`'EASE'` present ⇒ ≥ 2 programs with program 0 linear —
+/// the linear-only table is the omitted case; `'STRS'` iff a control
+/// exists), section length arithmetic, per-record shape, then the join.
+/// PRECONDITIONS: `directory` is `parseDirectory(bytes, …)`'s result,
+/// `registry` and `records` the same-buffer stages
+/// (`decodeRegistry`/`decodeRecords`) — the section-payload guard
+/// turns a mismatched pair into a refusal, never a trap. `'PAYL'` and
+/// the `'PACM'` cross-check are later stages' sections (T2.6/T2.8).
+pub fn decodeEaseControls(
+    gpa: std.mem.Allocator,
+    bytes: []const u8,
+    directory: *const Directory,
+    records: *const RecordsStage,
+    registry: *const RegistryStage,
+    refusal: ?*Refusal,
+) DecodeError!EaseControlStage {
+    const strs_sec = directory.find(.strs);
+    const ctrl_sec = directory.find(.ctrl);
+    const ease_sec = directory.find(.ease);
+
+    // Caps before any allocation keyed by a lying count ('CTRL' is
+    // fixed-width, so T2.1 already proved count×60; 'STRS' owns its
+    // own u32 count below; 'EASE' owns program_count).
+    if (ctrl_sec) |sec| {
+        if (sec.count.? > MAX_CONTROLS) {
+            return fail(refusal, .cap_exceeded, sec.off);
+        }
+    }
+
+    // Canonical presence + the iff-consumer rule: 'STRS' iff a control
+    // exists ('CTRL' present ⇔ ≥ 1 control; a present count-0 section
+    // is the degenerate, omitted case).
+    if (strs_sec != null and ctrl_sec == null) {
+        return fail(refusal, .non_canonical, if (strs_sec) |s| s.off else payloadStart(directory));
+    }
+    if (ctrl_sec) |sec| {
+        if (sec.count.? == 0) return fail(refusal, .non_canonical, sec.off);
+        if (strs_sec == null) {
+            return fail(refusal, .non_canonical, payloadStart(directory));
+        }
+    }
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    // --- 'STRS': parse + validate the sorted unique id table ---
+    const StrEntry = struct { byte_start: u32, len: u16 };
+    var entries: []const StrEntry = &.{};
+    var strs_region: []const u8 = &.{};
+    if (strs_sec) |sec| {
+        const payload = try sectionPayload(bytes, sec, refusal);
+        if (payload.len < 8) return fail(refusal, .strs_invalid, sec.off);
+        const count = readU32(payload, 0);
+        if (count > MAX_CONTROLS) return fail(refusal, .cap_exceeded, sec.off);
+        if (count == 0) return fail(refusal, .non_canonical, sec.off);
+        const byte_size = readU32(payload, 4);
+        if (@as(u64, byte_size) != payload.len - 8) {
+            return fail(refusal, .strs_invalid, sec.off + 4);
+        }
+        if (byte_size == 0) return fail(refusal, .non_canonical, sec.off + 4);
+
+        const list = a.alloc(StrEntry, count) catch return error.OutOfMemory;
+        var prev: []const u8 = &.{};
+        var pos: usize = 8;
+        for (0..count) |i| {
+            if (pos + 2 > payload.len) return fail(refusal, .strs_invalid, pos);
+            const elen = readU16(payload, pos);
+            if (elen == 0) return fail(refusal, .strs_invalid, pos);
+            if (pos + 2 + elen > payload.len) return fail(refusal, .strs_invalid, pos);
+            const slice = payload[pos + 2 ..][0..elen];
+            if (i > 0) {
+                // Sorted by (len, bytes) and unique — one rule: the
+                // sequence is strictly increasing under the sort order.
+                if (!strsEntryLess(prev, slice)) {
+                    return fail(refusal, .strs_invalid, pos);
+                }
+            }
+            if (isReservedControlName(slice)) {
+                return fail(refusal, .strs_invalid, pos + 2);
+            }
+            list[i] = .{ .byte_start = @intCast(pos + 2 - 8), .len = elen };
+            prev = slice;
+            pos += 2 + elen;
+        }
+        // The entries consume byte_size exactly — no tail slack.
+        if (pos != payload.len) return fail(refusal, .strs_invalid, pos);
+        entries = list;
+        strs_region = payload[8..];
+    }
+
+    // --- 'EASE': parse + validate the program table ---
+    var programs: []const Easing.Program = &.{};
+    if (ease_sec) |sec| {
+        const payload = try sectionPayload(bytes, sec, refusal);
+        if (payload.len < 4) return fail(refusal, .ease_invalid, sec.off);
+        const n = readU32(payload, 0);
+        if (n > MAX_EASE_PROGRAMS) return fail(refusal, .cap_exceeded, sec.off);
+        if (n < 2) {
+            // The linear-only table is the omitted case.
+            return fail(refusal, .non_canonical, sec.off);
+        }
+        const table_end = 4 + @as(u64, n) * PACM_EASE_PROGRAM_LEN + 4;
+        if (table_end > payload.len) return fail(refusal, .ease_invalid, sec.off);
+        const key_ref_count = readU32(payload, 4 + @as(usize, n) * PACM_EASE_PROGRAM_LEN);
+        const expected_len = table_end + @as(u64, key_ref_count) * 2;
+        if (expected_len != payload.len) {
+            return fail(refusal, .ease_invalid, sec.off);
+        }
+
+        const table = a.alloc(Easing.Program, n) catch return error.OutOfMemory;
+        for (0..n) |i| {
+            try validateEaseProgramWire(payload, 4 + i * PACM_EASE_PROGRAM_LEN, refusal);
+            table[i] = readEaseProgram(payload, 4 + i * PACM_EASE_PROGRAM_LEN);
+        }
+        // Program 0 is the shared linear default — the anchor every
+        // ease_ref 0 names and Eval's fallback leans on.
+        if (!std.meta.eql(table[0], linearDefaultProgram())) {
+            return fail(refusal, .ease_invalid, sec.off + 4);
+        }
+        // The refs array parallels the key stream in key order.
+        if (key_ref_count != records.keys.len) {
+            return fail(refusal, .count_mismatch, 4 + @as(usize, n) * PACM_EASE_PROGRAM_LEN);
+        }
+        for (0..key_ref_count) |i| {
+            const at = 4 + @as(usize, n) * PACM_EASE_PROGRAM_LEN + 4 + i * 2;
+            if (readU16(payload, at) >= n) {
+                return fail(refusal, .ease_invalid, at);
+            }
+        }
+        programs = table;
+    } else {
+        const table = a.alloc(Easing.Program, 1) catch return error.OutOfMemory;
+        table[0] = linearDefaultProgram();
+        programs = table;
+    }
+
+    // The final ease_ref bound over the real (or synthesized) table —
+    // subsumes decodeRecords' absent-section check and catches any
+    // index that dangles past the programs the score carries.
+    for (records.keys) |key| {
+        if (key.ease_ref >= programs.len) {
+            return fail(refusal, .ease_invalid, 0);
+        }
+    }
+
+    // --- 'CTRL': parse + validate the control records ---
+    const join_size: u64 = @as(u64, registry.host_targets) + registry.declared_targets;
+    var used_entries = a.alloc(bool, entries.len) catch return error.OutOfMemory;
+    @memset(used_entries, false);
+
+    var controls: []const DecodedControl = &.{};
+    if (ctrl_sec) |sec| {
+        _ = try sectionPayload(bytes, sec, refusal); // bounds guard, then absolute reads
+        const count: usize = sec.count.?; // count×width exactness is T2.1's
+        const recs = a.alloc(DecodedControl, count) catch return error.OutOfMemory;
+        for (recs, 0..) |*rec, i| {
+            const at = sec.off + 4 + i * CTRL_REC_LEN;
+            const flags = bytes[at + 5];
+            if (flags & ~@as(u8, 0b11) != 0) {
+                return fail(refusal, .control_invalid, at + 5);
+            }
+            const kind = std.enums.fromInt(TrackTable.ControlType, bytes[at + 4]) orelse
+                return fail(refusal, .control_invalid, at + 4);
+
+            // The id must be exactly one 'STRS' entry (byte_start +
+            // length), never used before — ids are unique because the
+            // entries are.
+            const id_off = readU32(bytes, at + 6);
+            const id_len = readU16(bytes, at + 10);
+            var id: []const u8 = &.{};
+            var matched: ?usize = null;
+            if (@as(u64, id_off) + id_len <= strs_region.len) {
+                for (entries, 0..) |entry, e| {
+                    if (entry.byte_start == id_off and entry.len == id_len) {
+                        matched = e;
+                        break;
+                    }
+                }
+            }
+            const entry_index = matched orelse
+                return fail(refusal, .control_invalid, at + 6);
+            if (used_entries[entry_index]) {
+                return fail(refusal, .control_invalid, at + 6);
+            }
+            used_entries[entry_index] = true;
+            id = strs_region[@intCast(id_off)..][0..id_len];
+
+            const target_id = readU16(bytes, at);
+            const ctl_registry = bytes[at + 2];
+            const ncomp = bytes[at + 3];
+            var target: ?TrackTable.ControlTarget = null;
+            if (target_id == TrackTable.NO_TARGET) {
+                // Env-only: no join entry exists to check against, so
+                // ncomp carries its own 1..4 domain and the registry
+                // byte (unused-by-target) spells zero.
+                if (ctl_registry != 0) {
+                    return fail(refusal, .control_invalid, at + 2);
+                }
+                if (ncomp < 1 or ncomp > 4) {
+                    return fail(refusal, .control_invalid, at + 3);
+                }
+            } else {
+                if (@as(u64, target_id) >= join_size) {
+                    return fail(refusal, .registry_mismatch, at);
+                }
+                const entry = joinEntry(registry, target_id) orelse
+                    return fail(refusal, .registry_mismatch, at);
+                if (entry.registry != ctl_registry or entry.ncomp != ncomp) {
+                    return fail(refusal, .registry_mismatch, at + 2);
+                }
+                target = .{ .id = target_id, .registry = ctl_registry };
+            }
+
+            var value: [4]f32 = undefined;
+            for (0..4) |lane| value[lane] = readF32(bytes, at + 12 + lane * 4);
+            var lane = @as(usize, ncomp);
+            while (lane < 4) : (lane += 1) {
+                if (value[lane] != 0) {
+                    return fail(refusal, .control_invalid, at + 12 + lane * 4);
+                }
+            }
+
+            var min: ?[4]f32 = null;
+            if (flags & 1 != 0) {
+                var lanes: [4]f32 = undefined;
+                for (0..4) |l| lanes[l] = readF32(bytes, at + 28 + l * 4);
+                for (lanes) |v| {
+                    if (!std.math.isFinite(v)) return fail(refusal, .control_invalid, at + 28);
+                }
+                min = lanes;
+            } else {
+                for (0..4) |l| {
+                    if (readF32(bytes, at + 28 + l * 4) != 0) {
+                        return fail(refusal, .control_invalid, at + 28 + l * 4);
+                    }
+                }
+            }
+            var max: ?[4]f32 = null;
+            if (flags & 2 != 0) {
+                var lanes: [4]f32 = undefined;
+                for (0..4) |l| lanes[l] = readF32(bytes, at + 44 + l * 4);
+                for (lanes) |v| {
+                    if (!std.math.isFinite(v)) return fail(refusal, .control_invalid, at + 44);
+                }
+                max = lanes;
+            } else {
+                for (0..4) |l| {
+                    if (readF32(bytes, at + 44 + l * 4) != 0) {
+                        return fail(refusal, .control_invalid, at + 44 + l * 4);
+                    }
+                }
+            }
+
+            rec.* = .{
+                .id = a.dupe(u8, id) catch return error.OutOfMemory,
+                .target = target,
+                .ncomp = ncomp,
+                .kind = kind,
+                .value = value,
+                .min = min,
+                .max = max,
+            };
+        }
+        controls = recs;
+    }
+
+    return .{ .arena = arena, .programs = programs, .controls = controls };
+}
+
+/// Highest legal `Easing.Op` wire ordinal (the enum is exhaustive and
+/// append-only; 21 = `spring` today).
+const EASE_OP_MAX_ORDINAL: u8 = @intCast(@typeInfo(Easing.Op).@"enum".fields.len - 1);
+
+/// Validate one 772-byte `'EASE'` program record in place — every
+/// precondition `Program.eval` asserts (`len` 1..8, `denom > 0` via
+/// strictly increasing `t_end` from a virtual 0), plus the format's own
+/// canonical rules: pads zero, finite floats, op ordinals in range, and
+/// every unused stage/op slot byte-zero (the normalized-on-copy
+/// convention — one spelling per program).
+fn validateEaseProgramWire(
+    payload: []const u8,
+    at: usize,
+    refusal: ?*Refusal,
+) DecodeError!void {
+    const len = payload[at];
+    if (len < 1 or len > Easing.MAX_STAGES) {
+        return fail(refusal, .ease_invalid, at);
+    }
+    if (!std.mem.allEqual(u8, payload[at + 1 .. at + 4], 0)) {
+        return fail(refusal, .ease_invalid, at + 1);
+    }
+    var prev_end: f32 = 0;
+    for (0..Easing.MAX_STAGES) |i| {
+        const sat = at + 4 + i * PACM_EASE_STAGE_LEN;
+        if (i >= len) {
+            // Unused stage slot: byte-zero.
+            if (!std.mem.allEqual(u8, payload[sat .. sat + PACM_EASE_STAGE_LEN], 0)) {
+                return fail(refusal, .ease_invalid, sat);
+            }
+            continue;
+        }
+        const t_end = readF32(payload, sat);
+        const v_base = readF32(payload, sat + 4);
+        const v_span = readF32(payload, sat + 8);
+        if (!std.math.isFinite(t_end) or !std.math.isFinite(v_base) or !std.math.isFinite(v_span)) {
+            return fail(refusal, .ease_invalid, sat);
+        }
+        // Strictly increasing from the virtual 0 boundary: this is the
+        // `denom > 0` eval assert, pre-checked.
+        if (!(t_end > prev_end)) {
+            return fail(refusal, .ease_invalid, sat);
+        }
+        prev_end = t_end;
+        const ops_len = payload[sat + 12];
+        if (ops_len > Easing.MAX_OPS) {
+            return fail(refusal, .ease_invalid, sat + 12);
+        }
+        if (!std.mem.allEqual(u8, payload[sat + 13 .. sat + 16], 0)) {
+            return fail(refusal, .ease_invalid, sat + 13);
+        }
+        for (0..Easing.MAX_OPS) |j| {
+            const oat = sat + 16 + j * PACM_EASE_OP_LEN;
+            if (j >= ops_len) {
+                // Unused op slot: byte-zero.
+                if (!std.mem.allEqual(u8, payload[oat .. oat + PACM_EASE_OP_LEN], 0)) {
+                    return fail(refusal, .ease_invalid, oat);
+                }
+                continue;
+            }
+            if (payload[oat] > EASE_OP_MAX_ORDINAL) {
+                return fail(refusal, .ease_invalid, oat);
+            }
+            if (!std.mem.allEqual(u8, payload[oat + 1 .. oat + 4], 0)) {
+                return fail(refusal, .ease_invalid, oat + 1);
+            }
+            for (0..4) |p| {
+                if (!std.math.isFinite(readF32(payload, oat + 4 + p * 4))) {
+                    return fail(refusal, .ease_invalid, oat + 4 + p * 4);
+                }
+            }
+        }
+    }
+}
+
+/// Frozen copy of `Abi.metaWorstCase`'s arithmetic: the largest `'PACM'`
+/// Read one 772-byte `'EASE'` program record into an `Easing.Program`.
+/// All stage/op slots are copied — the wire's zeroed unused slots ARE
+/// the canonical zero-fill (`Program.zero_stage` spells code 0 with
+/// zero params), so a faithful copy reproduces the canonical struct.
+fn readEaseProgram(payload: []const u8, at: usize) Easing.Program {
+    var prog: Easing.Program = .{
+        .len = payload[at],
+        .stages = @splat(Easing.Program.zero_stage),
+    };
+    for (0..Easing.MAX_STAGES) |i| {
+        const sat = at + 4 + i * PACM_EASE_STAGE_LEN;
+        var stage: Easing.Stage = .{
+            .t_end = readF32(payload, sat),
+            .v_base = readF32(payload, sat + 4),
+            .v_span = readF32(payload, sat + 8),
+            .ops_len = payload[sat + 12],
+            .ops = @splat(.{ .code = .linear, .params = .{ 0, 0, 0, 0 } }),
+        };
+        for (0..Easing.MAX_OPS) |j| {
+            const oat = sat + 16 + j * PACM_EASE_OP_LEN;
+            stage.ops[j] = .{
+                // Out-of-range bytes degrade to linear here so the
+                // carry never trips the exhaustive-enum check; the
+                // validated stage refuses them before this read.
+                .code = std.enums.fromInt(Easing.Op, payload[oat]) orelse .linear,
+                .params = .{
+                    readF32(payload, oat + 4),
+                    readF32(payload, oat + 8),
+                    readF32(payload, oat + 12),
+                    readF32(payload, oat + 16),
+                },
+            };
+        }
+        prog.stages[i] = stage;
+    }
+    return prog;
 }
 
 /// Frozen copy of `Abi.metaWorstCase`'s arithmetic: the largest `'PACM'`
@@ -2595,6 +3071,78 @@ const EmitRec = struct {
 /// One `'SCEN'` record (16 B: start_tick i64, dur_ticks i64).
 const ScenRec = struct { start_tick: i64 = 0, dur_ticks: i64 = 0 };
 
+/// One `'CTRL'` record (60 B: target_id u16 (0xffff env-only), registry
+/// u8, ncomp u8, type u8, flags u8 (bit0 min, bit1 max), id_off u32,
+/// id_len u16, value f32×4, min f32×4, max f32×4). `id` auto-resolves
+/// `(id_off, id_len)` into the spec's `'STRS'` entries by content when
+/// `id_off` is null; an explicit `id_off` spells a raw pointer (mutation
+/// tests) and takes `id.len` as its length.
+const CtrlRec = struct {
+    id: []const u8 = "",
+    target_id: u16 = TrackTable.NO_TARGET,
+    registry: u8 = 0,
+    ncomp: u8 = 1,
+    type: u8 = 0, // slider
+    flags: u8 = 0,
+    id_off: ?u32 = null,
+    id_len: ?u16 = null,
+    value: [4]f32 = .{ 0, 0, 0, 0 },
+    min: [4]f32 = .{ 0, 0, 0, 0 },
+    max: [4]f32 = .{ 0, 0, 0, 0 },
+};
+
+/// Wire stage/op record widths inside an `'EASE'` program — independent
+/// test literals (the production decoder spells its own frozen copies):
+/// 772 = 4 + 8×96 and 96 = 16 + 4×20, pinned against
+/// `PACM_EASE_PROGRAM_LEN` in the T2.5 tests.
+const ease_stage_len = 96;
+const ease_op_len = 20;
+
+/// Serialize one `Easing.Program` into its 772-byte wire record — the
+/// test-side mirror of `Abi.easeProgramRec`: every stage/op slot written
+/// from the struct (a compiled program's unused slots are zero/linear-0,
+/// which IS the byte-zero wire spelling), so struct-level mutations
+/// serialize directly.
+fn writeEaseProgram(buf: []u8, at: usize, prog: *const Easing.Program) void {
+    buf[at] = prog.len;
+    // len pad ×3 stays zero (fixture buffers are pre-zeroed).
+    for (0..Easing.MAX_STAGES) |i| {
+        const st = &prog.stages[i];
+        const sat = at + 4 + i * ease_stage_len;
+        putF32(buf, sat, st.t_end);
+        putF32(buf, sat + 4, st.v_base);
+        putF32(buf, sat + 8, st.v_span);
+        buf[sat + 12] = st.ops_len;
+        for (0..Easing.MAX_OPS) |j| {
+            const oat = sat + 16 + j * ease_op_len;
+            buf[oat] = @intFromEnum(st.ops[j].code);
+            for (0..4) |p| {
+                putF32(buf, oat + 4 + p * 4, st.ops[j].params[p]);
+            }
+        }
+    }
+}
+
+/// Resolve a CtrlRec's `(id_off, id_len)` against the spec's `'STRS'`
+/// entry list. `id_off` is region-relative and points AT THE STRING
+/// BYTES (the `payload_off` convention: into the entries region, past
+/// each entry's own `[len u16]` prefix).
+fn resolveStrsEntry(strs: ?[]const []const u8, rec: CtrlRec) struct { off: u32, len: u16 } {
+    if (rec.id_off) |off| {
+        return .{ .off = off, .len = rec.id_len orelse @intCast(rec.id.len) };
+    }
+    if (strs) |ids| {
+        var off: u32 = 2; // past the entry's own length prefix
+        for (ids) |id| {
+            if (std.mem.eql(u8, id, rec.id)) {
+                return .{ .off = off, .len = @intCast(id.len) };
+            }
+            off += @intCast(2 + id.len);
+        }
+    }
+    return .{ .off = 0, .len = @intCast(rec.id.len) };
+}
+
 /// Optional means absent; a NON-NULL EMPTY slice spells a present
 /// zero-count section (the canonical-presence mutation under test).
 const RecordsSpec = struct {
@@ -2607,6 +3155,20 @@ const RecordsSpec = struct {
     keys: ?[]const KeyRec = null,
     tick: ?[]const i64 = null,
     scen: ?[]const ScenRec = null,
+    /// `'EASE'` programs (T2.5). The per-key ref array is derived from
+    /// `keys` unless `ease_refs` overrides it (its length IS
+    /// `key_ref_count`, so a consistent lie about the count is
+    /// spellable).
+    ease: ?[]const Easing.Program = null,
+    ease_refs: ?[]const u16 = null,
+    /// `'STRS'` control-id table (T2.5), written verbatim in the given
+    /// order so ordering/duplication mutations spell directly.
+    strs: ?[]const []const u8 = null,
+    /// `'CTRL'` records (T2.5); `id_off`/`id_len` auto-resolve into
+    /// `strs` by content when null.
+    ctrl: ?[]const CtrlRec = null,
+    /// `'PAYL'` payload region bytes (T2.6), written verbatim.
+    payl: ?[]const u8 = null,
 };
 
 /// Absolute payload offsets of the record sections (0 = absent; every
@@ -2616,7 +3178,11 @@ const RecordsLayout = struct {
     trak: u32 = 0,
     keys: u32 = 0,
     tick: u32 = 0,
+    ease: u32 = 0,
+    ctrl: u32 = 0,
     scen: u32 = 0,
+    strs: u32 = 0,
+    payl: u32 = 0,
 };
 
 const BuiltFixture = struct { buf: []u8, layout: RecordsLayout };
@@ -2638,7 +3204,11 @@ fn buildRecordsFixture(
     if (spec.trak != null) n += 1;
     if (spec.keys != null) n += 1;
     if (spec.tick != null) n += 1;
+    if (spec.ease != null) n += 1;
+    if (spec.ctrl != null) n += 1;
     if (spec.scen != null) n += 1;
+    if (spec.strs != null) n += 1;
+    if (spec.payl != null) n += 1;
 
     var pos: usize = HEADER_LEN + n * DIRECTORY_ENTRY_LEN;
     const tran_off = pos;
@@ -2664,9 +3234,29 @@ fn buildRecordsFixture(
     const tick_off = pos;
     const tick_len: usize = if (spec.tick) |tk| 4 + tk.len * TICK_REC_LEN else 0;
     pos += tick_len;
+    const ease_off = pos;
+    const refs_len: usize = if (spec.ease != null)
+        (if (spec.ease_refs) |r| r.len else if (spec.keys) |ks| ks.len else 0)
+    else
+        0;
+    const ease_len: usize = if (spec.ease) |ps| 4 + ps.len * PACM_EASE_PROGRAM_LEN + 4 + refs_len * 2 else 0;
+    pos += ease_len;
+    const ctrl_off = pos;
+    const ctrl_len: usize = if (spec.ctrl) |cs| 4 + cs.len * CTRL_REC_LEN else 0;
+    pos += ctrl_len;
     const scen_off = pos;
     const scen_len: usize = if (spec.scen) |sc| 4 + sc.len * SCEN_REC_LEN else 0;
     pos += scen_len;
+    const strs_off = pos;
+    const strs_len: usize = if (spec.strs) |ids| blk: {
+        var sum: usize = 8;
+        for (ids) |id| sum += 2 + id.len;
+        break :blk sum;
+    } else 0;
+    pos += strs_len;
+    const payl_off = pos;
+    const payl_len: usize = if (spec.payl) |p| 4 + p.len else 0;
+    pos += payl_len;
     const pacm_off = pos;
     const pacm_len: usize = 40;
 
@@ -2759,6 +3349,40 @@ fn buildRecordsFixture(
         }
         index += 1;
     }
+    if (spec.ease) |progs| {
+        writeDirEntry(buf, index, .ease, ease_off, ease_len);
+        putU32(buf, ease_off, @intCast(progs.len));
+        for (progs, 0..) |*prog, i| {
+            writeEaseProgram(buf, ease_off + 4 + i * PACM_EASE_PROGRAM_LEN, prog);
+        }
+        putU32(buf, ease_off + 4 + progs.len * PACM_EASE_PROGRAM_LEN, @intCast(refs_len));
+        for (0..refs_len) |i| {
+            const ref: u16 = if (spec.ease_refs) |r| r[i] else if (spec.keys) |ks| ks[i].ease_ref else 0;
+            putU16(buf, ease_off + 4 + progs.len * PACM_EASE_PROGRAM_LEN + 4 + i * 2, ref);
+        }
+        index += 1;
+    }
+    if (spec.ctrl) |cs| {
+        writeDirEntry(buf, index, .ctrl, ctrl_off, ctrl_len);
+        putU32(buf, ctrl_off, @intCast(cs.len));
+        for (cs, 0..) |rec, i| {
+            const at = ctrl_off + 4 + i * CTRL_REC_LEN;
+            putU16(buf, at, rec.target_id);
+            putU8(buf, at + 2, rec.registry);
+            putU8(buf, at + 3, rec.ncomp);
+            putU8(buf, at + 4, rec.type);
+            putU8(buf, at + 5, rec.flags);
+            const resolved = resolveStrsEntry(spec.strs, rec);
+            putU32(buf, at + 6, resolved.off);
+            putU16(buf, at + 10, resolved.len);
+            for (0..4) |lane| {
+                putF32(buf, at + 12 + lane * 4, rec.value[lane]);
+                putF32(buf, at + 28 + lane * 4, rec.min[lane]);
+                putF32(buf, at + 44 + lane * 4, rec.max[lane]);
+            }
+        }
+        index += 1;
+    }
     if (spec.scen) |scs| {
         writeDirEntry(buf, index, .scen, scen_off, scen_len);
         putU32(buf, scen_off, @intCast(scs.len));
@@ -2769,6 +3393,24 @@ fn buildRecordsFixture(
         }
         index += 1;
     }
+    if (spec.strs) |ids| {
+        writeDirEntry(buf, index, .strs, strs_off, strs_len);
+        putU32(buf, strs_off, @intCast(ids.len));
+        putU32(buf, strs_off + 4, @intCast(strs_len - 8));
+        var at = strs_off + 8;
+        for (ids) |id| {
+            putU16(buf, at, @intCast(id.len));
+            @memcpy(buf[at + 2 ..][0..id.len], id);
+            at += 2 + id.len;
+        }
+        index += 1;
+    }
+    if (spec.payl) |payload_region| {
+        writeDirEntry(buf, index, .payl, payl_off, payl_len);
+        putU32(buf, payl_off, @intCast(payload_region.len));
+        @memcpy(buf[payl_off + 4 ..][0..payload_region.len], payload_region);
+        index += 1;
+    }
     writeDirEntry(buf, n - 1, .pacm, pacm_off, pacm_len);
     writeTranRecord(buf, tran_off, spec.transport);
 
@@ -2777,7 +3419,11 @@ fn buildRecordsFixture(
         .trak = if (spec.trak != null) @intCast(trak_off) else 0,
         .keys = if (spec.keys != null) @intCast(keys_off) else 0,
         .tick = if (spec.tick != null) @intCast(tick_off) else 0,
+        .ease = if (spec.ease != null) @intCast(ease_off) else 0,
+        .ctrl = if (spec.ctrl != null) @intCast(ctrl_off) else 0,
         .scen = if (spec.scen != null) @intCast(scen_off) else 0,
+        .strs = if (spec.strs != null) @intCast(strs_off) else 0,
+        .payl = if (spec.payl != null) @intCast(payl_off) else 0,
     } };
 }
 
@@ -3443,5 +4089,773 @@ test "Pacb: canonicalPactEquals catches same-shaped registry swaps" {
         defer t.allocator.free(zero);
         try t.expect(canonicalPactEquals(zero, zero));
         try t.expect(!canonicalPactEquals(zero, base));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T2.5 — ease/control stage tests ('EASE' + 'STRS' + 'CTRL')
+// ---------------------------------------------------------------------------
+
+fn expectEaseControlRefusal(bytes: []const u8, code: RefusalCode) !void {
+    var refusal: Refusal = undefined;
+    const directory = try parseDirectory(bytes, null);
+    var registry = try decodeRegistry(t.allocator, bytes, &directory, &refusal);
+    defer registry.deinit();
+    var records = try decodeRecords(t.allocator, bytes, &directory, &registry, &refusal);
+    defer records.deinit();
+    const decoded = decodeEaseControls(t.allocator, bytes, &directory, &records, &registry, &refusal);
+    if (decoded) |payload| {
+        var stage = payload;
+        stage.deinit();
+        return error.WronglyAccepted;
+    } else |err| {
+        try t.expectEqual(error.Refused, err);
+        try t.expectEqual(code, refusal.code);
+    }
+}
+
+/// The shared T2.5 base: the host_two join, one declared target, the
+/// four base tracks (keys referencing program 1), an `'EASE'` table of
+/// [linear, two-stage seq], a sorted two-entry `'STRS'` table, and two
+/// controls (one host-targeted slider with min/max, one env-only).
+const EaseControlBase = struct {
+    trak: [4]TrakRec,
+    programs: [2]Easing.Program,
+    strs: [2][]const u8,
+    ctrl: [2]CtrlRec,
+    keys: [3]KeyRec,
+};
+
+fn baseEaseControl() EaseControlBase {
+    var base = baseRecords();
+    base.keys[1].ease_ref = 1;
+    return .{
+        .trak = base.trak,
+        .keys = base.keys,
+        .programs = .{
+            Easing.primitive(.{ .code = .linear }) catch unreachable,
+            Easing.seqOf(&.{
+                .{ .t = 1, .v = 1, .ops = &.{.{ .code = .out_cubic }} },
+                .{ .t = 1, .v = 1, .ops = &.{.{ .code = .in_out_quad }} },
+            }) catch unreachable,
+        },
+        .strs = .{ "amp", "level" },
+        .ctrl = .{
+            .{
+                .id = "amp",
+                .target_id = 0,
+                .registry = 0,
+                .ncomp = 3,
+                .type = 0,
+                .flags = 0b11,
+                .value = .{ 0.25, 0.5, 0.75, 0 },
+                .min = .{ 0, 0.5, 1, 0 },
+                .max = .{ 1, 2, 3, 0 },
+            },
+            .{
+                .id = "level",
+                .target_id = TrackTable.NO_TARGET,
+                .ncomp = 1,
+                .type = 0,
+                .value = .{ 0.5, 0, 0, 0 },
+            },
+        },
+    };
+}
+
+fn buildEaseControlFixture(
+    alloc: std.mem.Allocator,
+    base: *const EaseControlBase,
+    regs: []const u8,
+) !BuiltFixture {
+    const b = baseRecords();
+    return buildRecordsFixture(alloc, .{
+        .transport = hostJoinSpec(regs),
+        .regs = regs,
+        .decl = &base_decl,
+        .emit = &b.emit,
+        .trak = &base.trak,
+        .keys = &base.keys,
+        .tick = &b.tick,
+        .scen = &b.scen,
+        .ease = &base.programs,
+        .strs = &base.strs,
+        .ctrl = &base.ctrl,
+    });
+}
+
+/// Wire offsets inside the `'EASE'` payload of a built fixture.
+const EaseAt = struct { count: usize, layout: RecordsLayout };
+
+fn easeProgramAt(layout: RecordsLayout, program: usize) usize {
+    return layout.ease + 4 + program * PACM_EASE_PROGRAM_LEN;
+}
+
+fn easeStageAt(layout: RecordsLayout, program: usize, stage: usize) usize {
+    return easeProgramAt(layout, program) + 4 + stage * ease_stage_len;
+}
+
+fn easeOpAt(layout: RecordsLayout, program: usize, stage: usize, op: usize) usize {
+    return easeStageAt(layout, program, stage) + 16 + op * ease_op_len;
+}
+
+test "Pacb: a clean ease/control fixture decodes owned programs and controls" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseEaseControl();
+    const built = try buildEaseControlFixture(t.allocator, &base, regs);
+    defer t.allocator.free(built.buf);
+
+    // The wire arithmetic the record widths must satisfy: 772 = 4+8×96
+    // and 96 = 16+4×20 (independent expectation, not the decoder's).
+    try t.expectEqual(@as(usize, 772), PACM_EASE_PROGRAM_LEN);
+    try t.expectEqual(@as(usize, 4 + 8 * ease_stage_len), PACM_EASE_PROGRAM_LEN);
+    try t.expectEqual(@as(usize, 16 + 4 * ease_op_len), ease_stage_len);
+
+    const directory = try parseDirectory(built.buf, null);
+    var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+    defer registry.deinit();
+    var records = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+    defer records.deinit();
+    var stage = try decodeEaseControls(t.allocator, built.buf, &directory, &records, &registry, null);
+    defer stage.deinit();
+
+    try t.expectEqual(@as(usize, 2), stage.programs.len);
+    const want_linear = Easing.primitive(.{ .code = .linear }) catch unreachable;
+    try t.expect(std.meta.eql(stage.programs[0], want_linear));
+
+    const want_seq = base.programs[1];
+    try t.expect(std.meta.eql(stage.programs[1], want_seq));
+    // Independent literal pins (not the builder's echo): the seq's
+    // normalized boundaries and the eval math at a spot point.
+    try t.expectEqual(@as(u8, 2), stage.programs[1].len);
+    try t.expectEqual(@as(f32, 0.5), stage.programs[1].stages[0].t_end);
+    try t.expectEqual(@as(f32, 1.0), stage.programs[1].stages[1].t_end);
+    try t.expectEqual(@as(f32, 0.5), stage.programs[1].stages[1].v_base);
+    try t.expectEqual(
+        @as(u64, @bitCast(want_seq.eval(0.25))),
+        @as(u64, @bitCast(stage.programs[1].eval(0.25))),
+    );
+
+    try t.expectEqual(@as(usize, 2), stage.controls.len);
+    const c0 = stage.controls[0];
+    try t.expectEqualStrings("amp", c0.id);
+    try t.expect(c0.target != null);
+    try t.expectEqual(@as(u16, 0), c0.target.?.id);
+    try t.expectEqual(@as(u8, 0), c0.target.?.registry);
+    try t.expectEqual(@as(u8, 3), c0.ncomp);
+    try t.expectEqual(TrackTable.ControlType.slider, c0.kind);
+    try t.expectEqual(@as(f32, 0.25), c0.value[0]);
+    try t.expectEqual(@as(f32, 0.75), c0.value[2]);
+    try t.expect(c0.min != null and c0.min.?[1] == 0.5);
+    try t.expect(c0.max != null and c0.max.?[2] == 3);
+
+    const c1 = stage.controls[1];
+    try t.expectEqualStrings("level", c1.id);
+    try t.expect(c1.target == null);
+    try t.expectEqual(@as(u8, 1), c1.ncomp);
+    try t.expectEqual(@as(f32, 0.5), c1.value[0]);
+    try t.expect(c1.min == null and c1.max == null);
+
+    // The stage owns everything it returns: clobber the input, the
+    // programs and control ids survive (the borrow-vs-own contract
+    // until T2.8's final DecodedScore arena).
+    @memset(built.buf, 0xAA);
+    try t.expect(std.meta.eql(stage.programs[1], want_seq));
+    try t.expectEqualStrings("amp", stage.controls[0].id);
+    try t.expectEqualStrings("level", stage.controls[1].id);
+    try t.expectEqual(@as(u8, 3), stage.controls[0].ncomp);
+}
+
+test "Pacb: EASE absent synthesizes the shared linear default" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseRecords();
+    const built = try buildBaseFixture(t.allocator, &base, regs);
+    defer t.allocator.free(built.buf);
+
+    const directory = try parseDirectory(built.buf, null);
+    var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+    defer registry.deinit();
+    var records = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+    defer records.deinit();
+    var stage = try decodeEaseControls(t.allocator, built.buf, &directory, &records, &registry, null);
+    defer stage.deinit();
+
+    try t.expectEqual(@as(usize, 1), stage.programs.len);
+    const want = Easing.primitive(.{ .code = .linear }) catch unreachable;
+    try t.expect(std.meta.eql(stage.programs[0], want));
+    try t.expectEqual(@as(f64, 0.25), stage.programs[0].eval(0.25));
+    try t.expectEqual(@as(usize, 0), stage.controls.len);
+}
+
+test "Pacb: EASE program shape defects refuse ease_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // len 0 / len 9 on a live program.
+    {
+        var base = baseEaseControl();
+        base.programs[1].len = 0;
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    {
+        var base = baseEaseControl();
+        base.programs[1].len = Easing.MAX_STAGES + 1;
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    // ops_len over MAX_OPS.
+    {
+        var base = baseEaseControl();
+        base.programs[1].stages[0].ops_len = Easing.MAX_OPS + 1;
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    // t_end: ties, a zero first boundary (eval's denom>0 assert), and a
+    // non-finite stage float.
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putF32(built.buf, easeStageAt(built.layout, 1, 0), 1.0); // ties stage 1
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putF32(built.buf, easeStageAt(built.layout, 1, 0), 0.0); // zero first
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putF32(built.buf, easeStageAt(built.layout, 1, 0), std.math.nan(f32));
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    // Non-finite op param (stage 0, op 0, param 0 of program 1).
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putF32(built.buf, easeOpAt(built.layout, 1, 0, 0) + 4, std.math.inf(f32));
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    // Op code outside the frozen Easing.Op set (0..21).
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putU8(built.buf, easeOpAt(built.layout, 1, 0, 0), 22);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    // Program 0 must be the shared linear default.
+    {
+        var base = baseEaseControl();
+        const swap = base.programs[0];
+        base.programs[0] = base.programs[1];
+        base.programs[1] = swap;
+        base.keys[1].ease_ref = 1;
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+}
+
+test "Pacb: EASE unused slots and pads must be byte-zero" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // Unused stage slot (program 1 is a 2-stage seq; stage 2 is unused).
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putF32(built.buf, easeStageAt(built.layout, 1, 2), 0.25);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    // Unused op slot inside a live stage (each stage has one op).
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putF32(built.buf, easeOpAt(built.layout, 1, 0, 1) + 4, 1);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    // The len pad, the ops_len pad and the op-code pad are reserved zero.
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putU8(built.buf, easeProgramAt(built.layout, 1) + 1, 1);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putU8(built.buf, easeStageAt(built.layout, 1, 0) + 13, 1);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    {
+        var base = baseEaseControl();
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putU8(built.buf, easeOpAt(built.layout, 1, 0, 0) + 1, 1);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+}
+
+test "Pacb: EASE canonical presence, caps and section arithmetic" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseEaseControl();
+
+    // Present with a single program: the linear-only table is the
+    // omitted case.
+    {
+        const one = [_]Easing.Program{base.programs[0]};
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &baseRecords().emit,
+            .trak = &base.trak,
+            .keys = &base.keys,
+            .tick = &baseRecords().tick,
+            .scen = &baseRecords().scen,
+            .ease = &one,
+            .strs = &base.strs,
+            .ctrl = &base.ctrl,
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .non_canonical);
+    }
+    // program_count over MAX_EASE_PROGRAMS (129 one-stage programs; the
+    // section is ~99 KiB, count×width exact at the directory level).
+    {
+        const many = try t.allocator.alloc(Easing.Program, MAX_EASE_PROGRAMS + 1);
+        defer t.allocator.free(many);
+        for (many) |*prog| prog.* = base.programs[0];
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &baseRecords().emit,
+            .trak = &base.trak,
+            .keys = &base.keys,
+            .tick = &baseRecords().tick,
+            .scen = &baseRecords().scen,
+            .ease = many,
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .cap_exceeded);
+    }
+    // The length arithmetic must consume the section exactly: claim one
+    // fewer ref than the bytes carry.
+    {
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putU32(
+            built.buf,
+            built.layout.ease + 4 + 2 * PACM_EASE_PROGRAM_LEN,
+            2, // 3 ref slots physically follow
+        );
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    // key_ref_count must equal the 'KEYS' count (a consistent 4-ref
+    // section against 3 keys).
+    {
+        const refs = [_]u16{ 0, 1, 0, 0 };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &baseRecords().emit,
+            .trak = &base.trak,
+            .keys = &base.keys,
+            .tick = &baseRecords().tick,
+            .scen = &baseRecords().scen,
+            .ease = &base.programs,
+            .ease_refs = &refs,
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .count_mismatch);
+    }
+}
+
+test "Pacb: ease refs are bounded by the program table" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // A KEYS ease_ref past the table.
+    {
+        var base = baseEaseControl();
+        base.keys[2].ease_ref = 2; // table holds 0..1
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+    // A refs-array entry past the table (keys themselves clean).
+    {
+        var base = baseEaseControl();
+        const refs = [_]u16{ 0, 1, 7 };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &baseRecords().emit,
+            .trak = &base.trak,
+            .keys = &.{ base.keys[0], .{ .at = 360360, .value = .{ 0.25, 0.5, 0.75, 0 } }, base.keys[2] },
+            .tick = &baseRecords().tick,
+            .scen = &baseRecords().scen,
+            .ease = &base.programs,
+            .ease_refs = &refs,
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+}
+
+test "Pacb: STRS ordering, uniqueness, emptiness and reservation refuse strs_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseEaseControl();
+
+    // Unsorted: equal lengths out of byte order.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "zed", "amp" },
+            .ctrl = &.{.{ .id = "amp", .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .strs_invalid);
+    }
+    // Unsorted: longer entry before a shorter one.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "level", "amp" },
+            .ctrl = &.{.{ .id = "amp", .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .strs_invalid);
+    }
+    // Duplicate entry (also the not-strictly-increasing case).
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "amp", "amp" },
+            .ctrl = &.{.{ .id = "amp", .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .strs_invalid);
+    }
+    // Empty entry.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "", "amp" },
+            .ctrl = &.{.{ .id = "amp", .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .strs_invalid);
+    }
+    // Reserved time-env names ("beat" and "t").
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "amp", "beat" },
+            .ctrl = &.{.{ .id = "amp", .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .strs_invalid);
+    }
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "amp", "t" },
+            .ctrl = &.{.{ .id = "amp", .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .strs_invalid);
+    }
+    // byte_size disagrees with the entries it carries.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "amp", "level" },
+            .ctrl = &base.ctrl,
+        });
+        defer t.allocator.free(built.buf);
+        putU32(built.buf, built.layout.strs + 4, 5); // entries need 11
+        try expectEaseControlRefusal(built.buf, .strs_invalid);
+    }
+}
+
+test "Pacb: STRS/CTRL canonical presence, caps and iff-consumption" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseEaseControl();
+
+    // A present zero-count STRS is the omitted case.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .non_canonical);
+    }
+    // A present zero-count CTRL likewise.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{"amp"},
+            .ctrl = &.{},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .non_canonical);
+    }
+    // STRS over the 64-entry cap.
+    {
+        const many = try t.allocator.alloc([]const u8, MAX_CONTROLS + 1);
+        defer t.allocator.free(many);
+        for (many, 0..) |*id, i| id.* = try std.fmt.allocPrint(t.allocator, "c{d:0>8}", .{i});
+        defer for (many) |id| t.allocator.free(id);
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = many,
+            .ctrl = &.{.{ .id = many[0], .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .cap_exceeded);
+    }
+    // CTRL over MAX_CONTROLS (pointing at one shared entry).
+    {
+        const ctrls = try t.allocator.alloc(CtrlRec, MAX_CONTROLS + 1);
+        defer t.allocator.free(ctrls);
+        for (ctrls) |*rec| rec.* = .{ .id = "amp", .target_id = 0, .registry = 0, .ncomp = 3 };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{"amp"},
+            .ctrl = ctrls,
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .cap_exceeded);
+    }
+    // 'STRS' iff a control exists, both directions.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "amp", "level" },
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .non_canonical);
+    }
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .ctrl = &base.ctrl,
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .non_canonical);
+    }
+}
+
+test "Pacb: control ids must resolve to unique STRS entries" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // Beyond the entries region ("amp" is at 0..3, the region is 11 B).
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "amp", "level" },
+            .ctrl = &.{.{ .id = "amp", .id_off = 100, .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+    // Mid-entry start (inside "amp"'s bytes, not a string-bytes start).
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "amp", "level" },
+            .ctrl = &.{.{ .id = "mp!", .id_off = 3, .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+    // The right start but the wrong length (a strict prefix of "amp").
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "amp", "level" },
+            .ctrl = &.{.{ .id = "am", .id_off = 2, .id_len = 2, .target_id = 0, .registry = 0, .ncomp = 3 }},
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+    // Two controls naming the same entry.
+    {
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .strs = &.{ "amp", "level" },
+            .ctrl = &.{
+                .{ .id = "amp", .target_id = 0, .registry = 0, .ncomp = 3 },
+                .{ .id = "amp", .target_id = TrackTable.NO_TARGET },
+            },
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+}
+
+test "Pacb: control type ordinal and env-only rules refuse control_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // A type byte outside ControlType's 0..2.
+    {
+        var base = baseEaseControl();
+        base.ctrl[0].type = 7;
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+    // Env-only ncomp bounds (no join entry exists to check against).
+    for ([_]u8{ 0, 5 }) |ncomp| {
+        var base = baseEaseControl();
+        base.ctrl[1].ncomp = ncomp;
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+    // An env-only control's registry byte is unused-by-target: zero.
+    {
+        var base = baseEaseControl();
+        base.ctrl[1].registry = 1;
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+    // Reserved flag bits refuse.
+    {
+        var base = baseEaseControl();
+        base.ctrl[0].flags |= 0b100;
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+}
+
+test "Pacb: control join coherence refuses registry_mismatch" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // A targeted id outside the join that is not the NO_TARGET spelling.
+    {
+        var base = baseEaseControl();
+        base.ctrl[0].target_id = 42; // join size is 3
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .registry_mismatch);
+    }
+    // A wrong registry for host entry 0 (registry 0, ncomp 3).
+    {
+        var base = baseEaseControl();
+        base.ctrl[0].registry = 1;
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .registry_mismatch);
+    }
+    // A wrong ncomp for host entry 0.
+    {
+        var base = baseEaseControl();
+        base.ctrl[0].ncomp = 2;
+        base.ctrl[0].value = .{ 0.25, 0.5, 0, 0 };
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .registry_mismatch);
+    }
+}
+
+test "Pacb: control flags are coherent with finite lanes and zero spellings" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // A set min flag with a non-finite lane.
+    {
+        var base = baseEaseControl();
+        base.ctrl[0].min[2] = std.math.nan(f32);
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+    // A set max flag with an infinite lane.
+    {
+        var base = baseEaseControl();
+        base.ctrl[0].max[0] = std.math.inf(f32);
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+    // A clear flag must spell zero lanes (the absent-case spelling).
+    {
+        var base = baseEaseControl();
+        base.ctrl[1].max = .{ 1, 0, 0, 0 };
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+    // Value lanes at or above ncomp are zero-padded like Key.value.
+    {
+        var base = baseEaseControl();
+        base.ctrl[1].value = .{ 0.5, 0.25, 0, 0 };
+        const built = try buildEaseControlFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .control_invalid);
     }
 }

@@ -10,7 +10,7 @@ byte-identical through the codec extraction. `Compile.Code` gains variants
 **Gates:** `zig build verify` every phase; `zig build fuzz` from Phase 4;
 determinism gate — pack the same score twice ⇒ byte-identical output.
 **Created 2026-10-18; Phase 1 complete 2026-10-18; Phase 2 in progress
-(T2.1–T2.4 landed 2026-10-18, T2.5–T2.8 open); phases 3–4 not started.**
+(T2.1–T2.5 landed 2026-10-18, T2.6–T2.8 open); phases 3–4 not started.**
 
 ## Why
 
@@ -625,3 +625,52 @@ _(created 2026-10-18; entries appended per phase)_
   (`'EASE'`/`'STRS'`/`'CTRL'`), payload (`'PAYL'`), the PACM reader,
   and coherence remain T2.5–T2.8; no `decode`/`DecodedScore`, no
   corpus/CLI golden byte changed, no encoder/CLI/runtime/npm work.
+
+- **2026-10-18 — Phase 2 continued (T2.5 only; phase NOT complete).**
+  `src/Pacb.zig` gained the ease/control stage:
+  `decodeEaseControls(gpa, bytes, directory, records, registry,
+  refusal) DecodeError!EaseControlStage` — an owned, arena-backed
+  result (`deinit`) carrying `programs` (the verbatim `'EASE'` table,
+  or the synthesized shared linear default alone when absent, spelled
+  exactly as compile spells it) and `controls` (ids deep-copied out of
+  `'STRS'`; `DecodedControl` is the frozen T2.1 representation).
+  Validation: `'EASE'` program_count ≤ 128 (`cap_exceeded`), present ⇒
+  ≥ 2 programs with program 0 linear (`non_canonical`/`ease_invalid`),
+  section length arithmetic exact (`4 + n×772 + 4 + k×2`), per program
+  `len ∈ 1..8`, `ops_len ≤ 4`, `t_end` strictly increasing from the
+  virtual 0 boundary (the `denom > 0` eval assert pre-checked), all
+  floats finite, op ordinals within the frozen `Easing.Op` set, pads
+  and every unused stage/op slot byte-zero (the normalized-on-copy
+  rule), `key_ref_count == 'KEYS'` count (`count_mismatch`), every
+  refs-array entry and every KEYS `ease_ref` bounded by the real table
+  (`ease_invalid`, subsuming T2.4's absent-section check);
+  `'STRS'` count ≤ 64, present ⇒ count ≥ 1 and byte_size ≥ 1
+  (`non_canonical`), byte_size == section length − 8 with entries
+  consuming it exactly, sorted by (len, bytes) ⇒ unique, no empty
+  entries, no `ExprTrack.reserved_names` shadow (frozen copy
+  `reserved_control_names`, equality-asserted in `src/root.zig`);
+  `'STRS'` iff a control exists (`non_canonical`, both directions);
+  `'CTRL'` count ≤ 64 / ≥ 1, reserved flag bits zero, `type` ordinal ≤
+  2 (`control_invalid`), ids resolving to exactly one `'STRS'` entry
+  and never shared between controls, env-only spelling
+  (`target_id == NO_TARGET`) with zero registry byte and `ncomp ∈
+  1..4`, targeted ids inside the join with the exact
+  `(registry, ncomp)` triple (`registry_mismatch`), value lanes ≥
+  ncomp zero, min/max flag set ⇒ finite lanes and clear ⇒ zero lanes.
+  RED: 4× missing-export compile errors (`decodeEaseControls`,
+  `Pacb.reserved_control_names`), then 10 named WronglyAccepted FAILs
+  against the carry/copy-only increment (positive controls passing).
+  Two fixture defects found on the way (an `id_off` pointing at the
+  entry's length prefix — pinned to the string BYTES, the
+  `payload_off` convention; three EASE-mutation fixtures omitting the
+  KEYS/TICK/EMIT/SCEN sections their `'TRAK'` rows require) were fixed
+  and the RED re-run clean before GREEN. GREEN: `zig fmt --check`
+  clean; `zig build test` 7/7 steps, **364/364 tests (303 root + 61
+  CLI)**; `zig build verify` 15/15 (303 native, corpus 37/0 failed,
+  93 node/0 skipped, score-docs and cli-golden current); corpus/CLI/
+  docs/npm drift vs `90dc758` zero. Imports grew to std, sjon,
+  `PactCodec`, `TimeMap`, `TrackTable`, `Easing` — still never
+  `Compile`/`Abi`/`Schema`/`Driver` in production code. Payload
+  (`'PAYL'`), the PACM reader, and coherence remain T2.6–T2.8; no
+  `decode`/`DecodedScore`, no corpus/CLI golden byte changed, no
+  encoder/CLI/runtime/npm work.

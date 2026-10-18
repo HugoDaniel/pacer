@@ -222,3 +222,17 @@ test "Pacb: frozen record ordinals match their source definitions" {
     try std.testing.expectEqual(@as(u8, 0), @intFromEnum(TrackTable.EmitName.beat));
     try std.testing.expectEqual(@as(u8, 4), @intFromEnum(TrackTable.EmitName.t));
 }
+
+test "Pacb: frozen reserved-name copy matches ExprTrack.reserved_names" {
+    // `Pacb` refuses 'STRS' entries that shadow a time-env binding name
+    // but must not import `ExprTrack` (the decoder's closure), so the
+    // reserved set is a frozen copy. Root imports both sides with no
+    // cycle: this is the equality gate the copy depends on.
+    try std.testing.expectEqual(
+        @as(usize, ExprTrack.reserved_names.len),
+        Pacb.reserved_control_names.len,
+    );
+    for (ExprTrack.reserved_names, Pacb.reserved_control_names) |src, copy| {
+        try std.testing.expectEqualStrings(src, copy);
+    }
+}
