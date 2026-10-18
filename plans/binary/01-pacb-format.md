@@ -10,7 +10,9 @@ byte-identical through the codec extraction. `Compile.Code` gains variants
 **Gates:** `zig build verify` every phase; `zig build fuzz` from Phase 4;
 determinism gate — pack the same score twice ⇒ byte-identical output.
 **Created 2026-10-18; Phase 1 complete 2026-10-18; Phase 2 in progress
-(T2.1–T2.6 landed 2026-10-18, T2.7–T2.8 open); phases 3–4 not started.**
+(T2.1–T2.7 landed 2026-10-18, plus the interim-review decoder correction
+— folded-tick envelope + canonical hardening — same day; T2.8 open);
+phases 3–4 not started.**
 
 ## Why
 
@@ -780,3 +782,45 @@ _(created 2026-10-18; entries appended per phase)_
   Phase 2 remains open at T2.8 (coherence cross-check,
   `DecodedScore` completion, ownership proof); no encoder/CLI/runtime
   work, no corpus/CLI golden byte changed.
+
+- **2026-10-18 — Interim decoder review correction (decoder-only,
+  pre-T2.8; parent control brief
+  `.agent/control/binary01-review-correction-brief.md`).** The interim
+  review's findings 1+2 (BLOCKER + IMPORTANT, one root cause — the
+  scene-fold tick envelope applied inconsistently) and the batched
+  optional canonical gaps are corrected in `src/Pacb.zig`, per the
+  architect's focused rulings:
+  `MAX_FOLDED_TICK = 2·sjon.Pattern.MAX_TICK` (inclusive) now bounds
+  keys `at`, periodic `trig_offset`, and explicit `'TICK'` entries
+  (`key_invalid`/`trigger_invalid`; `trig_every` ∈ 1..MAX_TICK — it is
+  never scene-folded), with the comptime headroom pin
+  `4·MAX_TICK < maxInt(i64)`; scene `start_tick`/`dur_ticks` stay
+  checked-add-only (window-gated at eval, non-trapping). Boundary
+  tests: ±2·MAX_TICK accepted / ±(2·MAX_TICK+1) refused per family,
+  `every`=MAX_TICK/MAX_TICK+1, the scened-fold parity case (scene
+  start MAX_TICK + local MAX_TICK ⇒ 2·MAX_TICK accepted — the T3.1
+  round-trip class), the 2⁵³-ceiling fixture repointed. Batched
+  canonical hardening (all producer-impossible, premises verified
+  against `Compile`/`Abi` source): `'EASE'` refs elementwise-equal the
+  key stream's `ease_ref`s (`ease_invalid`); `required_features` bit0
+  ⇔ a pattern-source track (`non_canonical`); present zero-count
+  `'DECL'` refuses `non_canonical` (the zero-declared join is the
+  absent section); `'KEYS'` runs non-overlap in track order like
+  `'TICK'` slices (`key_invalid`); `'EMIT'` lanes join scalar
+  (ncomp 1) targets (`registry_mismatch`). The early T2.2/T2.3 stage
+  reads now route through `sectionPayload` with count×width defenses —
+  a mismatched directory/buffer pair is a refusal, never the
+  out-of-bounds trap the review demonstrated. New payload fixtures:
+  date/time literals (real encoder, the walk's last uncovered arms),
+  node-comments+spans (root leading, element leading, vector
+  trailing), and the tree-trailing KNOWN-GAP test pinning the current
+  `payload_malformed` refusal — deferred pending the owner's SJON
+  cross-repo-edit decision (focused ruling 3); compact-only refusal
+  was ruled out as unilateral narrowing. No T2.8 work, no
+  encoder/CLI/runtime/npm/source-compiler change, no wire-format
+  change. RED evidence per behavior
+  (`.agent/control/binary01-review-correction-report.md`): observed
+  reds 392/395 (envelope), 396/396+1 … 400/401 (one per optional),
+  400/402 incl. the demonstrated `index out of bounds` panic
+  (registry mismatched pair); GREEN `zig build test` 405/405
+  (344 root + 61 CLI), `zig fmt --check` clean.

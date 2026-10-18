@@ -4,7 +4,9 @@ The living guide for this wave. Same rules as [`../00-strategy.md`](../00-strate
 read this file, pick the top unchecked item, open only that plan, execute its
 next phase; update the board and pointer when a phase or plan completes.
 **Created 2026-10-18; plan 01 Phase 1 (T1.1) landed 2026-10-18; plan 01
-Phase 2 in progress (T2.1–T2.7 landed 2026-10-18, T2.8 open); plans
+Phase 2 in progress (T2.1–T2.7 landed 2026-10-18, plus the
+interim-review decoder correction — folded-tick envelope + canonical
+hardening — same day; T2.8 open); plans
 01 phases 3–4 and plans 02–04 not started.**
 
 ## North star
@@ -98,7 +100,7 @@ decided by gates, not by size.
 | Wave | Item | Status |
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
-| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 subgroups T2.1–T2.7 landed (header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader); T2.8 open; phases 3–4 open |
+| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 subgroups T2.1–T2.7 landed (header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader) + interim-review decoder correction (folded-tick envelope, canonical hardening, stage-read defense; tree-trailing acceptance deferred to owner); T2.8 open; phases 3–4 open |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |

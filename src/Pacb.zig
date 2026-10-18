@@ -562,7 +562,15 @@ pub fn decodeTransport(
 ) DecodeError!TransportStage {
     const tran = directory.find(.tran) orelse
         return fail(refusal, .non_canonical, payloadStart(directory));
-    const tr = bytes[tran.off..][0..TRAN_REC_LEN];
+    // Bounds-defended read: the documented precondition is that
+    // `directory` is `parseDirectory`'s view of these same `bytes`; the
+    // `sectionPayload` guard turns a mismatched pair into a refusal,
+    // never a trap (the T2.4+ stage discipline, applied to the early
+    // T2.2 reads too).
+    const tr = try sectionPayload(bytes, tran, refusal);
+    if (tr.len != TRAN_REC_LEN) {
+        return fail(refusal, .directory_malformed, tran.off);
+    }
 
     // 'TRAN' domains — before any TimeMap call (asserts, not errors).
     const flags = tr[24];
@@ -612,6 +620,12 @@ pub fn decodeTransport(
         seg_count = sec.count.?; // count×width exactness is T2.1's
         if (seg_count > MAX_TEMPO_SEGMENTS) {
             return fail(refusal, .cap_exceeded, sec.off);
+        }
+        // Mismatched-pair defense: the section slice must be in bounds
+        // and exactly `4 + count × width` inside THIS buffer.
+        const tmpo_payload = try sectionPayload(bytes, sec, refusal);
+        if (tmpo_payload.len != 4 + @as(u64, seg_count) * TMPO_REC_LEN) {
+            return fail(refusal, .directory_malformed, sec.off);
         }
         if (seg_count < 2) {
             // Segment 0 alone is the omitted (constant-tempo) case —
@@ -789,7 +803,13 @@ pub fn decodeRegistry(
 ) DecodeError!RegistryStage {
     const tran = directory.find(.tran) orelse
         return fail(refusal, .non_canonical, payloadStart(directory));
-    const tr = bytes[tran.off..][0..TRAN_REC_LEN];
+    // Bounds-defended read (the same `sectionPayload` discipline the
+    // T2.4+ stages carry — a mismatched directory/buffer pair is a
+    // refusal, never a trap).
+    const tr = try sectionPayload(bytes, tran, refusal);
+    if (tr.len != TRAN_REC_LEN) {
+        return fail(refusal, .directory_malformed, tran.off);
+    }
     const host_targets = readU32(tr, 32);
     const declared_targets = readU32(tr, 36);
     const pact_fnv = readU64(tr, 40);
@@ -806,7 +826,7 @@ pub fn decodeRegistry(
 
     var regs: []const u8 = &.{};
     if (directory.find(.regs)) |sec| {
-        const payload = bytes[sec.off..][0..sec.len];
+        const payload = try sectionPayload(bytes, sec, refusal);
         if (payload.len < 4) {
             return fail(refusal, .registry_mismatch, sec.off);
         }
@@ -857,6 +877,18 @@ pub fn decodeRegistry(
         const count: usize = sec.count.?; // count×width exactness is T2.1's
         if (count != declared_targets) {
             return fail(refusal, .count_mismatch, sec.off);
+        }
+        if (count == 0) {
+            // The zero-declared join is the ABSENT section — an empty
+            // 'DECL' is the same degenerate presence every other
+            // section refuses ('REGS', 'TMPO', the record sections).
+            return fail(refusal, .non_canonical, sec.off);
+        }
+        // Mismatched-pair defense: in bounds and exactly
+        // `4 + count × width` inside THIS buffer.
+        const decl_payload = try sectionPayload(bytes, sec, refusal);
+        if (@as(u64, decl_payload.len) != 4 + @as(u64, count) * DECL_REC_LEN) {
+            return fail(refusal, .directory_malformed, sec.off);
         }
         const records = a.alloc(Decl, count) catch return error.OutOfMemory;
         for (records, 0..) |*rec, i| {
@@ -1073,6 +1105,7 @@ pub fn decodeRecords(
     const trak_count: usize = if (trak_sec) |s| s.count.? else 0;
     var has_keys_track = false;
     var has_explicit = false;
+    var has_pattern = false;
     if (trak_sec) |s| {
         _ = try sectionPayload(bytes, s, refusal);
         for (0..trak_count) |i| {
@@ -1089,6 +1122,8 @@ pub fn decodeRecords(
                 has_keys_track = true;
             } else if (src == SOURCE_TRIGGER and kind == TRIG_EXPLICIT) {
                 has_explicit = true;
+            } else if (src == SOURCE_PATTERN) {
+                has_pattern = true;
             }
         }
     }
@@ -1097,6 +1132,17 @@ pub fn decodeRecords(
     }
     if ((tick_sec != null) != has_explicit) {
         return fail(refusal, .non_canonical, if (tick_sec) |s| s.off else payloadStart(directory));
+    }
+    // The header's own bit definition: `required_features` bit0 is set
+    // iff a pattern track exists. The producer sets it from the track
+    // table, so a disagreement is producer-impossible — the two
+    // spellings must agree (unknown bits were already refused by
+    // `parseDirectory`; only bit0 can be set here).
+    if ((directory.required_features & FEATURE_PATTERN_TRACKS != 0) != has_pattern) {
+        return fail(refusal, .non_canonical, if (has_pattern and trak_sec != null)
+            trak_sec.?.off
+        else
+            8);
     }
 
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -1164,8 +1210,11 @@ pub fn decodeRecords(
     const join_size: u64 = @as(u64, registry.host_targets) + registry.declared_targets;
     // 'TICK' is the concatenation of every explicit schedule: slices in
     // track order never overlap (each new slice starts at or after the
-    // previous one's end).
+    // previous one's end). 'KEYS' carries the same discipline — compile
+    // appends each track's run disjointly (`keys_start = keys.len`
+    // before the track's keys, `src/Compile.zig`).
     var prev_tick_end: ?u64 = null;
+    var prev_key_end: ?u64 = null;
     if (trak_sec) |s| {
         for (0..trak_count) |i| {
             const at = s.off + 4 + i * TRAK_REC_LEN;
@@ -1230,6 +1279,13 @@ pub fn decodeRecords(
                     if (run_end > keys_count) {
                         return fail(refusal, .key_invalid, at + 8);
                     }
+                    // Non-overlap in track order, like 'TICK' slices.
+                    if (prev_key_end) |end| {
+                        if (key_start < end) {
+                            return fail(refusal, .key_invalid, at + 8);
+                        }
+                    }
+                    prev_key_end = run_end;
                     const run = keys[@intCast(key_start)..][0..@intCast(key_len)];
                     for (run, 0..) |key, k| {
                         const key_at = keys_sec.?.off + 4 + (@as(usize, key_start) + k) * KEYS_REC_LEN;
@@ -1351,6 +1407,12 @@ pub fn decodeRecords(
                 return fail(refusal, .registry_mismatch, at + 2);
             if (entry.registry != bytes[at + 1]) {
                 return fail(refusal, .registry_mismatch, at + 1);
+            }
+            // A lane writes ONE scalar (`Eval` writes per lane name);
+            // compile refuses non-scalar emit targets
+            // (`target_arity_mismatch`), so the joined entry is ncomp 1.
+            if (entry.ncomp != 1) {
+                return fail(refusal, .registry_mismatch, at + 2);
             }
             lane.* = .{
                 .name = name,
@@ -1584,6 +1646,15 @@ pub fn decodeEaseControls(
         for (0..key_ref_count) |i| {
             const at = 4 + @as(usize, n) * PACM_EASE_PROGRAM_LEN + 4 + i * 2;
             if (readU16(payload, at) >= n) {
+                return fail(refusal, .ease_invalid, at);
+            }
+            // The refs array is a redundant spelling of the key stream's
+            // `ease_ref` field — the producer writes both from one pass
+            // (`Abi.encodeMeta` walks `table.keys` for the refs exactly
+            // as the records do). Two spellings of one truth may never
+            // disagree: elementwise coherence, the same identity
+            // discipline `'REGS'` carries.
+            if (readU16(payload, at) != records.keys[i].ease_ref) {
                 return fail(refusal, .ease_invalid, at);
             }
         }
@@ -2797,6 +2868,86 @@ test "Pacb: a TMPO tick magnitude beyond MAX_TICK refuses tempo_invalid" {
     try expectTransportRefusal(buf, .tempo_invalid);
 }
 
+test "Pacb: decodeTransport refuses (never traps) on a mismatched directory" {
+    // The documented stage precondition is `parseDirectory(bytes)`'s own
+    // view; a mismatched pair must be a REFUSAL, never a trap or a
+    // garbage-dependent panic. T2.4+ stages carry the `sectionPayload`
+    // guard — this pins the same defense for the T2.2 reads.
+    const with_tmpo = try buildTransportFixture(t.allocator, .{}, &default_tmpo);
+    defer t.allocator.free(with_tmpo);
+    const flat = try buildTransportFixture(t.allocator, .{}, &.{});
+    defer t.allocator.free(flat);
+
+    // Prefix cuts under a full-buffer directory: 'TRAN' still lands on
+    // its valid bytes, 'TMPO' extends past the end — the section-slice
+    // guard refuses (before the fix these were raw out-of-bounds reads).
+    {
+        const directory = try parseDirectory(with_tmpo, null);
+        var refusal: Refusal = undefined;
+        const decoded = decodeTransport(t.allocator, with_tmpo[0..110], &directory, &refusal);
+        if (decoded) |_| {
+            return error.WronglyAccepted;
+        } else |err| {
+            try t.expectEqual(error.Refused, err);
+            try t.expectEqual(RefusalCode.directory_malformed, refusal.code);
+        }
+    }
+    {
+        // A cut mid-section (past two whole TMPO records).
+        const directory = try parseDirectory(with_tmpo, null);
+        var refusal: Refusal = undefined;
+        const decoded = decodeTransport(t.allocator, with_tmpo[0..130], &directory, &refusal);
+        if (decoded) |_| {
+            return error.WronglyAccepted;
+        } else |err| {
+            try t.expectEqual(error.Refused, err);
+            try t.expectEqual(RefusalCode.directory_malformed, refusal.code);
+        }
+    }
+    // A wholly different buffer: 'TRAN' lands on foreign bytes and the
+    // domain checks own the refusal — the property pinned here is
+    // refused-not-trapped, not the specific code.
+    {
+        const directory = try parseDirectory(with_tmpo, null);
+        var refusal: Refusal = undefined;
+        const decoded = decodeTransport(t.allocator, flat, &directory, &refusal);
+        if (decoded) |_| {
+            return error.WronglyAccepted;
+        } else |err| {
+            try t.expectEqual(error.Refused, err);
+        }
+    }
+}
+
+test "Pacb: decodeRegistry refuses (never traps) on a mismatched directory" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // A REGS-carrying directory over a shorter buffer: the section
+    // slice extends past the end — today an out-of-bounds trap, with
+    // the guard a plain refusal.
+    const with_regs = try buildPacbFixture(
+        t.allocator,
+        .{ .host_targets = 2, .pact_fnv = fnv(regs) },
+        &.{},
+        regs,
+        &.{},
+    );
+    defer t.allocator.free(with_regs);
+    const flat = try buildTransportFixture(t.allocator, .{}, &.{});
+    defer t.allocator.free(flat);
+
+    const directory = try parseDirectory(with_regs, null);
+    var refusal: Refusal = undefined;
+    const decoded = decodeRegistry(t.allocator, flat, &directory, &refusal);
+    if (decoded) |_| {
+        return error.WronglyAccepted;
+    } else |err| {
+        try t.expectEqual(error.Refused, err);
+        try t.expectEqual(RefusalCode.directory_malformed, refusal.code);
+    }
+}
+
 test "Pacb: an absent TRAN refuses non_canonical" {
     // A PACM-only container: directory-valid, but 'TRAN' is required.
     var buf: [16 + DIRECTORY_ENTRY_LEN + 40]u8 = @splat(0);
@@ -3216,6 +3367,23 @@ test "Pacb: DECL count must equal TRAN declared_targets" {
     }
 }
 
+test "Pacb: a present zero-count DECL refuses non_canonical" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // The zero-declared join is the ABSENT 'DECL' (the canonical
+    // spelling every other degenerate section already follows: 'REGS',
+    // 'TMPO', the record sections, 'EASE', 'STRS', 'PAYL'). A present
+    // count-0 section is a degenerate spelling that never decodes.
+    const built = try buildRecordsFixture(t.allocator, .{
+        .transport = .{ .host_targets = 2, .declared_targets = 0, .pact_fnv = fnv(regs) },
+        .regs = regs,
+        .decl_zero = true,
+    });
+    defer t.allocator.free(built.buf);
+    try expectRegistryRefusal(built.buf, .non_canonical);
+}
+
 test "Pacb: host plus declared targets over MAX_TARGETS refuses cap_exceeded" {
     const zero_pact = try encodePact(t.allocator, &.{});
     defer t.allocator.free(zero_pact);
@@ -3365,11 +3533,12 @@ const KeyRec = struct {
 };
 
 /// One `'EMIT'` record (8 B: name u8, registry u8, target_id u16,
-/// reserved u32).
+/// reserved u32). Defaults join the scalar host entry ("t-two",
+/// ncomp 1) — a lane target must be scalar.
 const EmitRec = struct {
     name: u8 = 0,
-    registry: u8 = 0,
-    target_id: u16 = 0,
+    registry: u8 = 1,
+    target_id: u16 = 1,
     reserved: u32 = 0,
 };
 
@@ -3474,6 +3643,13 @@ const RecordsSpec = struct {
     ctrl: ?[]const CtrlRec = null,
     /// `'PAYL'` payload region bytes (T2.6), written verbatim.
     payl: ?[]const u8 = null,
+    /// The header `required_features` word (producer truth: bit0 iff a
+    /// pattern track rides `trak`). Zero by default — fixtures without
+    /// pattern tracks.
+    features: u32 = 0,
+    /// Spell a PRESENT zero-count `'DECL'` (the canonical-presence
+    /// mutation under test); `decl` stays empty.
+    decl_zero: bool = false,
 };
 
 /// Absolute payload offsets of the record sections (0 = absent; every
@@ -3500,7 +3676,7 @@ fn buildRecordsFixture(
     spec: RecordsSpec,
 ) !BuiltFixture {
     const has_tmpo = spec.tmpo.len > 0;
-    const has_decl = spec.decl.len > 0;
+    const has_decl = spec.decl.len > 0 or spec.decl_zero;
     var n: usize = 2; // TRAN + PACM
     if (spec.regs != null) n += 1;
     if (has_decl) n += 1;
@@ -3567,7 +3743,7 @@ fn buildRecordsFixture(
 
     const buf = try alloc.alloc(u8, pacm_off + pacm_len);
     @memset(buf, 0);
-    writeHeader(buf, n, 0);
+    writeHeader(buf, n, spec.features);
 
     var index: usize = 0;
     writeDirEntry(buf, index, .tran, tran_off, TRAN_REC_LEN);
@@ -3760,8 +3936,8 @@ fn baseRecords() RecordsBase {
         },
         .tick = .{ 5, 500, 5000 },
         .emit = .{
-            .{ .name = 0, .registry = 0, .target_id = 0 }, // beat
-            .{ .name = 4, .registry = 1, .target_id = 1 }, // t
+            .{ .name = 0, .registry = 1, .target_id = 1 }, // beat → scalar t-two
+            .{ .name = 4, .registry = 1, .target_id = 1 }, // t → scalar t-two
         },
         .scen = .{
             .{ .start_tick = 0, .dur_ticks = 720720 },
@@ -3877,7 +4053,7 @@ test "Pacb: a clean records fixture decodes owned tracks, keys, scenes and emit"
 
     try t.expectEqual(@as(usize, 2), stage.emit.len);
     try t.expectEqual(
-        TrackTable.EmitLane{ .name = .beat, .target_id = 0, .registry = 0 },
+        TrackTable.EmitLane{ .name = .beat, .target_id = 1, .registry = 1 },
         stage.emit[0],
     );
     try t.expectEqual(
@@ -4043,6 +4219,11 @@ test "Pacb: per-source non-zero slack refuses record_invalid" {
         }
         const built = try buildBaseFixture(t.allocator, &base, regs);
         defer t.allocator.free(built.buf);
+        if (std.mem.eql(u8, m.field, "pattern_trig_every")) {
+            // Producer truth for the converted track: a pattern track
+            // sets the feature bit.
+            putU32(built.buf, 8, FEATURE_PATTERN_TRACKS);
+        }
         try expectRecordsRefusal(built.buf, .record_invalid);
     }
 }
@@ -4388,6 +4569,21 @@ test "Pacb: overlapping explicit schedules refuse trigger_invalid" {
     try expectRecordsRefusal(built.buf, .trigger_invalid);
 }
 
+test "Pacb: overlapping keys runs refuse key_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    var base = baseRecords();
+    // Track 0 slices keys[0..3); this second keys track slices
+    // keys[1..3) — individually valid, overlapping as runs. 'KEYS' is
+    // the concatenation of every track's run in track order (compile
+    // appends disjoint runs), so slices never overlap — the 'TICK'
+    // discipline.
+    base.trak[1] = .{ .target_id = 0, .registry = 0, .ncomp = 3, .source = SOURCE_KEYS, .key_start = 1, .key_len = 2 };
+    const built = try buildBaseFixture(t.allocator, &base, regs);
+    defer t.allocator.free(built.buf);
+    try expectRecordsRefusal(built.buf, .key_invalid);
+}
+
 test "Pacb: a non-zero ease_ref with EASE absent refuses ease_invalid" {
     const regs = try encodePact(t.allocator, &host_two);
     defer t.allocator.free(regs);
@@ -4418,6 +4614,24 @@ test "Pacb: a scene window end overflow refuses scene_invalid" {
     try expectRecordsRefusal(built.buf, .scene_invalid);
 }
 
+test "Pacb: an EMIT lane needs a scalar (ncomp 1) join target" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // Compile refuses non-scalar emit targets (`target_arity_mismatch`)
+    // and `Eval` writes one scalar per lane — a lane joined to the
+    // 3-component host entry is producer-impossible.
+    const lanes = [_]EmitRec{.{ .name = 0, .target_id = 0, .registry = 0 }};
+    const built = try buildRecordsFixture(t.allocator, .{
+        .transport = hostJoinSpec(regs),
+        .regs = regs,
+        .decl = &base_decl,
+        .emit = &lanes,
+    });
+    defer t.allocator.free(built.buf);
+    try expectRecordsRefusal(built.buf, .registry_mismatch);
+}
+
 test "Pacb: EMIT lanes enforce ordinal, uniqueness, reserved zero and the join" {
     const regs = try encodePact(t.allocator, &host_two);
     defer t.allocator.free(regs);
@@ -4437,6 +4651,38 @@ test "Pacb: EMIT lanes enforce ordinal, uniqueness, reserved zero and the join" 
         });
         defer t.allocator.free(built.buf);
         try expectRecordsRefusal(built.buf, case.code);
+    }
+}
+
+test "Pacb: the pattern-features bit must match pattern-track presence" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // Producer truth: bit0 of required_features is set iff a :pattern
+    // track exists (the header's own definition). The decoder reads the
+    // source ordinals in 'TRAK', so the two spellings must agree —
+    // a mismatch is producer-impossible and non-canonical.
+    {
+        // A pattern track with the feature bit clear.
+        const trak = [_]TrakRec{
+            .{ .target_id = 1, .registry = 1, .ncomp = 1, .source = SOURCE_PATTERN, .payload_off = 0, .payload_len = 12 },
+        };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .trak = &trak,
+        });
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .non_canonical);
+    }
+    {
+        // The bit set with no pattern track.
+        var base = baseRecords();
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        putU32(built.buf, 8, FEATURE_PATTERN_TRACKS);
+        try expectRecordsRefusal(built.buf, .non_canonical);
     }
 }
 
@@ -4990,7 +5236,7 @@ test "Pacb: ease refs are bounded by the program table" {
     // A refs-array entry past the table (keys themselves clean).
     {
         var base = baseEaseControl();
-        const refs = [_]u16{ 0, 1, 7 };
+        const refs = [_]u16{ 0, 0, 7 };
         const built = try buildRecordsFixture(t.allocator, .{
             .transport = hostJoinSpec(regs),
             .regs = regs,
@@ -4998,6 +5244,35 @@ test "Pacb: ease refs are bounded by the program table" {
             .emit = &baseRecords().emit,
             .trak = &base.trak,
             .keys = &.{ base.keys[0], .{ .at = 360360, .value = .{ 0.25, 0.5, 0.75, 0 } }, base.keys[2] },
+            .tick = &baseRecords().tick,
+            .scen = &baseRecords().scen,
+            .ease = &base.programs,
+            .ease_refs = &refs,
+        });
+        defer t.allocator.free(built.buf);
+        try expectEaseControlRefusal(built.buf, .ease_invalid);
+    }
+}
+
+test "Pacb: ease refs must agree with the key stream's ease_refs" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // The refs array and the KEYS ease_ref fields are two spellings of
+    // one truth (the producer writes both from the same key stream,
+    // `Abi.encodeMeta`'s 'EASE' section). Both in bounds, disagreeing:
+    // refs say 0 for key 1, the KEYS record says 1 — the same
+    // canonical-identity discipline 'REGS' already carries.
+    {
+        var base = baseEaseControl();
+        const refs = [_]u16{ 0, 0, 0 };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .emit = &baseRecords().emit,
+            .trak = &base.trak,
+            .keys = &base.keys,
             .tick = &baseRecords().tick,
             .scen = &baseRecords().scen,
             .ease = &base.programs,
@@ -5654,6 +5929,7 @@ test "Pacb: payload spans must be bounded, in-region and non-overlapping" {
             .decl = &base_decl,
             .trak = &trak,
             .payl = region,
+            .features = FEATURE_PATTERN_TRACKS,
         });
         defer t.allocator.free(built.buf);
         try expectPayloadRefusal(built.buf, .payload_malformed);
@@ -5679,4 +5955,93 @@ test "Pacb: payload spans must be bounded, in-region and non-overlapping" {
         defer t.allocator.free(built.buf);
         try expectPayloadRefusal(built.buf, .non_canonical);
     }
+}
+
+test "Pacb: date and time payload literals walk and copy (positive fixture)" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // The walk's .date/.time arms were the only switch arms without a
+    // positive fixture. Built by the real encoder — the frozen
+    // `sjon.parse` + `toBinary(compact)` oracle — with one date and
+    // both time spellings (with and without fractional seconds).
+    const bin = try toBinaryCompact(t.allocator, "[2026-10-18 12:34:56 23:45:12.75]");
+    defer t.allocator.free(bin);
+    const built = try buildPayloadFixture(t.allocator, bin, regs);
+    defer t.allocator.free(built.buf);
+
+    const directory = try parseDirectory(built.buf, null);
+    var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+    defer registry.deinit();
+    var records = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+    defer records.deinit();
+    var stage = try decodePayloads(t.allocator, built.buf, &directory, &records, null);
+    defer stage.deinit();
+
+    try t.expectEqual(@as(usize, 1), stage.payloads.len);
+    try t.expectEqualSlices(u8, bin, stage.payloads[0]);
+}
+
+test "Pacb: node comments and spans payloads walk (positive fixture)" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // Spans on (the encoder default) plus node comments: a root leading
+    // comment, an element leading comment, and a vector trailing
+    // comment — the comment sites the cursor's own iterators consume
+    // (leading inside `nextNodeView`, trailing on iterator exhaustion).
+    // NOT covered: the tree-trailing block (the known gap below).
+    var tree = try sjon.parse(t.allocator, "; lead\n[; inner\n1 2 ; vtail]");
+    defer tree.deinit();
+    const bin = try sjon.Binary.toBinary(t.allocator, tree, .{ .with_node_comments = true });
+    defer bin.deinit();
+    const payload = try t.allocator.dupe(u8, bin.data);
+    defer t.allocator.free(payload);
+    try t.expect(payload.len > 0);
+
+    const built = try buildPayloadFixture(t.allocator, payload, regs);
+    defer t.allocator.free(built.buf);
+
+    const directory = try parseDirectory(built.buf, null);
+    var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+    defer registry.deinit();
+    var records = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+    defer records.deinit();
+    var stage = try decodePayloads(t.allocator, built.buf, &directory, &records, null);
+    defer stage.deinit();
+
+    try t.expectEqual(@as(usize, 1), stage.payloads.len);
+    try t.expectEqualSlices(u8, payload, stage.payloads[0]);
+}
+
+test "Pacb: KNOWN GAP — tree-trailing comments payloads currently refuse" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // DEFERRED, explicitly (interim review finding 3 / focused ruling
+    // 3): SJON's RootIter has no exhaustion-consume for the
+    // [tree trailing comments] block the encoder writes after the
+    // roots when with_tree_trailing_comments is set, so the exact-end
+    // check refuses every such payload as payload_malformed. This test
+    // pins the CURRENT refusal so the gap is visible and deliberate —
+    // it is NOT an accepted contract. When the owner-approved SJON-side
+    // cursor capability lands, the expectation flips to acceptance;
+    // refusing the flag combination as non_canonical was ruled out as a
+    // unilateral narrowing.
+    var tree = try sjon.parse(t.allocator, "(+ 1 t) ; tail");
+    defer tree.deinit();
+    const bin = try sjon.Binary.toBinary(t.allocator, tree, .{
+        .with_spans = false,
+        .with_head_spans = false,
+        .with_kvpair_key_spans = false,
+        .with_tree_trailing_comments = true,
+    });
+    defer bin.deinit();
+    const payload = try t.allocator.dupe(u8, bin.data);
+    defer t.allocator.free(payload);
+    try t.expect(payload.len > 0);
+
+    const built = try buildPayloadFixture(t.allocator, payload, regs);
+    defer t.allocator.free(built.buf);
+    try expectPayloadRefusal(built.buf, .payload_malformed);
 }
