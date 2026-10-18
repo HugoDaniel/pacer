@@ -10,7 +10,7 @@ byte-identical through the codec extraction. `Compile.Code` gains variants
 **Gates:** `zig build verify` every phase; `zig build fuzz` from Phase 4;
 determinism gate — pack the same score twice ⇒ byte-identical output.
 **Created 2026-10-18; Phase 1 complete 2026-10-18; Phase 2 in progress
-(T2.1–T2.2 landed 2026-10-18, T2.3–T2.8 open); phases 3–4 not started.**
+(T2.1–T2.3 landed 2026-10-18, T2.4–T2.8 open); phases 3–4 not started.**
 
 ## Why
 
@@ -528,5 +528,47 @@ _(created 2026-10-18; entries appended per phase)_
   `TimeMap`, `TrackTable` — still never `Compile`/`Abi`/`Schema`/`Driver`
   in production code. Registry (`'REGS'`/`'DECL'`), records, ease/control,
   payload, PACM reader, and coherence remain T2.3–T2.8; no
+  `decode`/`DecodedScore`, no corpus/CLI golden byte changed, no
+  encoder/CLI/runtime/npm work.
+
+- **2026-10-18 — Phase 2 continued (T2.3 only; phase NOT complete).**
+  `src/Pacb.zig` gained the registry-identity stage:
+  `decodeRegistry(gpa, bytes, directory, refusal) DecodeError!RegistryStage`
+  — an owned, arena-backed result (`deinit`) carrying a DEEP copy of the
+  registry identity bytes (`regs`; the zero-count `'PACT'` spelling when
+  `'REGS'` is absent, so `canonicalPactEquals(host, stage.regs)` is the
+  uniform load-time check), the `Decl` records (the T2.1-pinned
+  `pub const Decl = struct { registry: u8, ncomp: u8 }`, added by this
+  task), and the raw `'TRAN'` counts/fnv. Identity is BYTE equality of
+  the canonical `'PACT'` encoding: a present `'REGS'` must be the
+  canonical encoding of its own decoded content (`registry_mismatch`
+  otherwise — byte_len lies, non-decodable PACT, bad magic), carry
+  count ≥ 1 (`non_canonical` — the zero-count join is the omitted case),
+  count == `host_targets` (`count_mismatch`), and an `fnv1a64` that
+  agrees with the bytes (`registry_mismatch` — fast-reject + diagnostic
+  checksum only, never the identity). An absent `'REGS'` requires
+  `host_targets == 0` (`non_canonical`) and the zero-count `'PACT'`'s
+  FNV (`registry_mismatch`). `'DECL'`: count == `declared_targets`
+  (`count_mismatch`, both directions), `host_targets + declared_targets
+  ≤ MAX_TARGETS` (`cap_exceeded`), per-record pad zero + `ncomp ∈ 1..4`
+  (`decl_invalid`). The `'TRAK'`/`'CTRL'`/`'EMIT'` consumers of the id
+  bound land with their sections (T2.4/T2.5), per the task's own
+  exclusion. `canonicalPactEquals(host_blob, regs)` is the public,
+  allocation-free load-time predicate (lockstep structural walk ≡
+  decode→re-encode→byte-compare; validates the host blob's decodability,
+  never consults fnv or caps) — the function 02's `prt_load` calls.
+  RED: 4× missing-export compile errors (`decodeRegistry`,
+  `canonicalPactEquals`), then 9 named WronglyAccepted FAILs against the
+  carry/copy-only increment (a fixture-builder offset-vs-index bug found
+  on the way was fixed and the RED re-run clean before GREEN).
+  GREEN evidence additionally includes a deliberate neuter pass: with
+  the name-byte comparison disabled, exactly
+  `canonicalPactEquals catches same-shaped registry swaps` fails —
+  proving the swap test detects a shape-only implementation — then
+  restored. Final: `zig fmt --check` clean; `zig build test` 7/7 steps,
+  **332/332 tests (271 root + 61 CLI)**. Imports grew to std, sjon,
+  `PactCodec`, `TimeMap`, `TrackTable` — still never
+  `Compile`/`Abi`/`Schema`/`Driver` in production code. Records,
+  ease/control, payload, PACM reader, and coherence remain T2.4–T2.8; no
   `decode`/`DecodedScore`, no corpus/CLI golden byte changed, no
   encoder/CLI/runtime/npm work.

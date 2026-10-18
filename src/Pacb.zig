@@ -68,21 +68,25 @@
 //!
 //! INTERIM PHASE-2 BOUNDARY — no production use. This file currently owns
 //! the container header, the directory validator, the frozen caps,
-//! `pacbWorstCase`, and the T2.2 transport stage (`decodeTransport`:
+//! `pacbWorstCase`, the T2.2 transport stage (`decodeTransport`:
 //! `'TRAN'`/`'TMPO'` domains, then the `TimeMap` rebuild in compile's own
-//! op order). Stages expose owned, validated, typed results —
-//! `parseDirectory` is still a structure-only view and `decodeTransport`
-//! still leaves `emit` empty (`'EMIT'` lands in T2.4). The whole-blob
-//! `decode(...) DecodedScore` entry point is deliberately absent until
-//! every section stage validates (T2.8): returning a successful score
-//! before registry/records/payloads/PACM are validated would be a lying
-//! API.
+//! op order), and the T2.3 registry-identity stage (`decodeRegistry`:
+//! `'REGS'`/`'DECL'` + the `pact_fnv` fast-reject, with
+//! `canonicalPactEquals` as the load-time identity check 02's `prt_load`
+//! calls). Stages expose owned, validated, typed results —
+//! `parseDirectory` is still a structure-only view, `decodeTransport`
+//! still leaves `emit` empty (`'EMIT'` lands in T2.4), and the id-bound
+//! consumers of the registry join land with `'TRAK'`/`'CTRL'`/`'EMIT'`
+//! (T2.4/T2.5). The whole-blob `decode(...) DecodedScore` entry point is
+//! deliberately absent until every section stage validates (T2.8):
+//! returning a successful score before records/payloads/PACM are
+//! validated would be a lying API.
 //!
-//! Imports: std, sjon (`Pattern.MAX_TICK`), `TimeMap`, `TrackTable` (the
-//! T2.2 subset of the frozen end-state list). Later stages add
-//! `PactCodec`, `Easing`, and `Pacm` as their GREEN needs them; this file
-//! must NEVER import `Compile`, `Abi`, `Schema`, or `Driver` — the one
-//! test that compares decoded transport against the compiler
+//! Imports: std, sjon (`Pattern.MAX_TICK`), `PactCodec`, `TimeMap`,
+//! `TrackTable` (the T2.2+T2.3 subset of the frozen end-state list).
+//! Later stages add `Easing` and `Pacm` as their GREEN needs them; this
+//! file must NEVER import `Compile`, `Abi`, `Schema`, or `Driver` — the
+//! one test that compares decoded transport against the compiler
 //! (`decoded transport equals the compiled transport field-for-field`)
 //! imports `Compile`/`test_support` INSIDE its test body only, so a
 //! normal (non-test) build never analyses them through this file; that
@@ -91,6 +95,7 @@
 
 const std = @import("std");
 const sjon = @import("sjon");
+const PactCodec = @import("PactCodec.zig");
 const TimeMap = @import("TimeMap.zig");
 const TrackTable = @import("TrackTable.zig");
 
@@ -641,6 +646,203 @@ pub fn decodeTransport(
         .declared_targets = readU32(tr, 36),
         .pact_fnv = readU64(tr, 40),
         .pacm_fnv = readU64(tr, 48),
+    };
+}
+
+// ---------------------------------------------------------------------------
+// T2.3 — registry identity stage ('REGS' + 'DECL' + fnv fast-reject)
+// ---------------------------------------------------------------------------
+
+/// The 4-byte `'DECL'` record's semantic fields (the wire pad is zero and
+/// checked, never carried). Pinned here so T2.3 decode and the T3.1
+/// encoder agree on the record's shape (critique G13).
+pub const Decl = struct { registry: u8, ncomp: u8 };
+
+/// Owned registry-identity stage result. `regs` is a DEEP, arena-owned
+/// copy of the canonical registry identity bytes and `declared` the
+/// `'DECL'` records — the borrow-vs-own contract until T2.8's final
+/// `DecodedScore` arena carries them; the stage never aliases the input
+/// buffer. When `'REGS'` is absent the identity IS the zero-count
+/// `'PACT'` spelling (the canonical-presence rule), so `regs` carries
+/// those 8 bytes — `canonicalPactEquals(host_blob, stage.regs)` is then
+/// the uniform load-time check for every score, absent section or not.
+pub const RegistryStage = struct {
+    arena: std.heap.ArenaAllocator,
+    regs: []const u8,
+    declared: []const Decl,
+    host_targets: u32,
+    declared_targets: u32,
+    pact_fnv: u64,
+
+    pub fn deinit(self: *RegistryStage) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+/// FNV-1a-64 over bytes — the `'TRAN'` checksum family. Private: the
+/// encoder (T3.1) owns the public `fnv1a64` spelling; this is the
+/// decoder-side use of the same std hash.
+fn fnv1a64(bytes: []const u8) u64 {
+    var h = std.hash.Fnv1a_64.init();
+    h.update(bytes);
+    return h.final();
+}
+
+/// Canonical registry identity — the function 02's `prt_load` calls
+/// against the runtime host blob: would the canonical re-encoding of
+/// `host_blob` byte-equal `regs`? Spelled as a lockstep structural walk
+/// of both blobs, which is exactly the decode→re-encode→compare
+/// predicate with no allocation and no scratch: a `'PACT'` record has
+/// exactly one byte spelling, so the canonical bytes of `host_blob`'s
+/// decoded content equal `regs` iff the walk matches end to end (the
+/// same magic, the same count, every record byte-for-byte, both ending
+/// exactly at their ends). Validates `host_blob`'s decodability along
+/// the way (magic, per-record domains, exact end) — a corrupt host blob
+/// is never equal to anything. Pure identity: caps and checksums are
+/// decode-side policy and never consulted here.
+pub fn canonicalPactEquals(host_blob: []const u8, regs: []const u8) bool {
+    if (host_blob.len < PactCodec.TARGETS_HEADER_LEN) return false;
+    if (regs.len < PactCodec.TARGETS_HEADER_LEN) return false;
+    if (std.mem.readInt(u32, host_blob[0..4], .little) != PactCodec.TARGETS_MAGIC) return false;
+    // The canonical re-encoding's header (magic + count) must agree.
+    if (!std.mem.eql(u8, host_blob[0..PactCodec.TARGETS_HEADER_LEN], regs[0..PactCodec.TARGETS_HEADER_LEN])) return false;
+
+    const count = std.mem.readInt(u32, host_blob[4..8], .little);
+    var hp: usize = PactCodec.TARGETS_HEADER_LEN;
+    var rp: usize = PactCodec.TARGETS_HEADER_LEN;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        // `PactCodec.decodeTargets`' own per-record rules.
+        if (host_blob.len - hp < 4) return false;
+        const ncomp = host_blob[hp];
+        if (ncomp < 1 or ncomp > 4) return false;
+        const name_len: usize = std.mem.readInt(u16, host_blob[hp + 2 ..][0..2], .little);
+        if (name_len == 0) return false;
+
+        // The canonical record head and name bytes, compared in place.
+        if (regs.len - rp < 4) return false;
+        if (!std.mem.eql(u8, host_blob[hp..][0..4], regs[rp..][0..4])) return false;
+        hp += 4;
+        rp += 4;
+        if (host_blob.len - hp < name_len) return false;
+        if (regs.len - rp < name_len) return false;
+        if (!std.mem.eql(u8, host_blob[hp..][0..name_len], regs[rp..][0..name_len])) return false;
+        hp += name_len;
+        rp += name_len;
+    }
+    return hp == host_blob.len and rp == regs.len;
+}
+
+/// Decode and validate the registry identity stage: `'REGS'` (byte
+/// equality of the canonical `'PACT'` encoding IS the identity; the
+/// `'TRAN'` `pact_fnv` is a fast-reject + diagnostic checksum only, and
+/// must agree with the bytes), the zero-count spelling when `'REGS'` is
+/// absent, and the `'DECL'` record table against `'TRAN'`'s
+/// `declared_targets`. The `'TRAK'`/`'CTRL'`/`'EMIT'` consumers of the
+/// id bound land with their sections (T2.4/T2.5).
+pub fn decodeRegistry(
+    gpa: std.mem.Allocator,
+    bytes: []const u8,
+    directory: *const Directory,
+    refusal: ?*Refusal,
+) DecodeError!RegistryStage {
+    const tran = directory.find(.tran) orelse
+        return fail(refusal, .non_canonical, payloadStart(directory));
+    const tr = bytes[tran.off..][0..TRAN_REC_LEN];
+    const host_targets = readU32(tr, 32);
+    const declared_targets = readU32(tr, 36);
+    const pact_fnv = readU64(tr, 40);
+
+    // The join bound: host + declared targets can never exceed the
+    // codec leaf's cap (THE definition, `PactCodec.MAX_TARGETS`).
+    if (@as(u64, host_targets) + @as(u64, declared_targets) > MAX_TARGETS) {
+        return fail(refusal, .cap_exceeded, tran.off + 36);
+    }
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    var regs: []const u8 = &.{};
+    if (directory.find(.regs)) |sec| {
+        const payload = bytes[sec.off..][0..sec.len];
+        if (payload.len < 4) {
+            return fail(refusal, .registry_mismatch, sec.off);
+        }
+        const byte_len = readU32(payload, 0);
+        if (@as(usize, byte_len) != payload.len - 4) {
+            return fail(refusal, .registry_mismatch, sec.off);
+        }
+        const pact = payload[4..];
+        // The section must be the canonical encoding of its own decoded
+        // content: a 'PACT' record has exactly one byte spelling, so
+        // this self-compare IS decode → re-encode → byte-compare (it
+        // also proves the magic, per-record domains, and exact end).
+        if (!canonicalPactEquals(pact, pact)) {
+            return fail(refusal, .registry_mismatch, sec.off);
+        }
+        const count = std.mem.readInt(u32, pact[4..8], .little);
+        if (count < 1) {
+            // The zero-count join is the omitted case — an empty host
+            // join must not spell a present section.
+            return fail(refusal, .non_canonical, sec.off);
+        }
+        if (count != host_targets) {
+            return fail(refusal, .count_mismatch, sec.off);
+        }
+        // Fast-reject + diagnostic checksum: byte equality above is the
+        // identity; the checksum must merely agree with the bytes.
+        if (fnv1a64(pact) != pact_fnv) {
+            return fail(refusal, .registry_mismatch, sec.off);
+        }
+        regs = a.dupe(u8, pact) catch return error.OutOfMemory;
+    } else {
+        if (host_targets != 0) {
+            return fail(refusal, .non_canonical, tran.off + 32);
+        }
+        // The fast-reject stays well-defined over the 8-B zero-count
+        // 'PACT' — the identity an empty host join must spell.
+        var zero_pact: [PactCodec.TARGETS_HEADER_LEN]u8 = undefined;
+        std.mem.writeInt(u32, zero_pact[0..4], PactCodec.TARGETS_MAGIC, .little);
+        std.mem.writeInt(u32, zero_pact[4..8], 0, .little);
+        if (fnv1a64(&zero_pact) != pact_fnv) {
+            return fail(refusal, .registry_mismatch, tran.off + 40);
+        }
+        regs = a.dupe(u8, &zero_pact) catch return error.OutOfMemory;
+    }
+
+    var declared: []const Decl = &.{};
+    if (directory.find(.decl)) |sec| {
+        const count: usize = sec.count.?; // count×width exactness is T2.1's
+        if (count != declared_targets) {
+            return fail(refusal, .count_mismatch, sec.off);
+        }
+        const records = a.alloc(Decl, count) catch return error.OutOfMemory;
+        for (records, 0..) |*rec, i| {
+            const at = sec.off + 4 + i * DECL_REC_LEN;
+            rec.* = .{ .registry = bytes[at], .ncomp = bytes[at + 1] };
+            const pad = std.mem.readInt(u16, bytes[at + 2 ..][0..2], .little);
+            if (pad != 0) {
+                return fail(refusal, .decl_invalid, at + 2);
+            }
+            if (rec.ncomp < 1 or rec.ncomp > 4) {
+                return fail(refusal, .decl_invalid, at + 1);
+            }
+        }
+        declared = records;
+    } else if (declared_targets != 0) {
+        // An absent 'DECL' is the zero-declared spelling.
+        return fail(refusal, .count_mismatch, tran.off + 36);
+    }
+
+    return .{
+        .arena = arena,
+        .regs = regs,
+        .declared = declared,
+        .host_targets = host_targets,
+        .declared_targets = declared_targets,
+        .pact_fnv = pact_fnv,
     };
 }
 
@@ -1510,5 +1712,440 @@ test "Pacb: decoded transport equals the compiled transport field-for-field" {
             @as(u64, @bitCast(want.map.ticks_per_second)),
             @as(u64, @bitCast(got.map.ticks_per_second)),
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T2.3 — registry identity stage tests ('REGS' + 'DECL' + fnv)
+// ---------------------------------------------------------------------------
+
+fn putU16(buf: []u8, at: usize, value: u16) void {
+    std.mem.writeInt(u16, buf[at..][0..2], value, .little);
+}
+
+/// One `'DECL'` record as the section spells it (registry, ncomp, pad 0).
+const DeclRec = struct { registry: u8 = 0, ncomp: u8 = 1 };
+
+/// Test-side FNV-1a-64 (mirrors `std.hash.Fnv1a_64`, which the decoder
+/// uses; spelled here so tests compute expected checksums independently
+/// of the production helper).
+fn fnv(bytes: []const u8) u64 {
+    var h = std.hash.Fnv1a_64.init();
+    h.update(bytes);
+    return h.final();
+}
+
+fn encodePact(alloc: std.mem.Allocator, targets: []const PactCodec.Target) ![]u8 {
+    const buf = try alloc.alloc(u8, PactCodec.targetsEncodedLen(targets));
+    _ = try PactCodec.encodeTargets(targets, buf);
+    return buf;
+}
+
+/// The shared fixture builder, grown for T2.3: `'TRAN'`, an optional
+/// `'REGS'`, optional `'DECL'` records, an optional `'TMPO'`, and the
+/// zeroed `'PACM'` tail — canonical order throughout.
+fn buildPacbFixture(
+    alloc: std.mem.Allocator,
+    spec: TransportSpec,
+    tmpo: []const TmpoRec,
+    regs: ?[]const u8,
+    decl: []const DeclRec,
+) ![]u8 {
+    const has_tmpo = tmpo.len > 0;
+    const n: usize = 2 + @as(usize, @intFromBool(has_tmpo)) +
+        @as(usize, @intFromBool(regs != null)) + @as(usize, @intFromBool(decl.len > 0));
+    const dir_end = HEADER_LEN + n * DIRECTORY_ENTRY_LEN;
+    const tran_off = dir_end;
+    const regs_off = tran_off + TRAN_REC_LEN;
+    const regs_len: usize = if (regs) |r| 4 + r.len else 0;
+    const decl_off = regs_off + regs_len;
+    const decl_len: usize = if (decl.len > 0) 4 + decl.len * DECL_REC_LEN else 0;
+    const tmpo_off = decl_off + decl_len;
+    const tmpo_len: usize = if (has_tmpo) 4 + tmpo.len * TMPO_REC_LEN else 0;
+    const pacm_off = tmpo_off + tmpo_len;
+    const pacm_len: usize = 40;
+
+    const buf = try alloc.alloc(u8, pacm_off + pacm_len);
+    @memset(buf, 0);
+    writeHeader(buf, n, 0);
+    var index: usize = 0;
+    writeDirEntry(buf, index, .tran, tran_off, TRAN_REC_LEN);
+    index += 1;
+    if (regs) |r| {
+        writeDirEntry(buf, index, .regs, regs_off, regs_len);
+        putU32(buf, regs_off, @intCast(r.len));
+        @memcpy(buf[regs_off + 4 ..][0..r.len], r);
+        index += 1;
+    }
+    if (decl.len > 0) {
+        writeDirEntry(buf, index, .decl, decl_off, decl_len);
+        putU32(buf, decl_off, @intCast(decl.len));
+        for (decl, 0..) |rec, i| {
+            const at = decl_off + 4 + i * DECL_REC_LEN;
+            buf[at] = rec.registry;
+            buf[at + 1] = rec.ncomp;
+            putU16(buf, at + 2, 0); // pad
+        }
+        index += 1;
+    }
+    if (has_tmpo) {
+        writeDirEntry(buf, index, .tmpo, tmpo_off, tmpo_len);
+        putU32(buf, tmpo_off, @intCast(tmpo.len));
+        for (tmpo, 0..) |rec, i| {
+            const at = tmpo_off + 4 + i * TMPO_REC_LEN;
+            putI64(buf, at, rec.tick);
+            putF64(buf, at + 8, rec.bpm);
+        }
+        index += 1;
+    }
+    writeDirEntry(buf, n - 1, .pacm, pacm_off, pacm_len);
+    writeTranRecord(buf, tran_off, spec);
+    return buf;
+}
+
+/// The two-target host join the T2.3 tests swap, reorder and reshape.
+const host_two = [_]PactCodec.Target{
+    .{ .name = "t-one", .ncomp = 3, .registry = 0 },
+    .{ .name = "t-two", .ncomp = 1, .registry = 1 },
+};
+
+fn expectRegistryRefusal(bytes: []const u8, code: RefusalCode) !void {
+    var refusal: Refusal = undefined;
+    const directory = try parseDirectory(bytes, null);
+    const decoded = decodeRegistry(t.allocator, bytes, &directory, &refusal);
+    if (decoded) |payload| {
+        var stage = payload;
+        stage.deinit();
+        return error.WronglyAccepted;
+    } else |err| {
+        try t.expectEqual(error.Refused, err);
+        try t.expectEqual(code, refusal.code);
+    }
+}
+
+test "Pacb: a clean registry fixture decodes its identity" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const decl = [_]DeclRec{.{ .registry = 1, .ncomp = 2 }};
+
+    const buf = try buildPacbFixture(
+        t.allocator,
+        .{ .host_targets = 2, .declared_targets = 1, .pact_fnv = fnv(regs) },
+        &.{},
+        regs,
+        &decl,
+    );
+    defer t.allocator.free(buf);
+
+    const directory = try parseDirectory(buf, null);
+    var stage = try decodeRegistry(t.allocator, buf, &directory, null);
+    defer stage.deinit();
+
+    try t.expectEqual(@as(u32, 2), stage.host_targets);
+    try t.expectEqual(@as(u32, 1), stage.declared_targets);
+    try t.expectEqual(fnv(regs), stage.pact_fnv);
+    try t.expectEqualSlices(u8, regs, stage.regs);
+    try t.expectEqual(@as(usize, 1), stage.declared.len);
+    try t.expectEqual(@as(u8, 1), stage.declared[0].registry);
+    try t.expectEqual(@as(u8, 2), stage.declared[0].ncomp);
+
+    // The stage deep-copies: clobbering the input leaves it intact (the
+    // borrow-vs-own contract until T2.8's final arena owns everything).
+    @memset(buf, 0xAA);
+    try t.expectEqualSlices(u8, regs, stage.regs);
+    try t.expectEqual(@as(u8, 1), stage.declared[0].registry);
+    try t.expectEqual(@as(u8, 2), stage.declared[0].ncomp);
+}
+
+test "Pacb: REGS absent with a nonzero host_targets refuses non_canonical" {
+    const buf = try buildPacbFixture(t.allocator, .{ .host_targets = 3 }, &.{}, null, &.{});
+    defer t.allocator.free(buf);
+    try expectRegistryRefusal(buf, .non_canonical);
+}
+
+test "Pacb: REGS absent with a wrong zero-count fnv refuses registry_mismatch" {
+    const zero_pact = try encodePact(t.allocator, &.{});
+    defer t.allocator.free(zero_pact);
+
+    // The well-defined spelling: FNV-1a-64 over the 8-B zero-count 'PACT'.
+    {
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .pact_fnv = fnv(zero_pact) },
+            &.{},
+            null,
+            &.{},
+        );
+        defer t.allocator.free(buf);
+        var refusal: Refusal = undefined;
+        const directory = try parseDirectory(buf, null);
+        var stage = try decodeRegistry(t.allocator, buf, &directory, &refusal);
+        stage.deinit(); // accepted — the positive control
+    }
+    {
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .pact_fnv = fnv(zero_pact) ^ 1 },
+            &.{},
+            null,
+            &.{},
+        );
+        defer t.allocator.free(buf);
+        try expectRegistryRefusal(buf, .registry_mismatch);
+    }
+}
+
+test "Pacb: REGS present with a zero-count PACT refuses non_canonical" {
+    const zero_pact = try encodePact(t.allocator, &.{});
+    defer t.allocator.free(zero_pact);
+    const buf = try buildPacbFixture(
+        t.allocator,
+        .{ .pact_fnv = fnv(zero_pact) },
+        &.{},
+        zero_pact,
+        &.{},
+    );
+    defer t.allocator.free(buf);
+    try expectRegistryRefusal(buf, .non_canonical);
+}
+
+test "Pacb: a wrong pact_fnv fast-rejects registry_mismatch" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const buf = try buildPacbFixture(
+        t.allocator,
+        .{ .host_targets = 2, .pact_fnv = fnv(regs) ^ 1 },
+        &.{},
+        regs,
+        &.{},
+    );
+    defer t.allocator.free(buf);
+    try expectRegistryRefusal(buf, .registry_mismatch);
+}
+
+test "Pacb: REGS record count must equal TRAN host_targets" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const buf = try buildPacbFixture(
+        t.allocator,
+        .{ .host_targets = 1, .pact_fnv = fnv(regs) }, // blob says 2
+        &.{},
+        regs,
+        &.{},
+    );
+    defer t.allocator.free(buf);
+    try expectRegistryRefusal(buf, .count_mismatch);
+}
+
+test "Pacb: DECL count must equal TRAN declared_targets" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    {
+        const decl = [_]DeclRec{ .{}, .{ .registry = 1, .ncomp = 4 } };
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .host_targets = 2, .declared_targets = 1, .pact_fnv = fnv(regs) },
+            &.{},
+            regs,
+            &decl,
+        );
+        defer t.allocator.free(buf);
+        try expectRegistryRefusal(buf, .count_mismatch);
+    }
+    {
+        // Absent 'DECL' is the zero-declared spelling.
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .host_targets = 2, .declared_targets = 2, .pact_fnv = fnv(regs) },
+            &.{},
+            regs,
+            &.{},
+        );
+        defer t.allocator.free(buf);
+        try expectRegistryRefusal(buf, .count_mismatch);
+    }
+}
+
+test "Pacb: host plus declared targets over MAX_TARGETS refuses cap_exceeded" {
+    const zero_pact = try encodePact(t.allocator, &.{});
+    defer t.allocator.free(zero_pact);
+    const decl = try t.allocator.alloc(DeclRec, MAX_TARGETS + 1);
+    defer t.allocator.free(decl);
+    for (decl) |*rec| rec.* = .{ .registry = 0, .ncomp = 1 };
+
+    const buf = try buildPacbFixture(
+        t.allocator,
+        .{
+            .declared_targets = MAX_TARGETS + 1,
+            .pact_fnv = fnv(zero_pact),
+        },
+        &.{},
+        null,
+        decl,
+    );
+    defer t.allocator.free(buf);
+    try expectRegistryRefusal(buf, .cap_exceeded);
+}
+
+test "Pacb: DECL record defects refuse decl_invalid" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const decl = [_]DeclRec{.{ .registry = 0, .ncomp = 2 }};
+    // n = 4 sections (TRAN+REGS+DECL+PACM): TRAN at 64, REGS at 120,
+    // DECL at 120 + (4 + regs.len).
+    const decl_rec_at = HEADER_LEN + 4 * DIRECTORY_ENTRY_LEN + TRAN_REC_LEN + 4 + regs.len + 4;
+
+    {
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .host_targets = 2, .declared_targets = 1, .pact_fnv = fnv(regs) },
+            &.{},
+            regs,
+            &decl,
+        );
+        defer t.allocator.free(buf);
+        putU8(buf, decl_rec_at + 1, 0); // ncomp 0
+        try expectRegistryRefusal(buf, .decl_invalid);
+    }
+    {
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .host_targets = 2, .declared_targets = 1, .pact_fnv = fnv(regs) },
+            &.{},
+            regs,
+            &decl,
+        );
+        defer t.allocator.free(buf);
+        putU8(buf, decl_rec_at + 1, 5); // ncomp 5
+        try expectRegistryRefusal(buf, .decl_invalid);
+    }
+    {
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .host_targets = 2, .declared_targets = 1, .pact_fnv = fnv(regs) },
+            &.{},
+            regs,
+            &decl,
+        );
+        defer t.allocator.free(buf);
+        putU16(buf, decl_rec_at + 2, 1); // non-zero pad
+        try expectRegistryRefusal(buf, .decl_invalid);
+    }
+}
+
+test "Pacb: REGS structural defects refuse registry_mismatch" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const regs_at = HEADER_LEN + 3 * DIRECTORY_ENTRY_LEN + TRAN_REC_LEN; // TRAN+REGS+PACM
+
+    {
+        // byte_len disagrees with the section length
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .host_targets = 2, .pact_fnv = fnv(regs) },
+            &.{},
+            regs,
+            &.{},
+        );
+        defer t.allocator.free(buf);
+        putU32(buf, regs_at, @intCast(regs.len - 1));
+        try expectRegistryRefusal(buf, .registry_mismatch);
+    }
+    {
+        // truncated PACT: count says 2, the second name does not fit
+        const chopped = regs[0 .. regs.len - 3];
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .host_targets = 2, .pact_fnv = fnv(chopped) },
+            &.{},
+            chopped,
+            &.{},
+        );
+        defer t.allocator.free(buf);
+        try expectRegistryRefusal(buf, .registry_mismatch);
+    }
+    {
+        // bad magic (byte_len stays consistent; the walk checks magic)
+        const buf = try buildPacbFixture(
+            t.allocator,
+            .{ .host_targets = 2, .pact_fnv = fnv(regs) },
+            &.{},
+            regs,
+            &.{},
+        );
+        defer t.allocator.free(buf);
+        putU32(buf, regs_at + 4, 0xdeadbeef);
+        try expectRegistryRefusal(buf, .registry_mismatch);
+    }
+}
+
+test "Pacb: canonicalPactEquals catches same-shaped registry swaps" {
+    const base = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(base);
+
+    // Identity: a canonical blob equals itself and its re-encoding.
+    try t.expect(canonicalPactEquals(base, base));
+    {
+        const re_encoded = try encodePact(t.allocator, &host_two);
+        defer t.allocator.free(re_encoded);
+        try t.expect(canonicalPactEquals(re_encoded, base));
+    }
+
+    // Same-shaped ordered NAME swap: identical (ncomp, registry)
+    // signature per slot, different names — the exact confusion the
+    // identity rule exists to prevent.
+    {
+        const swapped = try encodePact(t.allocator, &.{
+            .{ .name = "t-two", .ncomp = 3, .registry = 0 },
+            .{ .name = "t-one", .ncomp = 1, .registry = 1 },
+        });
+        defer t.allocator.free(swapped);
+        try t.expect(!canonicalPactEquals(swapped, base));
+    }
+
+    // Reorder: same records, different order.
+    {
+        const reordered = try encodePact(t.allocator, &.{ host_two[1], host_two[0] });
+        defer t.allocator.free(reordered);
+        try t.expect(!canonicalPactEquals(reordered, base));
+    }
+
+    // Arity change on one target.
+    {
+        const arity = try encodePact(t.allocator, &.{
+            .{ .name = "t-one", .ncomp = 4, .registry = 0 },
+            host_two[1],
+        });
+        defer t.allocator.free(arity);
+        try t.expect(!canonicalPactEquals(arity, base));
+    }
+
+    // Registry change on one target.
+    {
+        const reg = try encodePact(t.allocator, &.{
+            .{ .name = "t-one", .ncomp = 3, .registry = 1 },
+            host_two[1],
+        });
+        defer t.allocator.free(reg);
+        try t.expect(!canonicalPactEquals(reg, base));
+    }
+
+    // Count change: a strict prefix is not the same registry.
+    {
+        const fewer = try encodePact(t.allocator, host_two[0..1]);
+        defer t.allocator.free(fewer);
+        try t.expect(!canonicalPactEquals(fewer, base));
+        try t.expect(!canonicalPactEquals(base, fewer));
+    }
+
+    // A non-decodable host blob never equals anything, and the
+    // zero-count encoding equals only itself.
+    try t.expect(!canonicalPactEquals(base[0 .. base.len - 1], base));
+    try t.expect(!canonicalPactEquals(base[4..], base));
+    {
+        const zero = try encodePact(t.allocator, &.{});
+        defer t.allocator.free(zero);
+        try t.expect(canonicalPactEquals(zero, zero));
+        try t.expect(!canonicalPactEquals(zero, base));
     }
 }
