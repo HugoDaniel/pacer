@@ -10,7 +10,7 @@ byte-identical through the codec extraction. `Compile.Code` gains variants
 **Gates:** `zig build verify` every phase; `zig build fuzz` from Phase 4;
 determinism gate — pack the same score twice ⇒ byte-identical output.
 **Created 2026-10-18; Phase 1 complete 2026-10-18; Phase 2 in progress
-(T2.1–T2.5 landed 2026-10-18, T2.6–T2.8 open); phases 3–4 not started.**
+(T2.1–T2.6 landed 2026-10-18, T2.7–T2.8 open); phases 3–4 not started.**
 
 ## Why
 
@@ -674,3 +674,51 @@ _(created 2026-10-18; entries appended per phase)_
   (`'PAYL'`), the PACM reader, and coherence remain T2.6–T2.8; no
   `decode`/`DecodedScore`, no corpus/CLI golden byte changed, no
   encoder/CLI/runtime/npm work.
+
+- **2026-10-18 — Phase 2 continued (T2.6 only; phase NOT complete).**
+  `src/Pacb.zig` gained the payload stage:
+  `decodePayloads(gpa, bytes, directory, records, refusal)
+  DecodeError!PayloadStage` — an owned, arena-backed result (`deinit`)
+  carrying per-track payload COPIES parallel to
+  `RecordsStage.tracks` (empty slices for non-payload sources), the
+  seam T2.8's assembly zips into the still-empty
+  `DecodedSource.expr`/`pattern` arms. Validation: `'PAYL'` iff an
+  expr/pattern track exists (`non_canonical`, both directions), the
+  section's `[byte_size u32]` arithmetic exact with the degenerate
+  zero-size region the omitted case (`payload_malformed`/
+  `non_canonical`), `byte_size ≤ MAX_PAYL_BYTES` and every span
+  `len ≤ MAX_PAYLOAD_BYTES` (`cap_exceeded`), spans region-bounded
+  through checked u64 adds and non-overlapping in track order (the
+  `'TICK'` discipline, `payload_malformed`), then per payload the
+  STRUCTURAL CONSUMPTION WALK: `sjon.BinaryCursor.Cursor.init` (header/
+  pool/roots-offset equality — it rejects pool↔roots slack), a pool
+  index on the stage arena (O(1) lookups, `compileBinary`'s own
+  pattern), exactly one root (zero and multiple both refuse), and an
+  iterative depth-first walk through the cursor's child/vector
+  iterators consuming EVERY node kind at its exact wire width — depth
+  capped at `MAX_TREE_DEPTH`, every cursor error mapped to
+  `payload_malformed` — which must end exactly at `payload_len`
+  (trailing slack inside a payload refuses). No evaluation, no schema,
+  no compiler on this path; pattern-payload acceptance is schema-free
+  until 02 P4. Ownership proven by decode → `@memset(input, 0xAA)` →
+  byte-identical payload read-back. RED: missing-export compile errors
+  on `decodePayloads`, then 7 named WronglyAccepted FAILs against the
+  clamp-span copy-only increment (zero/multi root, trailing slack,
+  corrupt node bytes, oversized pool, per-payload + total caps,
+  iff-presence, span bounds/overlap/arithmetic/zero-size). GREEN
+  evidence: `zig fmt --check` clean; `zig build test` 7/7 steps,
+  **372/372 tests (311 root + 61 CLI)**; `zig build verify` 15/15
+  (311 native, corpus 37/0 failed, 93 node/0 skipped, score-docs and
+  cli-golden current); corpus/CLI/docs/npm drift vs `90dc758` zero.
+  Positive fixtures compile real payloads through `sjon.parse` +
+  `Binary.toBinary(forMode(.compact))` — the frozen encoder choice
+  (A29) as the test-side oracle — covering form/vector/number/symbol/
+  number-with-unit/string/nil/boolean/keyword-child kinds; mutation
+  fixtures hand-patch root counts, tag bytes and pool-count varints.
+  One T2.5-commit doc-comment seam (a stray line above
+  `readEaseProgram`) was found and removed in this task's commit.
+  Imports grew to std, sjon (`Pattern`, `BinaryCursor`, `Binary`),
+  `PactCodec`, `TimeMap`, `TrackTable`, `Easing` — still never
+  `Compile`/`Abi`/`Schema`/`Driver` in production code. The PACM
+  reader and coherence remain T2.7–T2.8; no `decode`/`DecodedScore`,
+  no corpus/CLI golden byte changed, no encoder/CLI/runtime/npm work.

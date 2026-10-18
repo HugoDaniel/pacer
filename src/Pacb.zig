@@ -76,31 +76,37 @@
 //! calls), the T2.4 record-sections stage (`decodeRecords`:
 //! `'TRAK'`/`'KEYS'`/`'TICK'`/`'EMIT'`/`'SCEN'` — tracks, keys, scenes,
 //! emit lanes; the id-bound consumers of the registry join for
-//! `'TRAK'`/`'EMIT'` land there, `'CTRL'`'s with T2.5), and the T2.5
+//! `'TRAK'`/`'EMIT'` land there, `'CTRL'`'s with T2.5), the T2.5
 //! ease/control stage (`decodeEaseControls`: `'EASE'` program
 //! invariants + the synthesized linear default, `'STRS'`' sorted unique
-//! non-reserved id table, `'CTRL'` join/env-only coherence). Stages
-//! expose owned, validated, typed results — `parseDirectory` is still a
-//! structure-only view, `TransportStage.transport.emit` stays empty
-//! (`RecordsStage.emit` holds the lanes until T2.8's assembly), and
-//! `DecodedSource.expr`/`pattern` stay empty (payloads are T2.6's; the
-//! wire spans ride `RecordsStage.payload_spans`). The whole-blob
+//! non-reserved id table, `'CTRL'` join/env-only coherence), and the
+//! T2.6 payload stage (`decodePayloads`: `'PAYL'` arithmetic/caps/
+//! span discipline + the per-payload single-root structural walk over
+//! `sjon.BinaryCursor`, schema-free, producing the per-track arena
+//! copies). Stages expose owned, validated, typed results —
+//! `parseDirectory` is still a structure-only view,
+//! `TransportStage.transport.emit` stays empty (`RecordsStage.emit`
+//! holds the lanes until T2.8's assembly), and
+//! `DecodedSource.expr`/`pattern` stay empty in `RecordsStage`
+//! (`PayloadStage.payloads` carries the validated copies parallel to
+//! the tracks until T2.8's assembly zips them in). The whole-blob
 //! `decode(...) DecodedScore` entry point is deliberately absent until
 //! every section stage validates (T2.8): returning a successful score
-//! before payloads/PACM are validated would be a lying API.
+//! before the PACM cross-check would be a lying API.
 //!
-//! Imports: std, sjon (`Pattern.MAX_TICK`), `PactCodec`, `TimeMap`,
-//! `TrackTable`, `Easing` (the T2.2+T2.3+T2.4+T2.5 subset of the frozen
-//! end-state list). Later stages add `Pacm` and the sjon binary-cursor
-//! surface as their GREEN needs them; this file must NEVER import
-//! `Compile`, `Abi`, `Schema`, or `Driver` — the one test that compares
-//! decoded transport against the compiler (`decoded transport equals
-//! the compiled transport field-for-field`) imports `Compile`/
-//! `test_support` INSIDE its test body only, so a normal (non-test)
-//! build never analyses them through this file; that textual
-//! cohabitation is the recorded plan-02 import seam, not strict
-//! closure. The frozen `ExprTrack.reserved_names` copy lives here for
-//! the same reason (asserted against its source in `src/root.zig`).
+//! Imports: std, sjon (`Pattern.MAX_TICK`, `BinaryCursor`, `Binary`),
+//! `PactCodec`, `TimeMap`, `TrackTable`, `Easing` (the
+//! T2.2+T2.3+T2.4+T2.5+T2.6 subset of the frozen end-state list).
+//! Later stages add `Pacm` as their GREEN needs it; this file must
+//! NEVER import `Compile`, `Abi`, `Schema`, or `Driver` — the one test
+//! that compares decoded transport against the compiler (`decoded
+//! transport equals the compiled transport field-for-field`) imports
+//! `Compile`/`test_support` INSIDE its test body only, so a normal
+//! (non-test) build never analyses them through this file; that
+//! textual cohabitation is the recorded plan-02 import seam, not
+//! strict closure. The frozen `ExprTrack.reserved_names` copy lives
+//! here for the same reason (asserted against its source in
+//! `src/root.zig`).
 
 const std = @import("std");
 const sjon = @import("sjon");
@@ -1752,7 +1758,6 @@ fn validateEaseProgramWire(
     }
 }
 
-/// Frozen copy of `Abi.metaWorstCase`'s arithmetic: the largest `'PACM'`
 /// Read one 772-byte `'EASE'` program record into an `Easing.Program`.
 /// All stage/op slots are copied — the wire's zeroed unused slots ARE
 /// the canonical zero-fill (`Program.zero_stage` spells code 0 with
@@ -1789,6 +1794,262 @@ fn readEaseProgram(payload: []const u8, at: usize) Easing.Program {
         prog.stages[i] = stage;
     }
     return prog;
+}
+
+/// Owned payload stage result: per-track payload COPIES, parallel to
+/// `RecordsStage.tracks` (empty slices for non-payload sources) — the
+/// seam T2.8's `DecodedScore` assembly zips into the still-empty
+/// `DecodedSource.expr`/`pattern` arms. Each expr/pattern entry is the
+/// arena-owned, structurally validated SJON binary-IR buffer the
+/// track's `(payload_off, payload_len)` addresses.
+pub const PayloadStage = struct {
+    arena: std.heap.ArenaAllocator,
+    payloads: []const []const u8,
+
+    pub fn deinit(self: *PayloadStage) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+/// Decode and validate the payload stage: the `'PAYL'` section's
+/// length arithmetic and caps, the iff-consumer rule (`'PAYL'` iff an
+/// expr/pattern track exists), every track span's bounds and
+/// non-overlap, and each payload's STRUCTURAL consumption — a
+/// `BinaryCursor` over the copy: header/pool/roots-offset equality,
+/// exactly one root, a full depth-first walk over every node kind at
+/// its exact wire width, ending exactly at `payload_len` (trailing
+/// slack inside a payload refuses). No evaluation, no schema, no
+/// compiler — pattern-payload acceptance stays schema-free until 02 P4
+/// (the `'PAYL'`-walk is the 01-local seam 02 reroutes through
+/// `RtSjon`). PRECONDITIONS: `directory` is `parseDirectory(bytes, …)`'s
+/// result and `records` the same-buffer `decodeRecords` stage — the
+/// section-payload guard turns a mismatched pair into a refusal, never
+/// a trap. Validation order: presence/canonical shape, section
+/// arithmetic, total cap, span caps/bounds/overlap, then the walk.
+pub fn decodePayloads(
+    gpa: std.mem.Allocator,
+    bytes: []const u8,
+    directory: *const Directory,
+    records: *const RecordsStage,
+    refusal: ?*Refusal,
+) DecodeError!PayloadStage {
+    const payl_sec = directory.find(.payl);
+
+    // Cross-section presence is CHECKED, not implied: 'PAYL' iff an
+    // expr/pattern track exists (the track sources are T2.4-validated
+    // by the time this stage runs).
+    var has_payload_track = false;
+    for (records.tracks) |track| {
+        switch (track.source) {
+            .expr, .pattern => has_payload_track = true,
+            .keys, .trigger => {},
+        }
+    }
+    if (payl_sec != null and !has_payload_track) {
+        return fail(refusal, .non_canonical, payl_sec.?.off);
+    }
+    if (payl_sec == null and has_payload_track) {
+        return fail(refusal, .non_canonical, payloadStart(directory));
+    }
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    const payloads = a.alloc([]const u8, records.tracks.len) catch return error.OutOfMemory;
+    for (payloads) |*slot| slot.* = &.{};
+
+    if (payl_sec) |sec| {
+        const payload = try sectionPayload(bytes, sec, refusal);
+        if (payload.len < 4) return fail(refusal, .payload_malformed, sec.off);
+        const byte_size = readU32(payload, 0);
+        if (@as(u64, byte_size) != payload.len - 4) {
+            return fail(refusal, .payload_malformed, sec.off);
+        }
+        if (byte_size == 0) {
+            // The degenerate region is the omitted section.
+            return fail(refusal, .non_canonical, sec.off);
+        }
+        if (byte_size > MAX_PAYL_BYTES) {
+            return fail(refusal, .cap_exceeded, sec.off);
+        }
+        const region = payload[4..];
+
+        // Spans: per-payload cap, region bounds (checked u64 adds), and
+        // non-overlap in track order — the 'TICK' discipline.
+        var prev_end: ?u64 = null;
+        for (records.tracks, records.payload_spans) |track, span| {
+            switch (track.source) {
+                .expr, .pattern => {
+                    if (span.len > MAX_PAYLOAD_BYTES) {
+                        return fail(refusal, .cap_exceeded, sec.off + 4 + span.off);
+                    }
+                    const end = @as(u64, span.off) + span.len;
+                    if (end > byte_size) {
+                        return fail(refusal, .payload_malformed, sec.off + 4 + span.off);
+                    }
+                    if (prev_end) |pe| {
+                        if (span.off < pe) {
+                            return fail(refusal, .payload_malformed, sec.off + 4 + span.off);
+                        }
+                    }
+                    prev_end = end;
+                },
+                .keys, .trigger => {},
+            }
+        }
+
+        // Copy first, then walk the copy — the validated bytes and the
+        // returned payload are the same arena memory.
+        for (records.tracks, records.payload_spans, payloads) |track, span, *out| {
+            switch (track.source) {
+                .expr, .pattern => {
+                    const copy = a.dupe(u8, region[span.off..][0..span.len]) catch
+                        return error.OutOfMemory;
+                    try walkPayloadStructurally(a, copy, refusal, sec.off + 4 + span.off);
+                    out.* = copy;
+                },
+                .keys, .trigger => {},
+            }
+        }
+    }
+
+    return .{ .arena = arena, .payloads = payloads };
+}
+
+/// The payload structural-consumption walk (the plan's rule): run the
+/// SJON binary cursor over one copied payload — `Cursor.init` proves
+/// the header, both pools, and the roots-offset equality (it already
+/// rejects pool↔roots slack); exactly one root is required (the
+/// `MultipleRoots` rule — zero is the same defect class here); and a
+/// full depth-first walk through the cursor's own child/vector
+/// iterators consumes EVERY node kind at its exact wire width, covering
+/// branches an evaluation would never visit. The walk must end exactly
+/// at `payload.len`. Iterative, like `PatternQuery.compileBinary`'s
+/// frame machine — the cursor is single-pass and monotonic, so a frame
+/// pushed mid-iteration runs to completion and the parent resumes at
+/// the next child. Depth is capped at the wire format's own
+/// `MAX_TREE_DEPTH` (the encoder never nests deeper); a deeper payload
+/// is malformed, never a native-stack gamble. Every `BinaryCursor`
+/// error maps to `payload_malformed` — deterministic, host-identical.
+fn walkPayloadStructurally(
+    a: std.mem.Allocator,
+    payload: []const u8,
+    refusal: ?*Refusal,
+    payload_at: usize,
+) DecodeError!void {
+    const BC = sjon.BinaryCursor;
+
+    var cursor = BC.Cursor.init(payload) catch {
+        return fail(refusal, .payload_malformed, payload_at);
+    };
+    // O(1) pool lookups: the walk resolves a pool entry per
+    // string/keyword/symbol/head/unit node, and the entries are only
+    // forward-walkable without an index (O(M×N) worst case). The index
+    // lives on the stage arena, exactly as `compileBinary` places it.
+    const pool_index = a.alloc(u32, cursor.poolIndexLen()) catch return error.OutOfMemory;
+    cursor.indexPools(pool_index);
+
+    var roots = cursor.rootIter() catch {
+        return fail(refusal, .payload_malformed, payload_at);
+    };
+    if (roots.remaining != 1) {
+        // Zero roots or multiple roots: a payload is one subtree.
+        return fail(refusal, .payload_malformed, payload_at);
+    }
+    const root = (roots.next() catch {
+        return fail(refusal, .payload_malformed, payload_at);
+    }).?;
+
+    const WalkFrame = union(enum) {
+        vec: BC.VectorIter,
+        children: BC.ChildIter,
+    };
+    var stack: [sjon.Binary.MAX_TREE_DEPTH]WalkFrame = undefined;
+    var depth: usize = 0;
+
+    var current = root;
+    while (true) {
+        // Consume the node's variant payload at its exact width.
+        switch (current.kind) {
+            .vector => {
+                if (depth >= stack.len) {
+                    return fail(refusal, .payload_malformed, payload_at);
+                }
+                const iter = BC.readVector(&cursor, current) catch
+                    return fail(refusal, .payload_malformed, payload_at);
+                stack[depth] = .{ .vec = iter };
+                depth += 1;
+            },
+            .form => {
+                if (depth >= stack.len) {
+                    return fail(refusal, .payload_malformed, payload_at);
+                }
+                const form = BC.readForm(&cursor, current) catch
+                    return fail(refusal, .payload_malformed, payload_at);
+                stack[depth] = .{ .children = form.children };
+                depth += 1;
+            },
+            .nil => BC.readNil(&cursor, current) catch
+                return fail(refusal, .payload_malformed, payload_at),
+            .boolean => _ = BC.readBoolean(&cursor, current) catch
+                return fail(refusal, .payload_malformed, payload_at),
+            .number => _ = BC.readNumber(&cursor, current) catch
+                return fail(refusal, .payload_malformed, payload_at),
+            .number_with_unit => _ = BC.readNumberWithUnit(&cursor, current) catch
+                return fail(refusal, .payload_malformed, payload_at),
+            .date => _ = BC.readDate(&cursor, current) catch
+                return fail(refusal, .payload_malformed, payload_at),
+            .time => _ = BC.readTime(&cursor, current) catch
+                return fail(refusal, .payload_malformed, payload_at),
+            .string => _ = BC.readString(&cursor, current) catch
+                return fail(refusal, .payload_malformed, payload_at),
+            .keyword => _ = BC.readKeyword(&cursor, current) catch
+                return fail(refusal, .payload_malformed, payload_at),
+            .symbol => _ = BC.readSymbol(&cursor, current) catch
+                return fail(refusal, .payload_malformed, payload_at),
+        }
+
+        // Descend: pull the next node view off the top of the stack,
+        // popping exhausted iterators (their trailing-comment fields
+        // are consumed by the final null return, keeping the cursor's
+        // own accounting exact).
+        var next: ?BC.NodeView = null;
+        while (depth > 0) {
+            const top = &stack[depth - 1];
+            switch (top.*) {
+                .vec => |*iter| {
+                    if (iter.next() catch
+                        return fail(refusal, .payload_malformed, payload_at)) |view|
+                    {
+                        next = view;
+                        break;
+                    }
+                },
+                .children => |*iter| {
+                    if (iter.next() catch
+                        return fail(refusal, .payload_malformed, payload_at)) |entry|
+                    {
+                        next = entry.value;
+                        break;
+                    }
+                },
+            }
+            depth -= 1;
+        }
+        if (next) |view| {
+            current = view;
+            continue;
+        }
+        break;
+    }
+
+    // The walk consumed every node it could reach: the payload must
+    // end exactly here — trailing slack inside a payload refuses.
+    if (@as(usize, cursor.pos) != payload.len) {
+        return fail(refusal, .payload_malformed, payload_at + cursor.pos);
+    }
 }
 
 /// Frozen copy of `Abi.metaWorstCase`'s arithmetic: the largest `'PACM'`
@@ -4857,5 +5118,341 @@ test "Pacb: control flags are coherent with finite lanes and zero spellings" {
         const built = try buildEaseControlFixture(t.allocator, &base, regs);
         defer t.allocator.free(built.buf);
         try expectEaseControlRefusal(built.buf, .control_invalid);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T2.6 — payload stage tests ('PAYL': structural consumption)
+// ---------------------------------------------------------------------------
+
+fn expectPayloadRefusal(bytes: []const u8, code: RefusalCode) !void {
+    var refusal: Refusal = undefined;
+    const directory = try parseDirectory(bytes, null);
+    var registry = try decodeRegistry(t.allocator, bytes, &directory, &refusal);
+    defer registry.deinit();
+    var records = try decodeRecords(t.allocator, bytes, &directory, &registry, &refusal);
+    defer records.deinit();
+    const decoded = decodePayloads(t.allocator, bytes, &directory, &records, &refusal);
+    if (decoded) |payload| {
+        var stage = payload;
+        stage.deinit();
+        return error.WronglyAccepted;
+    } else |err| {
+        try t.expectEqual(error.Refused, err);
+        try t.expectEqual(code, refusal.code);
+    }
+}
+
+/// Compact single-root SJON binary IR for a source snippet (the frozen
+/// encoder choice, A29 — test-side oracle; the decoder only ever reads).
+fn toBinaryCompact(alloc: std.mem.Allocator, src: [:0]const u8) ![]u8 {
+    var tree = try sjon.parse(alloc, src);
+    defer tree.deinit();
+    const bin = try sjon.Binary.toBinary(
+        alloc,
+        tree,
+        sjon.Binary.ToBinaryOptions.forMode(.compact),
+    );
+    defer bin.deinit();
+    return alloc.dupe(u8, bin.data);
+}
+
+/// A one-expr-track fixture over an arbitrary payload region (mutations
+/// included) — TRAN+REGS+DECL+TRAK+PAYL+PACM in canonical order.
+fn buildPayloadFixture(
+    alloc: std.mem.Allocator,
+    payload_region: []const u8,
+    regs: []const u8,
+) !BuiltFixture {
+    const trak = [_]TrakRec{
+        .{ .target_id = 1, .registry = 1, .ncomp = 1, .source = SOURCE_EXPR, .payload_off = 0, .payload_len = @intCast(payload_region.len) },
+    };
+    return buildRecordsFixture(alloc, .{
+        .transport = hostJoinSpec(regs),
+        .regs = regs,
+        .decl = &base_decl,
+        .trak = &trak,
+        .payl = payload_region,
+    });
+}
+
+/// The roots-block offset of a binary-IR buffer (header field @12).
+fn irRootsOffset(payload: []const u8) usize {
+    return readU32(payload, 12);
+}
+
+test "Pacb: payload spans validate structurally and copy into the arena" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // An expr payload (form/number/symbol kinds) and a pattern payload
+    // (vector/symbol/unit/string/nil/boolean/form-with-keyword kinds) —
+    // the pattern side is accepted SCHEMA-FREE, structure only.
+    const expr_bin = try toBinaryCompact(t.allocator, "(+ 1 (* 2 t))");
+    defer t.allocator.free(expr_bin);
+    const pat_bin = try toBinaryCompact(t.allocator, "[bd (pure :x 1) 90deg \"s\" nil true]");
+    defer t.allocator.free(pat_bin);
+
+    const region = try t.allocator.alloc(u8, expr_bin.len + pat_bin.len);
+    defer t.allocator.free(region);
+    @memcpy(region[0..expr_bin.len], expr_bin);
+    @memcpy(region[expr_bin.len..], pat_bin);
+
+    var base = baseRecords();
+    const trak = [_]TrakRec{
+        base.trak[0], // keys track: payload stays empty
+        .{ .target_id = 1, .registry = 1, .ncomp = 1, .source = SOURCE_EXPR, .payload_off = 0, .payload_len = @intCast(expr_bin.len) },
+        .{ .target_id = 2, .registry = 1, .ncomp = 2, .source = SOURCE_PATTERN, .payload_off = @intCast(expr_bin.len), .payload_len = @intCast(pat_bin.len) },
+    };
+    const built = try buildRecordsFixture(t.allocator, .{
+        .transport = hostJoinSpec(regs),
+        .regs = regs,
+        .decl = &base_decl,
+        .emit = &base.emit,
+        .trak = &trak,
+        .keys = &base.keys,
+        .scen = &base.scen,
+        .payl = region,
+    });
+    defer t.allocator.free(built.buf);
+    // Producer truth: a pattern track sets the feature bit.
+    putU32(built.buf, 8, FEATURE_PATTERN_TRACKS);
+
+    const directory = try parseDirectory(built.buf, null);
+    var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+    defer registry.deinit();
+    var records = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+    defer records.deinit();
+    var stage = try decodePayloads(t.allocator, built.buf, &directory, &records, null);
+    defer stage.deinit();
+
+    try t.expectEqual(@as(usize, 3), stage.payloads.len);
+    try t.expectEqual(@as(usize, 0), stage.payloads[0].len); // keys track
+    try t.expectEqualSlices(u8, expr_bin, stage.payloads[1]);
+    try t.expectEqualSlices(u8, pat_bin, stage.payloads[2]);
+
+    // The stage owns its copies: clobber the input, the payloads read
+    // back byte-identical (the ownership contract until T2.8's final
+    // arena; 02 P2 re-proves it at the wasm boundary).
+    @memset(built.buf, 0xAA);
+    try t.expectEqualSlices(u8, expr_bin, stage.payloads[1]);
+    try t.expectEqualSlices(u8, pat_bin, stage.payloads[2]);
+}
+
+test "Pacb: zero- and multi-root payloads refuse payload_malformed" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // Zero roots: patch the root count varint to 0.
+    {
+        const payload = try toBinaryCompact(t.allocator, "(+ 1 (* 2 t))");
+        defer t.allocator.free(payload);
+        payload[irRootsOffset(payload)] = 0;
+        const built = try buildPayloadFixture(t.allocator, payload, regs);
+        defer t.allocator.free(built.buf);
+        try expectPayloadRefusal(built.buf, .payload_malformed);
+    }
+    // Multi-root: a two-root document.
+    {
+        const payload = try toBinaryCompact(t.allocator, "(+ 1 (* 2 t)) 42");
+        defer t.allocator.free(payload);
+        const built = try buildPayloadFixture(t.allocator, payload, regs);
+        defer t.allocator.free(built.buf);
+        try expectPayloadRefusal(built.buf, .payload_malformed);
+    }
+}
+
+test "Pacb: trailing slack inside a payload refuses payload_malformed" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // One extra byte after the single root — never consumed by the
+    // walk, so the payload does not end exactly at its length.
+    const clean = try toBinaryCompact(t.allocator, "(+ 1 (* 2 t))");
+    defer t.allocator.free(clean);
+    const slackful = try t.allocator.alloc(u8, clean.len + 1);
+    defer t.allocator.free(slackful);
+    @memcpy(slackful[0..clean.len], clean);
+    slackful[clean.len] = 0x00;
+
+    const built = try buildPayloadFixture(t.allocator, slackful, regs);
+    defer t.allocator.free(built.buf);
+    try expectPayloadRefusal(built.buf, .payload_malformed);
+}
+
+test "Pacb: corrupt node bytes mid-payload refuse payload_malformed" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // Flip the root node's tag byte (just past the root-count varint)
+    // to an unknown wire tag.
+    const payload = try toBinaryCompact(t.allocator, "(+ 1 (* 2 t))");
+    defer t.allocator.free(payload);
+    payload[irRootsOffset(payload) + 1] = 0xFF;
+
+    const built = try buildPayloadFixture(t.allocator, payload, regs);
+    defer t.allocator.free(built.buf);
+    try expectPayloadRefusal(built.buf, .payload_malformed);
+}
+
+test "Pacb: an oversized string pool refuses payload_malformed" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // Hand-crafted 23-byte frame: a valid header, then a pool count
+    // varint of 65537 (one past MAX_STRING_POOL_ENTRIES) — Cursor.init
+    // refuses before anything else, and the stage maps it.
+    const payload = [_]u8{
+        'S', 'J', '1', '\n', // magic
+        0x05, // wire version
+        0x00, // flags (compact)
+        0x00, 0x00, // reserved
+        16, 0, 0, 0, // pool_offset = HEADER_SIZE
+        20, 0, 0, 0, // roots_offset
+        0x81, 0x80, 0x04, // pool_count = 65537 (LEB128)
+        0x00, // pool byte_size = 0
+        0x01, // root count = 1
+        0x06, 0x00, // symbol node, pool idx 0
+    };
+    const built = try buildPayloadFixture(t.allocator, &payload, regs);
+    defer t.allocator.free(built.buf);
+    try expectPayloadRefusal(built.buf, .payload_malformed);
+}
+
+test "Pacb: per-payload and total payload caps refuse cap_exceeded" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    // One payload past MAX_PAYLOAD_BYTES (content irrelevant — the cap
+    // fires before any structural parse).
+    {
+        const big = try t.allocator.alloc(u8, MAX_PAYLOAD_BYTES + 1);
+        defer t.allocator.free(big);
+        @memset(big, 0);
+        const built = try buildPayloadFixture(t.allocator, big, regs);
+        defer t.allocator.free(built.buf);
+        try expectPayloadRefusal(built.buf, .cap_exceeded);
+    }
+    // The 'PAYL' region past MAX_PAYL_BYTES.
+    {
+        const big = try t.allocator.alloc(u8, MAX_PAYL_BYTES + 1);
+        defer t.allocator.free(big);
+        @memset(big, 0);
+        const trak = [_]TrakRec{
+            .{ .target_id = 1, .registry = 1, .ncomp = 1, .source = SOURCE_EXPR, .payload_off = 0, .payload_len = @intCast(big.len / 2) },
+            .{ .target_id = 2, .registry = 1, .ncomp = 2, .source = SOURCE_EXPR, .payload_off = @intCast(big.len / 2), .payload_len = @intCast(big.len / 2 + 1) },
+        };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .trak = &trak,
+            .payl = big,
+        });
+        defer t.allocator.free(built.buf);
+        try expectPayloadRefusal(built.buf, .cap_exceeded);
+    }
+}
+
+test "Pacb: PAYL presence must match expr/pattern tracks (non_canonical)" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    const payload = try toBinaryCompact(t.allocator, "(+ 1 (* 2 t))");
+    defer t.allocator.free(payload);
+
+    // 'PAYL' present with no expr/pattern track (keys only).
+    {
+        const base = baseRecords();
+        const trak = [_]TrakRec{base.trak[0]};
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .trak = &trak,
+            .keys = &base.keys,
+            .scen = &base.scen,
+            .payl = payload,
+        });
+        defer t.allocator.free(built.buf);
+        try expectPayloadRefusal(built.buf, .non_canonical);
+    }
+    // An expr track with 'PAYL' absent.
+    {
+        const base = baseRecords();
+        const trak = [_]TrakRec{base.trak[1]};
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .trak = &trak,
+        });
+        defer t.allocator.free(built.buf);
+        try expectPayloadRefusal(built.buf, .non_canonical);
+    }
+}
+
+test "Pacb: payload spans must be bounded, in-region and non-overlapping" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+
+    const payload = try toBinaryCompact(t.allocator, "(+ 1 (* 2 t))");
+    defer t.allocator.free(payload);
+    const region = try t.allocator.alloc(u8, payload.len * 2);
+    defer t.allocator.free(region);
+    @memcpy(region[0..payload.len], payload);
+    @memcpy(region[payload.len..], payload);
+
+    // A span past the region's end.
+    {
+        const trak = [_]TrakRec{
+            .{ .target_id = 1, .registry = 1, .ncomp = 1, .source = SOURCE_EXPR, .payload_off = @intCast(payload.len + 2), .payload_len = @intCast(payload.len) },
+        };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .trak = &trak,
+            .payl = region,
+        });
+        defer t.allocator.free(built.buf);
+        try expectPayloadRefusal(built.buf, .payload_malformed);
+    }
+    // Two tracks slicing the same bytes (overlap in track order).
+    {
+        const trak = [_]TrakRec{
+            .{ .target_id = 1, .registry = 1, .ncomp = 1, .source = SOURCE_EXPR, .payload_off = 0, .payload_len = @intCast(payload.len) },
+            .{ .target_id = 2, .registry = 1, .ncomp = 2, .source = SOURCE_PATTERN, .payload_off = 0, .payload_len = @intCast(payload.len) },
+        };
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .trak = &trak,
+            .payl = region,
+        });
+        defer t.allocator.free(built.buf);
+        try expectPayloadRefusal(built.buf, .payload_malformed);
+    }
+    // byte_size must consume the section exactly.
+    {
+        const built = try buildPayloadFixture(t.allocator, region[0..payload.len], regs);
+        defer t.allocator.free(built.buf);
+        putU32(built.buf, built.layout.payl, @intCast(payload.len - 1));
+        try expectPayloadRefusal(built.buf, .payload_malformed);
+    }
+    // A present zero-size 'PAYL' is the omitted case.
+    {
+        const base = baseRecords();
+        const trak = [_]TrakRec{base.trak[1]};
+        const built = try buildRecordsFixture(t.allocator, .{
+            .transport = hostJoinSpec(regs),
+            .regs = regs,
+            .decl = &base_decl,
+            .trak = &trak,
+            .payl = &.{},
+        });
+        defer t.allocator.free(built.buf);
+        try expectPayloadRefusal(built.buf, .non_canonical);
     }
 }

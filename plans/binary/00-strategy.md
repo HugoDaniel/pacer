@@ -3,8 +3,9 @@
 The living guide for this wave. Same rules as [`../00-strategy.md`](../00-strategy.md):
 read this file, pick the top unchecked item, open only that plan, execute its
 next phase; update the board and pointer when a phase or plan completes.
-**Created 2026-10-18; plan 01 Phase 1 (T1.1) landed 2026-10-18; phases
-2–4 await their separate correction.**
+**Created 2026-10-18; plan 01 Phase 1 (T1.1) landed 2026-10-18; plan 01
+Phase 2 in progress (T2.1–T2.6 landed 2026-10-18, T2.7–T2.8 open); plans
+01 phases 3–4 and plans 02–04 not started.**
 
 ## North star
 
@@ -97,7 +98,7 @@ decided by gates, not by size.
 | Wave | Item | Status |
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
-| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) landed; Phase 2 in progress (T2.1 header/directory/caps + T2.2 transport + T2.3 registry identity landed, T2.4–T2.8 open); phases 3–4 open |
+| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 subgroups T2.1–T2.6 landed (header/directory/caps, transport, registry identity, records, ease/control, payload walk); T2.7–T2.8 open; phases 3–4 open |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |
@@ -109,15 +110,21 @@ decided by gates, not by size.
 
 ## What's next
 
-→ Plan 01 T2.4 (record sections: `'TRAK'`/`'KEYS'`/`'TICK'`/`'EMIT'`/
-`'SCEN'`). Phase 2 is IN PROGRESS, not complete: T2.1 landed the
-`'PACB'` header/directory/caps skeleton, T2.2 the transport stage
+→ Plan 01 T2.7 (the std-only `'PACM'` reader, `src/Pacm.zig`). Phase 2
+is IN PROGRESS, not complete: T2.1 landed the `'PACB'`
+header/directory/caps skeleton, T2.2 the transport stage
 (`decodeTransport`: `'TRAN'`/`'TMPO'` domains before the `TimeMap`
 rebuild, compiler-pinned), T2.3 the registry identity
 (`decodeRegistry`: canonical `'PACT'` byte-compare, `'DECL'` bounds,
-fnv fast-reject). Records, ease/control, payload, PACM, and
-`decode`/`DecodedScore` remain open (T2.4–T2.8). Phase 1 (the `'PACT'`
-codec extraction, T1.1) landed 2026-10-18 with its zero-diff gate.
+fnv fast-reject), T2.4 the record sections (`decodeRecords`:
+`'TRAK'`/`'KEYS'`/`'TICK'`/`'EMIT'`/`'SCEN'`), T2.5 the ease/control
+stage (`decodeEaseControls`: `'EASE'` program invariants,
+`'STRS'`/`'CTRL'` coherence), and T2.6 the payload stage
+(`decodePayloads`: `'PAYL'` structural consumption over
+`BinaryCursor`, arena-owned copies). The PACM reader (T2.7),
+coherence + `decode`/`DecodedScore` (T2.8) remain open. Phase 1 (the
+`'PACT'` codec extraction, T1.1) landed 2026-10-18 with its zero-diff
+gate.
 
 ## Decision log
 
