@@ -722,3 +722,61 @@ _(created 2026-10-18; entries appended per phase)_
   `Compile`/`Abi`/`Schema`/`Driver` in production code. The PACM
   reader and coherence remain T2.7–T2.8; no `decode`/`DecodedScore`,
   no corpus/CLI golden byte changed, no encoder/CLI/runtime/npm work.
+
+- **2026-10-18 — Phase 2 continued (T2.7 only; phase NOT complete).**
+  `src/Pacm.zig` landed — the std-only `'PACM'` reader
+  (`Pacm.decode(blob) ?Pacm.MetaView`), imported by `src/root.zig`
+  (export + discovery). Imports std ONLY (`Abi` stays the encoder and
+  format of record; never `Pacb`/`Compile`/`TrackTable`/`Easing`/sjon),
+  so every wire constant and ordinal family it spells is a frozen copy
+  gated by equality asserts in `src/root.zig` (magic/version, header 40,
+  track 24 / key 32 / control 64 / scene 24 / tempo 16 / ease
+  op 20 / stage 96 / program 772, section ids, `META_NO_TARGET`;
+  `TrackSource` 0..3 vs `Abi.TrackSourceKind`, `ControlKind` 0..2 vs
+  `TrackTable.ControlType`, `MAX_EASE_OP` 21 vs `Easing.Op`'s 22
+  variants, stage/op slot counts vs `Easing.MAX_STAGES`/`MAX_OPS`).
+  `MetaView` carries the transport scalars plus byte-slice sections and
+  typed accessors mirroring `Abi.MetaView`'s read shapes — every slice
+  ALIASES the input blob (the view borrows; `Pacb` copies what it
+  keeps). `decode` is total: null on bad magic/version, truncated
+  header/record/id, width lies, key ranges past the key stream (u64
+  compare), unordered span pairs (track/key/control-value/scene-name),
+  enum bytes outside the frozen families, transport outside the
+  compiler's domains (bpm finite 1..1000, beats_per_bar 1..16 — the
+  closed boundaries accepted), truncated/trailing TLV slack, duplicate
+  section ids, section payloads not accounting exactly for their
+  records, and `'EASE'` op ordinals past 22 — with unknown ids skipped
+  by length (the TLV contract) and divide-before-multiply length
+  arithmetic throughout (no trap on any byte sequence, native/wasm32).
+  Oracle discipline: three FROZEN producer blobs under
+  `src/testdata/pacm/` (`keys-controls` 288 B, `scenes-tempo-ease`
+  1772 B, `minimal` 108 B) generated once by the real
+  `Abi.encodeMeta` over fixture sources already proven in `Abi`'s own
+  decoder tests; a root test recompiles those sources and byte-pins the
+  files to fresh producer output every run, and three field-for-field
+  comparisons walk `Pacm.decode` against `Abi.decodeMeta` (the
+  Zig-side shared oracle, A38) with own literal expectations (spans
+  sliced from the fixture sources, domain values, section contents).
+  `verifyRouting` is deliberately ABSENT: its plan signature takes a
+  `*const Pacb.DecodedScore`, which would make std-only `Pacm` import
+  `Pacb` (closure violation + cycle). Recorded as a layering conflict,
+  staged unimplemented for T2.8 — which the plan already assigns the
+  wiring ("Modify `src/Pacb.zig`, `src/Pacm.zig` (wire
+  `verifyRouting`)") — to resolve with the architect via the approved
+  layering/generic signature if the typed form stays impossible; no
+  silent loosening of the std-only closure. RED evidence
+  (`.agent/control/binary01-t27-*.log`): RED 1 genuine missing-module
+  compile error (`unable to load 'Pacm.zig': FileNotFound`); RED 2 the
+  carry increment (structural read of valid blobs only) wrongly
+  accepting 8 named refusal classes (truncated-prefix tails, trailing
+  bytes, duplicate ids, accounting lies, enum bytes, unordered spans,
+  transport domains, key-range overrun) — 384/392 with the positive
+  control green; truncation sweeps, count/width lies and TLV payload
+  cuts were green-on-arrival (a non-trapping read needs those bounds).
+  GREEN: `zig fmt --check` clean; `zig build test` 7/7 steps,
+  **392/392 tests (331 root + 61 CLI)**; `zig build verify` 15/15
+  (331 native, corpus 37/0 failed, node parity green, score-docs and
+  cli-golden current); corpus/CLI/docs/npm drift vs `90dc758` zero.
+  Phase 2 remains open at T2.8 (coherence cross-check,
+  `DecodedScore` completion, ownership proof); no encoder/CLI/runtime
+  work, no corpus/CLI golden byte changed.

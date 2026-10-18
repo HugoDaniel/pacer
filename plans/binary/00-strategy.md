@@ -4,7 +4,7 @@ The living guide for this wave. Same rules as [`../00-strategy.md`](../00-strate
 read this file, pick the top unchecked item, open only that plan, execute its
 next phase; update the board and pointer when a phase or plan completes.
 **Created 2026-10-18; plan 01 Phase 1 (T1.1) landed 2026-10-18; plan 01
-Phase 2 in progress (T2.1–T2.6 landed 2026-10-18, T2.7–T2.8 open); plans
+Phase 2 in progress (T2.1–T2.7 landed 2026-10-18, T2.8 open); plans
 01 phases 3–4 and plans 02–04 not started.**
 
 ## North star
@@ -98,7 +98,7 @@ decided by gates, not by size.
 | Wave | Item | Status |
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
-| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 subgroups T2.1–T2.6 landed (header/directory/caps, transport, registry identity, records, ease/control, payload walk); T2.7–T2.8 open; phases 3–4 open |
+| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 subgroups T2.1–T2.7 landed (header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader); T2.8 open; phases 3–4 open |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |
@@ -110,7 +110,10 @@ decided by gates, not by size.
 
 ## What's next
 
-→ Plan 01 T2.7 (the std-only `'PACM'` reader, `src/Pacm.zig`). Phase 2
+→ Plan 01 T2.8 (coherence cross-check + `DecodedScore` completion +
+ownership proof — it also wires `Pacm.verifyRouting`, whose typed
+signature is recorded as a layering conflict for T2.8 to resolve with
+the architect). Phase 2
 is IN PROGRESS, not complete: T2.1 landed the `'PACB'`
 header/directory/caps skeleton, T2.2 the transport stage
 (`decodeTransport`: `'TRAN'`/`'TMPO'` domains before the `TimeMap`
@@ -119,10 +122,12 @@ rebuild, compiler-pinned), T2.3 the registry identity
 fnv fast-reject), T2.4 the record sections (`decodeRecords`:
 `'TRAK'`/`'KEYS'`/`'TICK'`/`'EMIT'`/`'SCEN'`), T2.5 the ease/control
 stage (`decodeEaseControls`: `'EASE'` program invariants,
-`'STRS'`/`'CTRL'` coherence), and T2.6 the payload stage
+`'STRS'`/`'CTRL'` coherence), T2.6 the payload stage
 (`decodePayloads`: `'PAYL'` structural consumption over
-`BinaryCursor`, arena-owned copies). The PACM reader (T2.7),
-coherence + `decode`/`DecodedScore` (T2.8) remain open. Phase 1 (the
+`BinaryCursor`, arena-owned copies), and T2.7 the std-only `'PACM'`
+reader (`Pacm.decode`: total, aliasing, frozen constants asserted in
+root, three producer-pinned oracle blobs). Coherence +
+`decode`/`DecodedScore` (T2.8) remain open. Phase 1 (the
 `'PACT'` codec extraction, T1.1) landed 2026-10-18 with its zero-diff
 gate.
 

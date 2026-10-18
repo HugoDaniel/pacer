@@ -4,9 +4,10 @@
 "what's next" pointer. This file holds the scope, the naming, and the plan index.
 
 Created 2026-10-18. **Execution started 2026-10-18** — plan 01 Phase 1
-(T1.1, the `'PACT'` codec leaf) and Phase 2 subgroups T2.1–T2.6
+(T1.1, the `'PACT'` codec leaf) and Phase 2 subgroups T2.1–T2.7
 (container skeleton, transport, registry identity, record sections,
-ease/control, payload walk) have landed; T2.7–T2.8 and phases 3–4 of
+ease/control, payload walk, std-only `'PACM'` reader) have landed;
+T2.8 and phases 3–4 of
 plan 01 remain open, as do plans 02–04. The wave was
 independently reviewed twice the same day; this revision
 applies the first review's blockers and important findings (B1–B4, I1–I11),

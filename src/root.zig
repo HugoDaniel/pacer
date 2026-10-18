@@ -33,6 +33,11 @@ pub const PactCodec = @import("PactCodec.zig");
 /// subgroup T2.1). Section payload decoding is not exposed yet — see the
 /// module header for the interim boundary.
 pub const Pacb = @import("Pacb.zig");
+/// `'PACM'` score-metadata reader: the std-only structural reading half
+/// of the metadata blob (`Abi` stays the encoder and the format of
+/// record) — a total decode of untrusted bytes whose views alias the
+/// input, so the playback runtime's closure never drags the compiler in.
+pub const Pacm = @import("Pacm.zig");
 /// Score compiler: preloaded schema → `sjon.validateDocument` → the
 /// compiled `TrackTable` (targets joined, ticks converted, programs
 /// deduped), with pacer's own wire-stable diagnostic codes.
@@ -68,6 +73,7 @@ test {
     _ = Schema;
     _ = PactCodec;
     _ = Pacb;
+    _ = Pacm;
     _ = Compile;
     _ = TimeMap;
     _ = Easing;
@@ -235,4 +241,314 @@ test "Pacb: frozen reserved-name copy matches ExprTrack.reserved_names" {
     for (ExprTrack.reserved_names, Pacb.reserved_control_names) |src, copy| {
         try std.testing.expectEqualStrings(src, copy);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pacm — frozen-copy equality gates + the producer-oracle comparisons
+// ---------------------------------------------------------------------------
+//
+// `Pacm` is the std-only reading half of `'PACM'`: it may never import
+// `Abi` (or anything but std), so every wire constant and ordinal family
+// it spells is a frozen copy, and the copies are gated HERE where both
+// sides import with no cycle — the same pattern as the `Pacb` asserts
+// above. The three oracle blobs under `src/testdata/pacm/` were produced
+// once by the real `Abi.encodeMeta` over these fixture sources (proven
+// clean in `Abi`'s own decoder tests) and are re-pinned to a fresh
+// compile on every run, so `Pacm.decode` is compared against the shared
+// Zig-side oracle (`Abi.decodeMeta`, plan A38) over bytes the producer
+// actually emits — never over bytes a new writer generated.
+
+const pacm_oracle_targets = [_]Compile.Target{
+    .{ .name = "circle-radius", .ncomp = 1 },
+    .{ .name = "tint", .ncomp = 3 },
+    .{ .name = "cutoff", .ncomp = 1, .registry = 1 },
+};
+
+const pacm_oracle_keys_controls: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+    \\(track :target circle-radius
+    \\  (key :at 0b :value 0.2)
+    \\  (key :at 4b :value 0.8))
+    \\(track :target tint :expr [1 0 0])
+    \\(control :id knob :target circle-radius :min 0 :max 1 :value 0.4)
+    \\(control :id sway :value 0.12)
+;
+
+const pacm_oracle_scenes_tempo_ease: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+    \\(tempo :at 8b :bpm 160)
+    \\(scene :name drop :at 2bar :dur 2bar
+    \\  (track :target circle-radius
+    \\    (key :at 0b :value 30)
+    \\    (key :at 4b :value 140 :ease (steps :n 8))))
+;
+
+const pacm_oracle_minimal: [:0]const u8 =
+    \\(transport :bpm 120)
+    \\(control :id sway :value 0.12)
+;
+
+/// Field-for-field equality between the two decoders' views over the
+/// SAME bytes — the shared-oracle comparison (plan A38). Enum-typed
+/// fields are compared through their wire ordinals because the two
+/// modules spell independent (frozen-copy) enum types.
+fn pacmExpectSameView(want: *const Abi.MetaView, got: *const Pacm.MetaView) !void {
+    const t_ = std.testing;
+    try t_.expectEqual(want.bpm, got.bpm);
+    try t_.expectEqual(want.dur, got.dur);
+    try t_.expectEqual(want.end_loop, got.end_loop);
+    try t_.expectEqual(want.beats_per_bar, got.beats_per_bar);
+    try t_.expectEqual(@as(usize, want.track_count), got.trackCount());
+    try t_.expectEqual(@as(usize, want.key_count), got.keyCount());
+    try t_.expectEqual(@as(usize, want.control_count), got.controlCount());
+
+    for (0..want.track_count) |i| {
+        const w = want.track(i);
+        const g = got.track(i);
+        try t_.expectEqual(w.target_id, g.target_id);
+        try t_.expectEqual(w.registry, g.registry);
+        try t_.expectEqual(w.ncomp, g.ncomp);
+        try t_.expectEqual(@intFromEnum(w.source), @intFromEnum(g.source));
+        try t_.expectEqual(w.key_start, g.key_start);
+        try t_.expectEqual(w.key_len, g.key_len);
+        try t_.expectEqual(w.span.start, g.span.start);
+        try t_.expectEqual(w.span.end, g.span.end);
+    }
+    for (0..want.key_count) |i| {
+        const w = want.key(i);
+        const g = got.key(i);
+        try t_.expectEqual(w.at, g.at);
+        try t_.expectEqual(w.value, g.value);
+        try t_.expectEqual(w.span.start, g.span.start);
+        try t_.expectEqual(w.span.end, g.span.end);
+    }
+    var w_ctl = want.controls();
+    var g_ctl = got.controls();
+    while (true) {
+        const w = w_ctl.next();
+        const g = g_ctl.next();
+        try t_.expectEqual(w != null, g != null);
+        if (w == null) break;
+        try t_.expectEqual(w.?.target_id, g.?.target_id);
+        try t_.expectEqual(w.?.registry, g.?.registry);
+        try t_.expectEqual(w.?.ncomp, g.?.ncomp);
+        try t_.expectEqual(@intFromEnum(w.?.kind), @intFromEnum(g.?.kind));
+        try t_.expectEqual(w.?.value, g.?.value);
+        try t_.expectEqual(w.?.min, g.?.min);
+        try t_.expectEqual(w.?.max, g.?.max);
+        try t_.expectEqualStrings(w.?.id, g.?.id);
+        try t_.expectEqual(w.?.value_span.start, g.?.value_span.start);
+        try t_.expectEqual(w.?.value_span.end, g.?.value_span.end);
+    }
+
+    try t_.expectEqual(want.sceneCount(), got.sceneCount());
+    for (0..want.sceneCount()) |i| {
+        const w = want.scene(i);
+        const g = got.scene(i);
+        try t_.expectEqual(w.start_tick, g.start_tick);
+        try t_.expectEqual(w.dur_ticks, g.dur_ticks);
+        try t_.expectEqual(w.name_span.start, g.name_span.start);
+        try t_.expectEqual(w.name_span.end, g.name_span.end);
+    }
+    try t_.expectEqual(want.tempoCount(), got.tempoCount());
+    for (0..want.tempoCount()) |i| {
+        const w = want.tempoSeg(i);
+        const g = got.tempoSeg(i);
+        try t_.expectEqual(w.tick, g.tick);
+        try t_.expectEqual(w.bpm, g.bpm);
+    }
+    try t_.expectEqual(want.easeProgramCount(), got.easeProgramCount());
+    for (0..want.easeProgramCount()) |i| {
+        const w = want.easeProgram(i);
+        const g = got.easeProgram(i);
+        try t_.expectEqual(w.len, g.len);
+        for (0..Easing.MAX_STAGES) |s| {
+            try t_.expectEqual(w.stages[s].t_end, g.stages[s].t_end);
+            try t_.expectEqual(w.stages[s].v_base, g.stages[s].v_base);
+            try t_.expectEqual(w.stages[s].v_span, g.stages[s].v_span);
+            try t_.expectEqual(w.stages[s].ops_len, g.stages[s].ops_len);
+            for (0..Easing.MAX_OPS) |o| {
+                try t_.expectEqual(@intFromEnum(w.stages[s].ops[o].code), g.stages[s].ops[o].code);
+                try t_.expectEqual(w.stages[s].ops[o].params, g.stages[s].ops[o].params);
+            }
+        }
+    }
+    try t_.expectEqual(want.easeRefCount(), got.easeRefCount());
+    for (0..want.easeRefCount()) |i| try t_.expectEqual(want.easeRef(i), got.easeRef(i));
+}
+
+test "Pacm: frozen wire constants match Abi's definitions" {
+    const t_ = std.testing;
+    try t_.expectEqual(Abi.META_MAGIC, Pacm.META_MAGIC);
+    try t_.expectEqual(Abi.META_VERSION, Pacm.META_VERSION);
+    try t_.expectEqual(Abi.META_HEADER_LEN, Pacm.META_HEADER_LEN);
+    try t_.expectEqual(Abi.META_TRACK_LEN, Pacm.META_TRACK_LEN);
+    try t_.expectEqual(Abi.META_KEY_LEN, Pacm.META_KEY_LEN);
+    try t_.expectEqual(Abi.META_CONTROL_LEN, Pacm.META_CONTROL_LEN);
+    try t_.expectEqual(Abi.META_NO_TARGET, Pacm.META_NO_TARGET);
+    try t_.expectEqual(Abi.META_SECTION_HEADER_LEN, Pacm.META_SECTION_HEADER_LEN);
+    try t_.expectEqual(Abi.SCENES_SECTION_ID, Pacm.SCENES_SECTION_ID);
+    try t_.expectEqual(Abi.SCENE_REC_LEN, Pacm.SCENE_REC_LEN);
+    try t_.expectEqual(Abi.EASE_SECTION_ID, Pacm.EASE_SECTION_ID);
+    try t_.expectEqual(Abi.TEMPO_SECTION_ID, Pacm.TEMPO_SECTION_ID);
+    try t_.expectEqual(Abi.TEMPO_REC_LEN, Pacm.TEMPO_REC_LEN);
+    try t_.expectEqual(Abi.META_EASE_OP_LEN, Pacm.META_EASE_OP_LEN);
+    try t_.expectEqual(Abi.META_EASE_STAGE_LEN, Pacm.META_EASE_STAGE_LEN);
+    try t_.expectEqual(Abi.META_EASE_PROGRAM_LEN, Pacm.META_EASE_PROGRAM_LEN);
+}
+
+test "Pacm: frozen ordinal families match their source enums" {
+    const t_ = std.testing;
+    const pairs = .{
+        .{ @typeInfo(Pacm.TrackSource), @typeInfo(Abi.TrackSourceKind) },
+        .{ @typeInfo(Pacm.ControlKind), @typeInfo(TrackTable.ControlType) },
+    };
+    inline for (pairs) |pair| {
+        const p = pair[0].@"enum".fields;
+        const a = pair[1].@"enum".fields;
+        try t_.expectEqual(a.len, p.len);
+        inline for (a, p) |src, copy| try t_.expectEqual(src.value, copy.value);
+    }
+    try t_.expectEqual(
+        @as(u8, @intCast(@typeInfo(Easing.Op).@"enum".fields.len - 1)),
+        Pacm.MAX_EASE_OP,
+    );
+    try t_.expectEqual(@as(usize, Easing.MAX_STAGES), Pacm.EASE_STAGE_COUNT);
+    try t_.expectEqual(@as(usize, Easing.MAX_OPS), Pacm.EASE_OPS_PER_STAGE);
+}
+
+test "Pacm: the frozen oracle blobs are the real producer's bytes" {
+    // Re-derives every frozen blob from a fresh compile through the real
+    // `Abi.encodeMeta` — the files under `src/testdata/pacm/` can never
+    // drift from the producer (or hide a hand-typo) without failing here.
+    const test_support = @import("test_support.zig");
+    const t_ = std.testing;
+    const cases = [_]struct { source: [:0]const u8, bytes: []const u8 }{
+        .{ .source = pacm_oracle_keys_controls, .bytes = @embedFile("testdata/pacm/keys-controls.pacm") },
+        .{ .source = pacm_oracle_scenes_tempo_ease, .bytes = @embedFile("testdata/pacm/scenes-tempo-ease.pacm") },
+        .{ .source = pacm_oracle_minimal, .bytes = @embedFile("testdata/pacm/minimal.pacm") },
+    };
+    for (cases) |c| {
+        var r = try Compile.compile(t_.allocator, test_support.schema(), c.source, &pacm_oracle_targets);
+        defer r.deinit();
+        try t_.expect(r.ok());
+        const blob = try t_.allocator.alloc(u8, Abi.metaEncodedLen(&r));
+        defer t_.allocator.free(blob);
+        _ = try Abi.encodeMeta(&r, blob);
+        try t_.expectEqualSlices(u8, c.bytes, blob);
+    }
+}
+
+test "Pacm: keys-controls oracle decodes field-for-field like Abi.decodeMeta" {
+    const t_ = std.testing;
+    const blob = @embedFile("testdata/pacm/keys-controls.pacm");
+    const want = Abi.decodeMeta(blob) orelse return error.TestExpectedDecode;
+    const got = Pacm.decode(blob) orelse return error.TestExpectedDecode;
+    try pacmExpectSameView(&want, &got);
+
+    // Own literals, not just the relative comparison: the transport, the
+    // per-source key-range spellings, and the commit anchors.
+    try t_.expectEqual(@as(f64, 120), got.bpm);
+    try t_.expectEqual(@as(?i64, 2 * sjon.Pattern.PPC), got.dur);
+    try t_.expectEqual(true, got.end_loop);
+    try t_.expectEqual(@as(u16, 4), got.beats_per_bar);
+    try t_.expectEqual(@as(usize, 2), got.trackCount());
+    try t_.expectEqual(@as(usize, 2), got.keyCount());
+    try t_.expectEqual(@as(usize, 2), got.controlCount());
+
+    const tr0 = got.track(0);
+    try t_.expectEqual(Pacm.TrackSource.keys, tr0.source);
+    try t_.expectEqual(@as(u32, 0), tr0.key_start);
+    try t_.expectEqual(@as(u32, 2), tr0.key_len);
+    try t_.expectEqualStrings("(track", pacm_oracle_keys_controls[tr0.span.start..][0..6]);
+    const tr1 = got.track(1);
+    try t_.expectEqual(Pacm.TrackSource.expr, tr1.source);
+    try t_.expectEqual(@as(u32, 0), tr1.key_start);
+    try t_.expectEqual(@as(u32, 0), tr1.key_len);
+
+    const k1 = got.key(1);
+    try t_.expectEqual(@as(i64, sjon.Pattern.PPC), k1.at);
+    try t_.expectEqual(@as(f32, 0.8), k1.value[0]);
+    try t_.expectEqualStrings("(key :at 4b :value 0.8)", pacm_oracle_keys_controls[k1.span.start..k1.span.end]);
+
+    var it = got.controls();
+    const knob = it.next().?;
+    try t_.expectEqualStrings("knob", knob.id);
+    try t_.expectEqual(@as(u16, 0), knob.target_id.?);
+    try t_.expectEqual(Pacm.ControlKind.slider, knob.kind);
+    try t_.expectEqual(@as(f32, 0.4), knob.value[0]);
+    try t_.expectEqual(@as(?[4]f32, .{ 0, 0, 0, 0 }), knob.min);
+    try t_.expectEqual(@as(?[4]f32, .{ 1, 0, 0, 0 }), knob.max);
+    try t_.expectEqualStrings("0.4", pacm_oracle_keys_controls[knob.value_span.start..knob.value_span.end]);
+    const sway = it.next().?;
+    try t_.expectEqual(@as(?u16, null), sway.target_id);
+    try t_.expectEqual(@as(f32, 0.12), sway.value[0]);
+    try t_.expectEqual(@as(?[4]f32, null), sway.min);
+
+    // No scenes / no authored easing / constant tempo ⇒ no sections.
+    try t_.expectEqual(@as(usize, 0), got.sceneCount());
+    try t_.expectEqual(@as(usize, 0), got.tempoCount());
+    try t_.expectEqual(@as(usize, 0), got.easeProgramCount());
+    try t_.expectEqual(@as(usize, 0), got.easeRefCount());
+}
+
+test "Pacm: scenes-tempo-ease oracle decodes field-for-field like Abi.decodeMeta" {
+    const t_ = std.testing;
+    const blob = @embedFile("testdata/pacm/scenes-tempo-ease.pacm");
+    const want = Abi.decodeMeta(blob) orelse return error.TestExpectedDecode;
+    const got = Pacm.decode(blob) orelse return error.TestExpectedDecode;
+    try pacmExpectSameView(&want, &got);
+
+    try t_.expectEqual(@as(?i64, 8 * sjon.Pattern.PPC), got.dur);
+    try t_.expectEqual(@as(usize, 1), got.sceneCount());
+    const scene = got.scene(0);
+    try t_.expectEqual(@as(i64, 2 * sjon.Pattern.PPC), scene.start_tick);
+    try t_.expectEqual(@as(i64, 2 * sjon.Pattern.PPC), scene.dur_ticks);
+    try t_.expectEqualStrings("drop", pacm_oracle_scenes_tempo_ease[scene.name_span.start..scene.name_span.end]);
+
+    try t_.expectEqual(@as(usize, 2), got.tempoCount());
+    const seg0 = got.tempoSeg(0);
+    const seg1 = got.tempoSeg(1);
+    try t_.expectEqual(@as(i64, 0), seg0.tick);
+    try t_.expectEqual(@as(f64, 120), seg0.bpm);
+    try t_.expectEqual(@as(i64, 2 * sjon.Pattern.PPC), seg1.tick);
+    try t_.expectEqual(@as(f64, 160), seg1.bpm);
+
+    // Default linear + the authored `(steps :n 8)` program.
+    try t_.expectEqual(@as(usize, 2), got.easeProgramCount());
+    const steps = got.easeProgram(1);
+    try t_.expectEqual(@as(u8, 1), steps.len);
+    try t_.expectEqual(@as(f32, 1), steps.stages[0].t_end);
+    try t_.expectEqual(@as(u8, 1), steps.stages[0].ops_len);
+    try t_.expectEqual(@as(f32, 8), steps.stages[0].ops[0].params[0]);
+    try t_.expectEqual(@as(usize, 2), got.easeRefCount());
+    try t_.expectEqual(@as(u16, 0), got.easeRef(0));
+    try t_.expectEqual(@as(u16, 1), got.easeRef(1));
+
+    const k1 = got.key(1);
+    try t_.expectEqual(@as(f32, 140), k1.value[0]);
+}
+
+test "Pacm: minimal oracle decodes field-for-field like Abi.decodeMeta" {
+    const t_ = std.testing;
+    const blob = @embedFile("testdata/pacm/minimal.pacm");
+    const want = Abi.decodeMeta(blob) orelse return error.TestExpectedDecode;
+    const got = Pacm.decode(blob) orelse return error.TestExpectedDecode;
+    try pacmExpectSameView(&want, &got);
+
+    // Zero tracks, one env-only control, hold (no dur), no sections —
+    // the smallest blob the producer can emit.
+    try t_.expectEqual(@as(usize, 0), got.trackCount());
+    try t_.expectEqual(@as(usize, 0), got.keyCount());
+    try t_.expectEqual(@as(usize, 1), got.controlCount());
+    try t_.expectEqual(@as(?i64, null), got.dur);
+    try t_.expectEqual(false, got.end_loop);
+    var it = got.controls();
+    const sway = it.next().?;
+    try t_.expectEqualStrings("sway", sway.id);
+    try t_.expectEqual(@as(?u16, null), sway.target_id);
+    try t_.expectEqual(@as(?[4]f32, null), sway.min);
+    try t_.expectEqual(@as(usize, 0), got.sceneCount());
+    try t_.expectEqual(@as(usize, 0), got.tempoCount());
+    try t_.expectEqual(@as(usize, 0), got.easeProgramCount());
 }
