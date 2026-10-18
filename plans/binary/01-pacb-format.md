@@ -10,7 +10,7 @@ byte-identical through the codec extraction. `Compile.Code` gains variants
 **Gates:** `zig build verify` every phase; `zig build fuzz` from Phase 4;
 determinism gate — pack the same score twice ⇒ byte-identical output.
 **Created 2026-10-18; Phase 1 complete 2026-10-18; Phase 2 in progress
-(T2.1 landed 2026-10-18, T2.2–T2.8 open); phases 3–4 not started.**
+(T2.1–T2.2 landed 2026-10-18, T2.3–T2.8 open); phases 3–4 not started.**
 
 ## Why
 
@@ -498,3 +498,35 @@ _(created 2026-10-18; entries appended per phase)_
   exposed until every section stage validates, and transport, registry,
   records, ease/control, payload, PACM, and coherence remain T2.2–T2.8.
   No corpus/CLI golden byte changed; no encoder/CLI/runtime/npm work.
+
+- **2026-10-18 — Phase 2 continued (T2.2 only; phase NOT complete).**
+  `src/Pacb.zig` gained the transport stage: `decodeTransport(gpa, bytes,
+  directory, refusal) DecodeError!TransportStage` — an owned, arena-backed
+  result (`deinit`; authored `'TMPO'` table copied in, `emit` left empty
+  for T2.4) plus the raw `'TRAN'` registry fields carried for T2.3.
+  `'TRAN'` domains are validated BEFORE any `TimeMap` call (its contract
+  is asserts): bpm finite 1..1000, `beats_per_bar` 1..16, `dur > 0` when
+  flagged and `≤ MAX_TICK`, zero spelling behind a clear flag, reserved
+  flag bits / pads zero, `end loop` requires `dur` (compile's
+  `loop_requires_dur` mirror). `'TMPO'` (count ≥ 2 canonical presence,
+  count ≤ `MAX_TEMPO_SEGMENTS` ⇒ `cap_exceeded`, `[0] == {0, 'TRAN'.bpm}`
+  bit-equal, strictly ascending ticks, per-segment bpm domains,
+  `|tick| ≤ MAX_TICK`) then rebuilds through `TimeMap.init` +
+  `withSegments` in compile's own op order, with `loop_secs =
+  map.secondsFromTick(dur)`; an absent `'TMPO'` synthesizes `[{0, bpm}]`
+  and keeps the constant code path (the degenerate pin), exactly matching
+  a compiled constant-tempo score. RED: 3× missing-export compile errors
+  on `decodeTransport`, then 7 named semantic FAILs against the safe
+  constant-path increment (6 wrongly-accepted `'TMPO'` mutation classes +
+  the pin test's derived-table mismatch). GREEN: `zig fmt --check` clean;
+  `zig build test` 7/7 steps, **321/321 tests (260 root + 61 CLI)** — the
+  pin test compiles a tempo-mapped and a constant score through
+  `test_support.schema()` + `Compile.compile` (test-body-only imports,
+  the recorded plan-02 seam) and compares decoded vs compiled transport
+  field-for-field (bpm/derived `start_sec`/`tps`/`loop_secs` bit-equal).
+  Imports grew to the frozen T2.2 subset: std, sjon (`Pattern.MAX_TICK`),
+  `TimeMap`, `TrackTable` — still never `Compile`/`Abi`/`Schema`/`Driver`
+  in production code. Registry (`'REGS'`/`'DECL'`), records, ease/control,
+  payload, PACM reader, and coherence remain T2.3–T2.8; no
+  `decode`/`DecodedScore`, no corpus/CLI golden byte changed, no
+  encoder/CLI/runtime/npm work.

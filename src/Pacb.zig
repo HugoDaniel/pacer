@@ -66,21 +66,33 @@
 //!     the packer refuses loudly with the measured count. The text path
 //!     itself stays uncapped.
 //!
-//! INTERIM T2.1 BOUNDARY — no production use. This file currently owns the
-//! container header, the directory validator, the frozen caps, and
-//! `pacbWorstCase`. `parseDirectory` is a directory-only view: it validates
-//! structure, never section semantics, and is NOT a decoded score. The
-//! whole-blob `decode(...) DecodedScore` entry point is deliberately absent
-//! until the section stages land (T2.2–T2.8): returning a successful score
-//! before transport/registry/records/payloads/PACM are validated would be a
-//! lying API. Section payload decoding, `DecodedScore`, and its ownership
-//! contract arrive with those stages.
+//! INTERIM PHASE-2 BOUNDARY — no production use. This file currently owns
+//! the container header, the directory validator, the frozen caps,
+//! `pacbWorstCase`, and the T2.2 transport stage (`decodeTransport`:
+//! `'TRAN'`/`'TMPO'` domains, then the `TimeMap` rebuild in compile's own
+//! op order). Stages expose owned, validated, typed results —
+//! `parseDirectory` is still a structure-only view and `decodeTransport`
+//! still leaves `emit` empty (`'EMIT'` lands in T2.4). The whole-blob
+//! `decode(...) DecodedScore` entry point is deliberately absent until
+//! every section stage validates (T2.8): returning a successful score
+//! before registry/records/payloads/PACM are validated would be a lying
+//! API.
 //!
-//! Imports: std only (T2.1 needs nothing else). The end-state decoder may
-//! add `PactCodec`, `TrackTable`, `TimeMap`, `Easing`, `Pacm`, and sjon;
-//! it must NEVER import `Compile`, `Abi`, `Schema`, or `Driver`.
+//! Imports: std, sjon (`Pattern.MAX_TICK`), `TimeMap`, `TrackTable` (the
+//! T2.2 subset of the frozen end-state list). Later stages add
+//! `PactCodec`, `Easing`, and `Pacm` as their GREEN needs them; this file
+//! must NEVER import `Compile`, `Abi`, `Schema`, or `Driver` — the one
+//! test that compares decoded transport against the compiler
+//! (`decoded transport equals the compiled transport field-for-field`)
+//! imports `Compile`/`test_support` INSIDE its test body only, so a
+//! normal (non-test) build never analyses them through this file; that
+//! textual cohabitation is the recorded plan-02 import seam, not strict
+//! closure.
 
 const std = @import("std");
+const sjon = @import("sjon");
+const TimeMap = @import("TimeMap.zig");
+const TrackTable = @import("TrackTable.zig");
 
 /// `"PACB"` read as a little-endian u32.
 pub const MAGIC: u32 = 0x42434150;
@@ -440,6 +452,196 @@ pub fn parseDirectory(bytes: []const u8, refusal: ?*Refusal) DecodeError!Directo
         return fail(refusal, .directory_malformed, expected_off);
     }
     return directory;
+}
+
+// ---------------------------------------------------------------------------
+// T2.2 — transport stage ('TRAN' + 'TMPO')
+// ---------------------------------------------------------------------------
+
+/// `'TRAN'` flags byte: bit 0 = `dur` present, bit 1 = `:end` is loop.
+pub const TRAN_FLAG_DUR: u8 = 1 << 0;
+pub const TRAN_FLAG_LOOP: u8 = 1 << 1;
+
+/// Owned transport-stage result. The `TrackTable.Transport` re-derives
+/// every projection through the same calls compile uses (`TimeMap.init`,
+/// `withSegments` over an arena copy of the authored table when it holds
+/// more than one segment, `loop_secs = map.secondsFromTick(dur)`), so
+/// nothing derived is stored on the wire. The `emit` lanes stay empty
+/// here — `'EMIT'` records land in T2.4 and T2.8's `DecodedScore`
+/// assembles the final transport. The raw registry fields ride `'TRAN'`
+/// and are carried for the stage that owns them (T2.3); this stage does
+/// not validate them.
+pub const TransportStage = struct {
+    arena: std.heap.ArenaAllocator,
+    transport: TrackTable.Transport,
+    host_targets: u32,
+    declared_targets: u32,
+    pact_fnv: u64,
+    pacm_fnv: u64,
+
+    pub fn deinit(self: *TransportStage) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+fn readU64(bytes: []const u8, at: usize) u64 {
+    return std.mem.readInt(u64, bytes[at..][0..8], .little);
+}
+
+fn readI64(bytes: []const u8, at: usize) i64 {
+    return std.mem.readInt(i64, bytes[at..][0..8], .little);
+}
+
+fn readF64(bytes: []const u8, at: usize) f64 {
+    return @bitCast(readU64(bytes, at));
+}
+
+/// Where the payload region begins for this directory (the first
+/// section's expected offset) — the diagnostic stand-in location for a
+/// missing required section.
+fn payloadStart(directory: *const Directory) usize {
+    return HEADER_LEN + @as(usize, directory.len) * DIRECTORY_ENTRY_LEN;
+}
+
+/// Decode and validate the transport stage: `'TRAN'` domains first —
+/// every `TimeMap` precondition is an assert there, so the decoder
+/// checks BEFORE calling — then `'TMPO'` as the authored segment truth,
+/// then the map rebuild in the documented op order. `directory` is the
+/// T2.1 view of the same `bytes`; the stage never aliases `bytes`.
+pub fn decodeTransport(
+    gpa: std.mem.Allocator,
+    bytes: []const u8,
+    directory: *const Directory,
+    refusal: ?*Refusal,
+) DecodeError!TransportStage {
+    const tran = directory.find(.tran) orelse
+        return fail(refusal, .non_canonical, payloadStart(directory));
+    const tr = bytes[tran.off..][0..TRAN_REC_LEN];
+
+    // 'TRAN' domains — before any TimeMap call (asserts, not errors).
+    const flags = tr[24];
+    if (flags & ~(TRAN_FLAG_DUR | TRAN_FLAG_LOOP) != 0) {
+        return fail(refusal, .transport_invalid, tran.off + 24);
+    }
+    if (!std.mem.allEqual(u8, tr[25..32], 0)) {
+        return fail(refusal, .transport_invalid, tran.off + 25);
+    }
+    const bpm = readF64(tr, 0);
+    if (!(std.math.isFinite(bpm) and bpm >= 1 and bpm <= 1000)) {
+        return fail(refusal, .transport_invalid, tran.off);
+    }
+    const beats_per_bar = readI64(tr, 8);
+    if (!(beats_per_bar >= 1 and beats_per_bar <= 16)) {
+        return fail(refusal, .transport_invalid, tran.off + 8);
+    }
+
+    const dur_present = flags & TRAN_FLAG_DUR != 0;
+    const dur_field = readI64(tr, 16);
+    var dur: ?TrackTable.Tick = null;
+    if (dur_present) {
+        if (dur_field <= 0 or dur_field > sjon.Pattern.MAX_TICK) {
+            return fail(refusal, .transport_invalid, tran.off + 16);
+        }
+        dur = dur_field;
+    } else if (dur_field != 0) {
+        // The absent case is spelled 0 ("dur i64 (0 when absent)").
+        return fail(refusal, .transport_invalid, tran.off + 16);
+    }
+    const end: TrackTable.EndBehavior = if (flags & TRAN_FLAG_LOOP != 0) .loop else .hold;
+    if (end == .loop and !dur_present) {
+        // Mirrors compile's loop_requires_dur — producer-impossible input.
+        return fail(refusal, .transport_invalid, tran.off + 24);
+    }
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    // 'TMPO': the authored segment table, validated BEFORE the rebuild —
+    // withSegments' contract is asserts (ascending, [0] == {0, bpm},
+    // per-segment domains), so every precondition is a checked refusal
+    // here, never a trap on host bytes.
+    var seg_count: usize = 0;
+    if (directory.find(.tmpo)) |sec| {
+        seg_count = sec.count.?; // count×width exactness is T2.1's
+        if (seg_count > MAX_TEMPO_SEGMENTS) {
+            return fail(refusal, .cap_exceeded, sec.off);
+        }
+        if (seg_count < 2) {
+            // Segment 0 alone is the omitted (constant-tempo) case —
+            // PACM's constant-tempo omission, spelled canonically.
+            return fail(refusal, .non_canonical, sec.off);
+        }
+        var prev_tick: i64 = 0;
+        for (0..seg_count) |i| {
+            const at = sec.off + 4 + i * TMPO_REC_LEN;
+            const tick = readI64(bytes, at);
+            const seg_bpm = readF64(bytes, at + 8);
+            if (tick > sjon.Pattern.MAX_TICK or tick < -sjon.Pattern.MAX_TICK) {
+                return fail(refusal, .tempo_invalid, at);
+            }
+            if (i == 0) {
+                if (tick != 0) return fail(refusal, .tempo_invalid, at);
+                if (@as(u64, @bitCast(seg_bpm)) != @as(u64, @bitCast(bpm))) {
+                    return fail(refusal, .tempo_invalid, at);
+                }
+            } else if (tick <= prev_tick) {
+                return fail(refusal, .tempo_invalid, at);
+            }
+            if (!(std.math.isFinite(seg_bpm) and seg_bpm >= 1 and seg_bpm <= 1000)) {
+                return fail(refusal, .tempo_invalid, at);
+            }
+            prev_tick = tick;
+        }
+    }
+
+    const authored = a.alloc(TrackTable.TempoSegment, if (seg_count == 0) 1 else seg_count) catch
+        return error.OutOfMemory;
+    if (directory.find(.tmpo)) |sec| {
+        for (authored, 0..) |*seg, i| {
+            const at = sec.off + 4 + i * TMPO_REC_LEN;
+            seg.* = .{ .start_tick = readI64(bytes, at), .bpm = readF64(bytes, at + 8) };
+        }
+    } else {
+        authored[0] = .{ .start_tick = 0, .bpm = bpm };
+    }
+
+    // The rebuild, in compile's own op order: `TimeMap.init`, then
+    // `withSegments` ONLY when the authored table holds more than one
+    // segment — a ≤ 1 segment map takes the constant code path
+    // verbatim, so an absent 'TMPO' and a compiled constant-tempo
+    // score decode identically (the degenerate pin).
+    var map = TimeMap.init(bpm, beats_per_bar);
+    if (authored.len > 1) {
+        const derived = a.alloc(TimeMap.Segment, authored.len) catch
+            return error.OutOfMemory;
+        for (derived, authored) |*d, s| {
+            d.* = .{ .start_tick = s.start_tick, .bpm = s.bpm, .start_sec = undefined, .tps = undefined };
+        }
+        map = map.withSegments(derived);
+    }
+
+    // The seconds-domain wrap constant, computed once through the
+    // rebuilt table — the same call compile makes.
+    var loop_secs: ?f64 = null;
+    if (dur) |d| loop_secs = map.secondsFromTick(d);
+
+    return .{
+        .arena = arena,
+        .transport = .{
+            .map = map,
+            .dur = dur,
+            .end = end,
+            .emit = &.{},
+            .segments = authored,
+            .loop_secs = loop_secs,
+        },
+        .host_targets = readU32(tr, 32),
+        .declared_targets = readU32(tr, 36),
+        .pact_fnv = readU64(tr, 40),
+        .pacm_fnv = readU64(tr, 48),
+    };
 }
 
 /// Frozen copy of `Abi.metaWorstCase`'s arithmetic: the largest `'PACM'`
@@ -902,4 +1104,411 @@ test "Pacb: v1 caps are frozen and pacbWorstCase is the spec sum" {
 
     // The 'PAYL' term alone is the frozen 4 MiB cap plus its length prefix.
     try t.expect(pacbWorstCase(0) > MAX_PAYL_BYTES);
+}
+
+// ---------------------------------------------------------------------------
+// T2.2 — transport stage tests ('TRAN' + 'TMPO')
+// ---------------------------------------------------------------------------
+
+fn putU8(buf: []u8, at: usize, value: u8) void {
+    buf[at] = value;
+}
+
+fn putI64(buf: []u8, at: usize, value: i64) void {
+    std.mem.writeInt(i64, buf[at..][0..8], value, .little);
+}
+
+fn putF64(buf: []u8, at: usize, value: f64) void {
+    std.mem.writeInt(u64, buf[at..][0..8], @bitCast(value), .little);
+}
+
+fn putU64(buf: []u8, at: usize, value: u64) void {
+    std.mem.writeInt(u64, buf[at..][0..8], value, .little);
+}
+
+/// One authored `'TMPO'` record as the section spells it.
+const TmpoRec = struct { tick: i64, bpm: f64 };
+
+/// The `'TRAN'` record's semantic content (56-B layout in the module
+/// header: bpm f64, beats_per_bar i64, dur i64, flags u8 + pad×7,
+/// host_targets u32, declared_targets u32, pact_fnv u64, pacm_fnv u64).
+const TransportSpec = struct {
+    bpm: f64 = 120,
+    beats_per_bar: i64 = 4,
+    dur: ?i64 = null,
+    end_loop: bool = false,
+    host_targets: u32 = 0,
+    declared_targets: u32 = 0,
+    pact_fnv: u64 = 0,
+    pacm_fnv: u64 = 0,
+};
+
+fn writeTranRecord(buf: []u8, at: usize, spec: TransportSpec) void {
+    putF64(buf, at, spec.bpm);
+    putI64(buf, at + 8, spec.beats_per_bar);
+    putI64(buf, at + 16, spec.dur orelse 0);
+    var flags: u8 = 0;
+    if (spec.dur != null) flags |= 1 << 0;
+    if (spec.end_loop) flags |= 1 << 1;
+    putU8(buf, at + 24, flags); // pads at +25..+32 stay zero
+    putU32(buf, at + 32, spec.host_targets);
+    putU32(buf, at + 36, spec.declared_targets);
+    putU64(buf, at + 40, spec.pact_fnv);
+    putU64(buf, at + 48, spec.pacm_fnv);
+}
+
+/// The plan's shared per-subgroup fixture builder, grown for T2.2: a
+/// minimal valid `'PACB'` carrying `'TRAN'`, an optional `'TMPO'`, and
+/// a 40-byte zeroed `'PACM'` tail (its content is unchecked until
+/// T2.7/T2.8). Offsets are derived by summation; one mutation is
+/// applied per test after building.
+fn buildTransportFixture(
+    alloc: std.mem.Allocator,
+    spec: TransportSpec,
+    tmpo: []const TmpoRec,
+) ![]u8 {
+    const has_tmpo = tmpo.len > 0;
+    const n: usize = 2 + @as(usize, @intFromBool(has_tmpo));
+    const dir_end = HEADER_LEN + n * DIRECTORY_ENTRY_LEN;
+    const tran_off = dir_end;
+    const tmpo_off = tran_off + TRAN_REC_LEN;
+    const tmpo_len: usize = if (has_tmpo) 4 + tmpo.len * TMPO_REC_LEN else 0;
+    const pacm_off = tmpo_off + tmpo_len;
+    const pacm_len: usize = 40;
+
+    const buf = try alloc.alloc(u8, pacm_off + pacm_len);
+    @memset(buf, 0);
+    writeHeader(buf, n, 0);
+    writeDirEntry(buf, 0, .tran, tran_off, TRAN_REC_LEN);
+    if (has_tmpo) {
+        writeDirEntry(buf, 1, .tmpo, tmpo_off, tmpo_len);
+        putU32(buf, tmpo_off, @intCast(tmpo.len));
+        for (tmpo, 0..) |rec, i| {
+            const at = tmpo_off + 4 + i * TMPO_REC_LEN;
+            putI64(buf, at, rec.tick);
+            putF64(buf, at + 8, rec.bpm);
+        }
+    }
+    writeDirEntry(buf, n - 1, .pacm, pacm_off, pacm_len);
+    writeTranRecord(buf, tran_off, spec);
+    return buf;
+}
+
+/// 120 bpm doubling to 240 at tick 720720 — the two-segment reference.
+const default_tmpo = [_]TmpoRec{
+    .{ .tick = 0, .bpm = 120 },
+    .{ .tick = 720720, .bpm = 240 },
+};
+
+/// Offset of `'TRAN'`'s payload in a TRAN+TMPO+PACM fixture.
+const fixture_tran_at = HEADER_LEN + 3 * DIRECTORY_ENTRY_LEN;
+/// Offset of `'TMPO'`'s payload in a TRAN+TMPO+PACM fixture.
+const fixture_tmpo_at = fixture_tran_at + TRAN_REC_LEN;
+
+fn expectTransportRefusal(bytes: []const u8, code: RefusalCode) !void {
+    var refusal: Refusal = undefined;
+    const directory = try parseDirectory(bytes, null);
+    const decoded = decodeTransport(t.allocator, bytes, &directory, &refusal);
+    if (decoded) |payload| {
+        var stage = payload;
+        stage.deinit();
+        return error.WronglyAccepted;
+    } else |err| {
+        try t.expectEqual(error.Refused, err);
+        try t.expectEqual(code, refusal.code);
+    }
+}
+
+test "Pacb: TRAN bpm outside the finite 1..1000 domain refuses transport_invalid" {
+    const bad = [_]f64{
+        std.math.nan(f64),
+        std.math.inf(f64),
+        -std.math.inf(f64),
+        0,
+        0.5,
+        1001,
+    };
+    for (bad) |bpm| {
+        const buf = try buildTransportFixture(t.allocator, .{ .bpm = bpm }, &.{});
+        defer t.allocator.free(buf);
+        try expectTransportRefusal(buf, .transport_invalid);
+    }
+}
+
+test "Pacb: TRAN beats_per_bar outside 1..16 refuses transport_invalid" {
+    for ([_]i64{ 0, -1, 17 }) |bpb| {
+        const buf = try buildTransportFixture(
+            t.allocator,
+            .{ .beats_per_bar = bpb },
+            &.{},
+        );
+        defer t.allocator.free(buf);
+        try expectTransportRefusal(buf, .transport_invalid);
+    }
+}
+
+test "Pacb: a set dur flag with a non-positive dur refuses transport_invalid" {
+    for ([_]i64{ 0, -720720 }) |dur| {
+        const buf = try buildTransportFixture(t.allocator, .{ .dur = dur }, &.{});
+        defer t.allocator.free(buf);
+        try expectTransportRefusal(buf, .transport_invalid);
+    }
+}
+
+test "Pacb: unknown TRAN flag bits and non-zero pads refuse transport_invalid" {
+    {
+        const buf = try buildTransportFixture(t.allocator, .{}, &default_tmpo);
+        defer t.allocator.free(buf);
+        putU8(buf, fixture_tran_at + 24, 0b100); // reserved bit 2
+        try expectTransportRefusal(buf, .transport_invalid);
+    }
+    {
+        const buf = try buildTransportFixture(t.allocator, .{}, &default_tmpo);
+        defer t.allocator.free(buf);
+        putU8(buf, fixture_tran_at + 31, 1); // a pad byte
+        try expectTransportRefusal(buf, .transport_invalid);
+    }
+}
+
+test "Pacb: a clear dur flag requires a zero dur field" {
+    // The absent case is spelled 0 ("dur i64 (0 when absent)"); a
+    // non-zero field behind a clear flag is a lie no producer writes.
+    const buf = try buildTransportFixture(t.allocator, .{}, &.{});
+    defer t.allocator.free(buf);
+    putI64(buf, fixture_tran_at - 12 + 16, 42);
+    try expectTransportRefusal(buf, .transport_invalid);
+}
+
+test "Pacb: end loop without dur refuses transport_invalid" {
+    // Mirrors compile's loop_requires_dur: :end loop requires :dur. A
+    // PACB spelling loop-without-dur is producer-impossible input.
+    const buf = try buildTransportFixture(t.allocator, .{ .end_loop = true }, &.{});
+    defer t.allocator.free(buf);
+    try expectTransportRefusal(buf, .transport_invalid);
+}
+
+test "Pacb: TMPO with fewer than two segments refuses non_canonical" {
+    const one = [_]TmpoRec{.{ .tick = 0, .bpm = 120 }};
+    const buf = try buildTransportFixture(t.allocator, .{}, &one);
+    defer t.allocator.free(buf);
+    try expectTransportRefusal(buf, .non_canonical);
+}
+
+test "Pacb: TMPO segment 0 must be tick 0 at the TRAN bpm" {
+    {
+        const buf = try buildTransportFixture(t.allocator, .{}, &default_tmpo);
+        defer t.allocator.free(buf);
+        putI64(buf, fixture_tmpo_at + 4, 720720); // [0].tick != 0
+        try expectTransportRefusal(buf, .tempo_invalid);
+    }
+    {
+        const buf = try buildTransportFixture(t.allocator, .{}, &default_tmpo);
+        defer t.allocator.free(buf);
+        putF64(buf, fixture_tmpo_at + 12, 121); // [0].bpm != 'TRAN'.bpm
+        try expectTransportRefusal(buf, .tempo_invalid);
+    }
+}
+
+test "Pacb: TMPO ticks must be strictly ascending" {
+    const buf = try buildTransportFixture(t.allocator, .{}, &default_tmpo);
+    defer t.allocator.free(buf);
+    putI64(buf, fixture_tmpo_at + 4 + TMPO_REC_LEN, 0); // [1].tick == [0].tick
+    try expectTransportRefusal(buf, .tempo_invalid);
+}
+
+test "Pacb: TMPO segment bpm outside the finite 1..1000 domain refuses tempo_invalid" {
+    const bad = [_]f64{ std.math.nan(f64), std.math.inf(f64), 0, 1001 };
+    for (bad) |bpm| {
+        const buf = try buildTransportFixture(t.allocator, .{}, &default_tmpo);
+        defer t.allocator.free(buf);
+        putF64(buf, fixture_tmpo_at + 4 + TMPO_REC_LEN + 8, bpm); // [1].bpm
+        try expectTransportRefusal(buf, .tempo_invalid);
+    }
+}
+
+test "Pacb: TMPO count over MAX_TEMPO_SEGMENTS refuses cap_exceeded" {
+    const n = MAX_TEMPO_SEGMENTS + 1;
+    const recs = try t.allocator.alloc(TmpoRec, n);
+    defer t.allocator.free(recs);
+    for (recs, 0..) |*rec, i| {
+        rec.* = .{ .tick = @as(i64, @intCast(i)) * 720720, .bpm = 120 };
+    }
+    const buf = try buildTransportFixture(t.allocator, .{}, recs);
+    defer t.allocator.free(buf);
+    try expectTransportRefusal(buf, .cap_exceeded);
+}
+
+test "Pacb: a TMPO tick magnitude beyond MAX_TICK refuses tempo_invalid" {
+    const buf = try buildTransportFixture(t.allocator, .{}, &default_tmpo);
+    defer t.allocator.free(buf);
+    putI64(buf, fixture_tmpo_at + 4 + TMPO_REC_LEN, (1 << 53) + 1);
+    try expectTransportRefusal(buf, .tempo_invalid);
+}
+
+test "Pacb: an absent TRAN refuses non_canonical" {
+    // A PACM-only container: directory-valid, but 'TRAN' is required.
+    var buf: [16 + DIRECTORY_ENTRY_LEN + 40]u8 = @splat(0);
+    writeHeader(&buf, 1, 0);
+    writeDirEntry(&buf, 0, .pacm, 16 + DIRECTORY_ENTRY_LEN, 40);
+    try expectTransportRefusal(&buf, .non_canonical);
+}
+
+test "Pacb: an absent TMPO synthesizes the single-segment constant map" {
+    const dur: i64 = 3 * 720720; // 3 bars
+    const buf = try buildTransportFixture(
+        t.allocator,
+        .{ .bpm = 97.25, .beats_per_bar = 5, .dur = dur, .end_loop = true },
+        &.{},
+    );
+    defer t.allocator.free(buf);
+
+    const directory = try parseDirectory(buf, null);
+    var stage = try decodeTransport(t.allocator, buf, &directory, null);
+    defer stage.deinit();
+    const transport = &stage.transport;
+
+    // The authored table is the synthesized degenerate map [{0, bpm}].
+    try t.expectEqual(@as(usize, 1), transport.segments.len);
+    try t.expectEqual(@as(i64, 0), transport.segments[0].start_tick);
+    try t.expectEqual(@as(u64, @bitCast(@as(f64, 97.25))), @as(u64, @bitCast(transport.segments[0].bpm)));
+
+    // The map itself takes the constant path: no derived table, exactly
+    // like a compiled constant-tempo score (segments.len <= 1).
+    try t.expectEqual(@as(usize, 0), transport.map.segments.len);
+    const want_map = TimeMap.init(97.25, 5);
+    try t.expectEqual(@as(i64, 720720 / 5), transport.map.ticks_per_beat);
+    try t.expectEqual(
+        @as(u64, @bitCast(want_map.ticks_per_second)),
+        @as(u64, @bitCast(transport.map.ticks_per_second)),
+    );
+    try t.expectEqual(dur, transport.dur.?);
+    try t.expectEqual(TrackTable.EndBehavior.loop, transport.end);
+    try t.expectEqual(
+        @as(u64, @bitCast(want_map.secondsFromTick(dur))),
+        @as(u64, @bitCast(transport.loop_secs.?)),
+    );
+
+    // The authored table is arena-owned, not an alias of the input.
+    @memset(buf, 0xAA);
+    try t.expectEqual(@as(u64, @bitCast(@as(f64, 97.25))), @as(u64, @bitCast(transport.segments[0].bpm)));
+}
+
+test "Pacb: decoded transport equals the compiled transport field-for-field" {
+    // The compiler-oracle seam: Compile and test_support are referenced
+    // ONLY inside this test body, so a normal (non-test) build never
+    // analyses them through Pacb (the plan-02 import-closure seam —
+    // recorded, not claimed as strict closure).
+    const Compile = @import("Compile.zig");
+    const test_support = @import("test_support.zig");
+
+    const targets = [_]Compile.Target{.{ .name = "circle-radius", .ncomp = 1 }};
+
+    // Leg 1: a tempo-mapped score with a loop.
+    const mapped: [:0]const u8 =
+        \\(transport :bpm 125 :meter [4 4] :dur 400b :end loop)
+        \\(tempo :at 160b :bpm 150)
+        \\(tempo :at 200b :bpm 96.5)
+        \\(track :target circle-radius
+        \\  (key :at 0b :value 0.2)
+        \\  (key :at 300b :value 0.8))
+    ;
+    var r = try Compile.compile(t.allocator, test_support.schema(), mapped, &targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    {
+        const want = &r.table.?.transport;
+
+        const tmpo = try t.allocator.alloc(TmpoRec, want.segments.len);
+        defer t.allocator.free(tmpo);
+        for (want.segments, 0..) |seg, i| {
+            tmpo[i] = .{ .tick = seg.start_tick, .bpm = seg.bpm };
+        }
+        const buf = try buildTransportFixture(
+            t.allocator,
+            .{
+                .bpm = want.map.bpm,
+                .beats_per_bar = want.map.beats_per_bar,
+                .dur = want.dur,
+                .end_loop = want.end == .loop,
+            },
+            tmpo,
+        );
+        defer t.allocator.free(buf);
+
+        const directory = try parseDirectory(buf, null);
+        var stage = try decodeTransport(t.allocator, buf, &directory, null);
+        defer stage.deinit();
+        const got = &stage.transport;
+
+        try t.expectEqual(@as(u64, @bitCast(want.map.bpm)), @as(u64, @bitCast(got.map.bpm)));
+        try t.expectEqual(want.map.beats_per_bar, got.map.beats_per_bar);
+        try t.expectEqual(want.map.ticks_per_beat, got.map.ticks_per_beat);
+        try t.expectEqual(
+            @as(u64, @bitCast(want.map.ticks_per_second)),
+            @as(u64, @bitCast(got.map.ticks_per_second)),
+        );
+        try t.expectEqual(want.dur, got.dur);
+        try t.expectEqual(want.end, got.end);
+        try t.expectEqual(want.emit.len, got.emit.len);
+
+        // Authored truth: the exact 'TMPO' table.
+        try t.expectEqual(want.segments.len, got.segments.len);
+        for (want.segments, got.segments) |w, g| {
+            try t.expectEqual(w.start_tick, g.start_tick);
+            try t.expectEqual(@as(u64, @bitCast(w.bpm)), @as(u64, @bitCast(g.bpm)));
+        }
+
+        // Derived table: same op order, bit-equal cumulative fields.
+        try t.expectEqual(want.map.segments.len, got.map.segments.len);
+        for (want.map.segments, got.map.segments) |w, g| {
+            try t.expectEqual(w.start_tick, g.start_tick);
+            try t.expectEqual(@as(u64, @bitCast(w.bpm)), @as(u64, @bitCast(g.bpm)));
+            try t.expectEqual(@as(u64, @bitCast(w.start_sec)), @as(u64, @bitCast(g.start_sec)));
+            try t.expectEqual(@as(u64, @bitCast(w.tps)), @as(u64, @bitCast(g.tps)));
+        }
+
+        try t.expect(want.loop_secs != null and got.loop_secs != null);
+        try t.expectEqual(
+            @as(u64, @bitCast(want.loop_secs.?)),
+            @as(u64, @bitCast(got.loop_secs.?)),
+        );
+    }
+
+    // Leg 2: a constant-tempo score (no 'TMPO', no dur).
+    const flat: [:0]const u8 =
+        \\(transport :bpm 120)
+        \\(track :target circle-radius (key :at 0b :value 0.5))
+    ;
+    var r2 = try Compile.compile(t.allocator, test_support.schema(), flat, &targets);
+    defer r2.deinit();
+    try t.expect(r2.ok());
+    {
+        const want = &r2.table.?.transport;
+        const buf = try buildTransportFixture(
+            t.allocator,
+            .{ .bpm = want.map.bpm, .beats_per_bar = want.map.beats_per_bar },
+            &.{},
+        );
+        defer t.allocator.free(buf);
+
+        const directory = try parseDirectory(buf, null);
+        var stage = try decodeTransport(t.allocator, buf, &directory, null);
+        defer stage.deinit();
+        const got = &stage.transport;
+
+        try t.expectEqual(want.segments.len, got.segments.len); // 1, synthesized
+        try t.expectEqual(@as(i64, 0), got.segments[0].start_tick);
+        try t.expectEqual(
+            @as(u64, @bitCast(want.segments[0].bpm)),
+            @as(u64, @bitCast(got.segments[0].bpm)),
+        );
+        try t.expectEqual(@as(usize, 0), got.map.segments.len);
+        try t.expectEqual(want.dur, got.dur);
+        try t.expectEqual(want.end, got.end);
+        try t.expect(want.loop_secs == null and got.loop_secs == null);
+        try t.expectEqual(
+            @as(u64, @bitCast(want.map.ticks_per_second)),
+            @as(u64, @bitCast(got.map.ticks_per_second)),
+        );
+    }
 }
