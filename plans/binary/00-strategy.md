@@ -4,10 +4,14 @@ The living guide for this wave. Same rules as [`../00-strategy.md`](../00-strate
 read this file, pick the top unchecked item, open only that plan, execute its
 next phase; update the board and pointer when a phase or plan completes.
 **Created 2026-10-18; plan 01 Phase 1 (T1.1) landed 2026-10-18; plan 01
-Phase 2 in progress (T2.1–T2.7 landed 2026-10-18, plus the
+Phase 2 COMPLETE 2026-10-19 (T2.1–T2.7 landed 2026-10-18, plus the
 interim-review decoder correction — folded-tick envelope + canonical
-hardening — same day; T2.8 open); plans
-01 phases 3–4 and plans 02–04 not started.**
+hardening — same day; T2.8 — `decode`/`DecodedScore`, the PACM coherence
+cross-check with the per-source key-range rule, and the ownership proof —
+landed 2026-10-19); plan 01 as a whole is NOT done (phases 3–4 — the
+encoder, `pacer pack`, codes/fuzz/docs — remain open); the
+tree-trailing-comments acceptance gap stays an explicitly deferred owner
+decision pinned by a KNOWN-GAP test; plans 02–04 not started.**
 
 ## North star
 
@@ -100,7 +104,7 @@ decided by gates, not by size.
 | Wave | Item | Status |
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
-| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 subgroups T2.1–T2.7 landed (header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader) + interim-review decoder correction (folded-tick envelope, canonical hardening, stage-read defense; tree-trailing acceptance deferred to owner); T2.8 open; phases 3–4 open |
+| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 COMPLETE (T2.1–T2.8: header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader, and T2.8's whole-blob `decode`/`DecodedScore` + `verifyRouting` PACM coherence cross-check + ownership — landed 2026-10-19 with the interim-review correction before it; tree-trailing acceptance still deferred to the owner, KNOWN-GAP-pinned); phases 3–4 open — the encoder is next |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |
@@ -112,11 +116,9 @@ decided by gates, not by size.
 
 ## What's next
 
-→ Plan 01 T2.8 (coherence cross-check + `DecodedScore` completion +
-ownership proof — it also wires `Pacm.verifyRouting`, whose typed
-signature is recorded as a layering conflict for T2.8 to resolve with
-the architect). Phase 2
-is IN PROGRESS, not complete: T2.1 landed the `'PACB'`
+→ Plan 01 Phase 3 (T3.1 `src/PacbEncode.zig` — the encoder core +
+round-trip; then T3.2 pack refusals, T3.3 the `pacer pack` verb).
+Phase 2 is COMPLETE (2026-10-19): T2.1 landed the `'PACB'`
 header/directory/caps skeleton, T2.2 the transport stage
 (`decodeTransport`: `'TRAN'`/`'TMPO'` domains before the `TimeMap`
 rebuild, compiler-pinned), T2.3 the registry identity
@@ -126,12 +128,19 @@ fnv fast-reject), T2.4 the record sections (`decodeRecords`:
 stage (`decodeEaseControls`: `'EASE'` program invariants,
 `'STRS'`/`'CTRL'` coherence), T2.6 the payload stage
 (`decodePayloads`: `'PAYL'` structural consumption over
-`BinaryCursor`, arena-owned copies), and T2.7 the std-only `'PACM'`
+`BinaryCursor`, arena-owned copies), T2.7 the std-only `'PACM'`
 reader (`Pacm.decode`: total, aliasing, frozen constants asserted in
-root, three producer-pinned oracle blobs). Coherence +
-`decode`/`DecodedScore` (T2.8) remain open. Phase 1 (the
-`'PACT'` codec extraction, T1.1) landed 2026-10-18 with its zero-diff
-gate.
+root, three producer-pinned oracle blobs), and T2.8 the whole-blob
+`decode` → `DecodedScore` with the PACM coherence cross-check
+(`verifyRouting` resident in `Pacb.zig` per the focused ruling, the
+per-source key-range rule B1/G9, `pacm_fnv` fast reject agreeing with
+the full walk) and the clobber-proof ownership proof (arena transfer —
+one arena, no dangling stage arenas; `Expr.evalBinary` vs the text
+path + inline key-segment math; no `Evaluator` from decoded bytes).
+The tree-trailing-comments acceptance gap remains an explicitly
+deferred owner decision (KNOWN-GAP test pins the current refusal).
+Phase 1 (the `'PACT'` codec extraction, T1.1) landed 2026-10-18 with
+its zero-diff gate.
 
 ## Decision log
 

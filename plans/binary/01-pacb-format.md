@@ -9,10 +9,14 @@ byte-identical through the codec extraction. `Compile.Code` gains variants
 (append-only) for pack refusals — audited via `zig build audit-diagnostics`.
 **Gates:** `zig build verify` every phase; `zig build fuzz` from Phase 4;
 determinism gate — pack the same score twice ⇒ byte-identical output.
-**Created 2026-10-18; Phase 1 complete 2026-10-18; Phase 2 in progress
-(T2.1–T2.7 landed 2026-10-18, plus the interim-review decoder correction
-— folded-tick envelope + canonical hardening — same day; T2.8 open);
-phases 3–4 not started.**
+**Created 2026-10-18; Phase 1 complete 2026-10-18; Phase 2 complete
+2026-10-19 (T2.1–T2.7 landed 2026-10-18 with the interim-review decoder
+correction — folded-tick envelope + canonical hardening; T2.8 —
+`decode`/`DecodedScore` + the PACM coherence cross-check + ownership —
+landed 2026-10-19; the tree-trailing-comments acceptance gap stays an
+explicitly deferred owner decision, pinned by a KNOWN-GAP test);
+phases 3–4 not started — the plan as a whole is NOT done (the encoder
+is still open).**
 
 ## Why
 
@@ -824,3 +828,58 @@ _(created 2026-10-18; entries appended per phase)_
   400/402 incl. the demonstrated `index out of bounds` panic
   (registry mismatched pair); GREEN `zig build test` 405/405
   (344 root + 61 CLI), `zig fmt --check` clean.
+
+- **2026-10-19 — Phase 2 complete (T2.8; phases 3–4 remain — the plan
+  is NOT done, the encoder is still open).** `src/Pacb.zig` gained the
+  whole-blob API: `decode(gpa, bytes, refusal) DecodeError!DecodedScore`
+  runs the full validated chain (`parseDirectory` → `decodeTransport` →
+  `decodeRegistry` → `decodeRecords` → `decodeEaseControls` →
+  `decodePayloads`), assembles one arena-owned `DecodedScore` (payload
+  copies zipped into the `expr`/`pattern` arms, `'EMIT'` folded into the
+  transport, the `'PACM'` blob copied once, `required_features` carried
+  for the future stages, no AST anywhere) and closes with the PACM
+  coherence cross-check: `pacm_fnv` fast reject ⇒ `meta_incoherent`,
+  `Pacm.decode` structural ⇒ `meta_malformed`, then
+  `verifyRouting(&view, &score) ?RefusalCode` — resident in `Pacb.zig`
+  per the focused ruling (the plan's T2.7 signature spelling was a wrong
+  premise: `Pacm` stays std-only; tracked-plan correction recorded by
+  T4.4). `verifyRouting` compares transport scalars, counts, per-track
+  identity, the per-source key-range rule (B1/G9: keys ⇒ equality;
+  expr/trigger/pattern ⇒ `(0,0)` — `src/Abi.zig:437-440`'s own
+  spelling, never compared against a real `'TICK'` slice), key content,
+  control identity/values, the shared scene fields, and
+  `'EASE'`/`'TMPO'` presence + content; documented spans/source strings
+  are trusted, never cross-checked; a missing required `'PACM'` refuses
+  `non_canonical`. OWNERSHIP is a clean transfer, not a copy chain:
+  `decode` creates the score's arena first and hands its allocator to
+  every stage as that stage's `gpa`, so each sub-arena allocates inside
+  memory the returned score already owns — the stage structs die at
+  return with their memory retained, no stage arena can outlive
+  `score.deinit()`, and the errdefer chain releases everything on any
+  refusal. Tests are REAL: each compiles a fixture score through
+  `test_support.schema()`, embeds `Abi.encodeMeta`'s own PACM, mirrors
+  every section from the same result (the T3.1 encoder's test-side
+  twin), mutates single PACM fields with the fnv repointed per
+  predicate, and proves ownership by `@memset(input, 0xAA)` before any
+  read — then `Expr.evalBinary` over the decoded payload vs the text
+  path (`ExprTrack.evalAt`) at tick 0 plus the inline key-segment math
+  at two interior ticks (O-b rescope: no `Evaluator` is constructed
+  from decoded bytes — impossible without a `CompileResult`). RED
+  evidence (strict vertical): (1) genuine missing-API compile error
+  (`use of undeclared identifier 'decode'` ×3); (2) with the assembly
+  wired but no PACM check, 408/420 with exactly the 12 coherence tests
+  failing `WronglyAccepted`; GREEN after the checks: `zig build test`
+  **420/420 (359 root + 61 CLI)**. Two test-fixture defects were
+  corrected during RED (absolute-vs-relative PACM patch offsets; the
+  integer-tagged `.toF64()` widening) plus two literal corrections
+  (scene `:dur 2bar`; track records indexed by kind — compile emits
+  top-level tracks, then scene children, then triggers).
+  `zig fmt --check` clean; `zig build verify` **15/15 steps, 359/359
+  tests, corpus 37/0 failed, node parity 93/0, cli-golden and
+  score-docs current**; `zig build fuzz` **5/5, 219/219** (the existing
+  text harness — the never-panic PACB fuzz harness is T4.2, not
+  claimed here). The tree-trailing-comments KNOWN GAP is unchanged and
+  still deferred to the owner (SJON cross-repo edit vs approved
+  narrowing); only the flag-combo acceptance fixture rides with it. No
+  encoder, `pack` CLI, runtime, npm, or wire-format change; corpus and
+  CLI goldens byte-identical.
