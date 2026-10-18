@@ -25,6 +25,9 @@ pub const version = "0.2.0";
 /// The pacer score schema, preloaded once per host and borrowed by every
 /// compile — the outermost ring of the lifetime nesting.
 pub const Schema = @import("Schema.zig");
+/// `'PACT'` target-registry codec leaf: std-only encode/decode of the
+/// host→driver target join, shared by `Abi` and (later) the binary runtime.
+pub const PactCodec = @import("PactCodec.zig");
 /// Score compiler: preloaded schema → `sjon.validateDocument` → the
 /// compiled `TrackTable` (targets joined, ticks converted, programs
 /// deduped), with pacer's own wire-stable diagnostic codes.
@@ -58,6 +61,7 @@ pub const Abi = @import("Abi.zig");
 
 test {
     _ = Schema;
+    _ = PactCodec;
     _ = Compile;
     _ = TimeMap;
     _ = Easing;

@@ -9,7 +9,7 @@ byte-identical through the codec extraction. `Compile.Code` gains variants
 (append-only) for pack refusals — audited via `zig build audit-diagnostics`.
 **Gates:** `zig build verify` every phase; `zig build fuzz` from Phase 4;
 determinism gate — pack the same score twice ⇒ byte-identical output.
-**Created 2026-10-18; not started.**
+**Created 2026-10-18; Phase 1 complete 2026-10-18; phases 2–4 not started.**
 
 ## Why
 
@@ -465,3 +465,15 @@ Files to load: `src/Compile.zig:240-361`, `src/cli/Cli.zig`,
 ## Progress log
 
 _(created 2026-10-18; entries appended per phase)_
+
+- **2026-10-18 — Phase 1 complete (T1.1).** `src/PactCodec.zig` owns
+  `Target`, `MAX_TARGETS`, the `'PACT'` wire constants and the byte-identical
+  encoder/decoder; `Compile.Target` / `Compile.MAX_TARGETS` and the `Abi`
+  codec surface are aliases/delegates. RED: the consuming
+  encode→decode→canonical-re-encode test failed on missing
+  `src/PactCodec.zig`. GREEN: `zig build test` 284/284; `zig build verify`
+  15/15 (223 native, 37 corpus, 93 node, zero skips); `zig build cli-golden`
+  4/4 with `git diff --exit-code src/cli/testdata corpus docs/score-language.md`
+  empty. Frozen-bytes, duplicate-name and
+  empty/overlong-name characterization tests added; no wire byte changed and
+  no corpus goldens were regenerated.

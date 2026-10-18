@@ -107,6 +107,7 @@
 
 const std = @import("std");
 const sjon = @import("sjon");
+const PactCodec = @import("PactCodec.zig");
 const Compile = @import("Compile.zig");
 const TrackTable = @import("TrackTable.zig");
 const Easing = @import("Easing.zig");
@@ -114,8 +115,9 @@ const test_support = @import("test_support.zig");
 
 const Ast = sjon.Ast;
 
-/// `"PACT"` read as LE u32.
-pub const TARGETS_MAGIC: u32 = 0x54434150;
+/// `"PACT"` read as LE u32. The codec's canonical constants live in
+/// `PactCodec`; this boundary module keeps their public spelling.
+pub const TARGETS_MAGIC: u32 = PactCodec.TARGETS_MAGIC;
 /// `"PACD"` read as LE u32.
 pub const DIAGS_MAGIC: u32 = 0x44434150;
 pub const DIAGS_VERSION: u32 = 1;
@@ -123,7 +125,7 @@ pub const DIAGS_VERSION: u32 = 1;
 pub const META_MAGIC: u32 = 0x4d434150;
 pub const META_VERSION: u32 = 1;
 
-pub const TARGETS_HEADER_LEN: usize = 8;
+pub const TARGETS_HEADER_LEN: usize = PactCodec.TARGETS_HEADER_LEN;
 pub const DIAGS_HEADER_LEN: usize = 12;
 /// Fixed bytes per diagnostic record, before its message.
 pub const DIAG_RECORD_LEN: usize = 16;
@@ -173,74 +175,36 @@ pub fn metaWorstCase(comptime id_allowance: usize) usize {
         META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_TEMPO_SEGMENTS * TEMPO_REC_LEN; // 'TMPO'
 }
 
-/// Most targets any host may join at load — `Compile.MAX_TARGETS`, the
-/// one definition. Generous: pngine uniform tables run tens of fields,
-/// not hundreds.
-pub const MAX_TARGETS = Compile.MAX_TARGETS;
+/// Most targets any host may join at load — `PactCodec.MAX_TARGETS`, THE
+/// definition (also aliased as `Compile.MAX_TARGETS`). Generous: pngine
+/// uniform tables run tens of fields, not hundreds.
+pub const MAX_TARGETS = PactCodec.MAX_TARGETS;
 
 /// Explicit error set: the destination buffer was too small.
-pub const Error = error{BufferTooSmall};
+pub const Error = PactCodec.Error;
 
 // ---------------------------------------------------------------------------
 // 'PACT' — targets in
 // ---------------------------------------------------------------------------
 
-/// Exact encoded size of a target list.
+/// Exact encoded size of a target list. Delegates to the `'PACT'` leaf.
 pub fn targetsEncodedLen(targets: []const Compile.Target) usize {
-    var len: usize = TARGETS_HEADER_LEN;
-    for (targets) |tg| len += 4 + tg.name.len;
-    return len;
+    return PactCodec.targetsEncodedLen(targets);
 }
 
-/// Encode a target list into `dest`. Used by tests and native hosts;
-/// the JS glue produces the same bytes directly.
+/// Encode a target list into `dest`. Delegates to the `'PACT'` leaf; the
+/// JS glue produces the same bytes directly.
 pub fn encodeTargets(targets: []const Compile.Target, dest: []u8) Error![]u8 {
-    std.debug.assert(targets.len <= MAX_TARGETS);
-    if (dest.len < targetsEncodedLen(targets)) return error.BufferTooSmall;
-    std.mem.writeInt(u32, dest[0..4], TARGETS_MAGIC, .little);
-    std.mem.writeInt(u32, dest[4..8], @intCast(targets.len), .little);
-    var pos: usize = TARGETS_HEADER_LEN;
-    for (targets) |tg| {
-        std.debug.assert(tg.ncomp >= 1);
-        std.debug.assert(tg.ncomp <= 4);
-        std.debug.assert(tg.name.len >= 1);
-        std.debug.assert(tg.name.len <= std.math.maxInt(u16));
-        dest[pos] = tg.ncomp;
-        dest[pos + 1] = tg.registry;
-        std.mem.writeInt(u16, dest[pos + 2 ..][0..2], @intCast(tg.name.len), .little);
-        pos += 4;
-        @memcpy(dest[pos..][0..tg.name.len], tg.name);
-        pos += tg.name.len;
-    }
-    std.debug.assert(pos == targetsEncodedLen(targets));
-    return dest[0..pos];
+    return PactCodec.encodeTargets(targets, dest);
 }
 
-/// Decode a `'PACT'` blob into `out`. Returns the filled prefix, or
-/// null on any defect (bad magic, truncation, ncomp ∉ 1..4, empty name,
-/// trailing bytes, count > out.len) — the blob is host-glue output, so
-/// a defect is a host bug, but it still must not trap the module.
-/// Names alias `blob`.
+/// Decode a `'PACT'` blob into `out`. Delegates to the `'PACT'` leaf and
+/// returns the filled prefix, or null on any defect (bad magic,
+/// truncation, ncomp ∉ 1..4, empty name, trailing bytes, count > out.len)
+/// — the blob is host-glue output, so a defect is a host bug, but it still
+/// must not trap the module. Names alias `blob`.
 pub fn decodeTargets(blob: []const u8, out: []Compile.Target) ?[]const Compile.Target {
-    if (blob.len < TARGETS_HEADER_LEN) return null;
-    if (std.mem.readInt(u32, blob[0..4], .little) != TARGETS_MAGIC) return null;
-    const count = std.mem.readInt(u32, blob[4..8], .little);
-    if (count > out.len) return null;
-    var pos: usize = TARGETS_HEADER_LEN;
-    for (0..count) |i| {
-        if (blob.len - pos < 4) return null;
-        const ncomp = blob[pos];
-        const registry = blob[pos + 1];
-        const name_len = std.mem.readInt(u16, blob[pos + 2 ..][0..2], .little);
-        pos += 4;
-        if (ncomp < 1 or ncomp > 4) return null;
-        if (name_len == 0) return null;
-        if (blob.len - pos < name_len) return null;
-        out[i] = .{ .name = blob[pos..][0..name_len], .ncomp = ncomp, .registry = registry };
-        pos += name_len;
-    }
-    if (pos != blob.len) return null;
-    return out[0..count];
+    return PactCodec.decodeTargets(blob, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,6 +1054,59 @@ test "decodeTargets rejects every malformed shape" {
 test "encodeTargets fails on a short destination" {
     var small: [4]u8 = undefined;
     try t.expectError(error.BufferTooSmall, encodeTargets(&sample_targets, &small));
+}
+
+test "PactCodec: encode → decode → canonical re-encode is byte-identical" {
+    var blob: [256]u8 = undefined;
+    const encoded = try PactCodec.encodeTargets(&sample_targets, &blob);
+    var out: [8]PactCodec.Target = undefined;
+    const back = PactCodec.decodeTargets(encoded, &out).?;
+    var again: [256]u8 = undefined;
+    const reencoded = try PactCodec.encodeTargets(back, &again);
+    try t.expectEqualSlices(u8, encoded, reencoded);
+}
+
+test "PACT characterization: canonical sample_targets encodes to frozen wire bytes" {
+    const expected = [_]u8{
+        0x50, 0x41, 0x43, 0x54, 0x03, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x0d, 0x00, 'c',  'i',  'r',  'c',
+        'l',  'e',  '-',  'r',  'a',  'd',  'i',  'u',
+        's',  0x03, 0x00, 0x04, 0x00, 't',  'i',  'n',
+        't',  0x01, 0x01, 0x06, 0x00, 'c',  'u',  't',
+        'o',  'f',  'f',
+    };
+    var blob: [256]u8 = undefined;
+    const encoded = try encodeTargets(&sample_targets, &blob);
+    try t.expectEqualSlices(u8, &expected, encoded);
+    try t.expectEqual(expected.len, targetsEncodedLen(&sample_targets));
+
+    var leaf_blob: [256]u8 = undefined;
+    const leaf_encoded = try PactCodec.encodeTargets(&sample_targets, &leaf_blob);
+    try t.expectEqualSlices(u8, &expected, leaf_encoded);
+}
+
+test "PACT characterization: duplicate names accepted; empty and overlong names refused" {
+    const dupes = [_]Compile.Target{
+        .{ .name = "same", .ncomp = 1 },
+        .{ .name = "same", .ncomp = 2, .registry = 1 },
+    };
+    var blob: [128]u8 = undefined;
+    const encoded = try encodeTargets(&dupes, &blob);
+    var out: [4]Compile.Target = undefined;
+    const back = decodeTargets(encoded, &out).?;
+    try t.expectEqual(@as(usize, 2), back.len);
+    try t.expectEqualStrings("same", back[0].name);
+    try t.expectEqualStrings("same", back[1].name);
+
+    var empty: [128]u8 = undefined;
+    @memcpy(empty[0..encoded.len], encoded);
+    std.mem.writeInt(u16, empty[TARGETS_HEADER_LEN + 2 ..][0..2], 0, .little);
+    try t.expectEqual(@as(?[]const Compile.Target, null), decodeTargets(empty[0..encoded.len], &out));
+
+    var overlong: [128]u8 = undefined;
+    @memcpy(overlong[0..encoded.len], encoded);
+    std.mem.writeInt(u16, overlong[TARGETS_HEADER_LEN + 2 ..][0..2], std.math.maxInt(u16), .little);
+    try t.expectEqual(@as(?[]const Compile.Target, null), decodeTargets(overlong[0..encoded.len], &out));
 }
 
 test "encodeDiags: pacer diagnostic carries its score-coordinate span" {

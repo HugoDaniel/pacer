@@ -3,7 +3,8 @@
 The living guide for this wave. Same rules as [`../00-strategy.md`](../00-strategy.md):
 read this file, pick the top unchecked item, open only that plan, execute its
 next phase; update the board and pointer when a phase or plan completes.
-**Created 2026-10-18; nothing on the board has run.**
+**Created 2026-10-18; plan 01 Phase 1 (T1.1) landed 2026-10-18; phases
+2–4 await their separate correction.**
 
 ## North star
 
@@ -96,7 +97,7 @@ decided by gates, not by size.
 | Wave | Item | Status |
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
-| A | 01 pacb-format · all phases | ☐ |
+| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) landed; phases 2–4 open |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |
@@ -108,9 +109,9 @@ decided by gates, not by size.
 
 ## What's next
 
-→ Open [01](01-pacb-format.md) Phase 1 (the `'PACT'` codec extraction, a
-zero-diff refactor with its own gate). The handoff document already ships
-with this wave — nothing to wait on.
+→ Plan 01 Phase 2 (decoder + validator). Phase 1 (the `'PACT'` codec
+extraction, T1.1) landed 2026-10-18 with its zero-diff gate; phases 2–4
+await their separate plan correction before execution.
 
 ## Decision log
 

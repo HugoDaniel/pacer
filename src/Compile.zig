@@ -39,6 +39,7 @@
 const std = @import("std");
 const sjon = @import("sjon");
 const Allocator = std.mem.Allocator;
+const PactCodec = @import("PactCodec.zig");
 const TimeMap = @import("TimeMap.zig");
 const Easing = @import("Easing.zig");
 const TrackTable = @import("TrackTable.zig");
@@ -59,11 +60,13 @@ pub const Error = error{OutOfMemory};
 pub const MAX_CHAIN_DEPTH = 4;
 
 /// Ceiling on the merged target join (host registries + compose-mode
-/// `(target …)` declarations). THE definition — `Abi.MAX_TARGETS` aliases
-/// it (Abi imports this module, never the reverse). A declaration past it
-/// is `target_decl_invalid`; the cap also keeps every join index inside a
-/// `u16` `target_id` and clear of the `TrackTable.NO_TARGET` sentinel.
-pub const MAX_TARGETS = 1024;
+/// `(target …)` declarations). THE definition lives in `PactCodec` — the
+/// std-only `'PACT'` leaf this module imports — so the codec never imports
+/// the compiler; `Compile.MAX_TARGETS` keeps its public spelling. A
+/// declaration past it is `target_decl_invalid`; the cap also keeps every
+/// join index inside a `u16` `target_id` and clear of the
+/// `TrackTable.NO_TARGET` sentinel.
+pub const MAX_TARGETS = PactCodec.MAX_TARGETS;
 comptime {
     std.debug.assert(MAX_TARGETS <= TrackTable.NO_TARGET);
 }
@@ -128,16 +131,9 @@ pub fn validate(gpa: Allocator, schema: *const Schema, source: [:0]const u8) Err
 // ---------------------------------------------------------------------------
 
 /// One resolvable target, as joined from a host registry at load time.
-/// `registry` is the ordered-registry index (0 = visual, 1 = audio, …)
-/// and rides into `Writes.Entry.flags` for JS-side routing.
-pub const Target = struct {
-    /// Borrowed from the caller for the duration of `compile` ONLY (the
-    /// wasm path aliases the 'PACT' blob): the result copies every name
-    /// it keeps into its arena, and the table stores ids, not names.
-    name: []const u8,
-    ncomp: u8,
-    registry: u8 = 0,
-};
+/// The record itself lives in `PactCodec` (the `'PACT'` leaf); this alias
+/// keeps `Compile.Target` — the spelling every host and caller uses.
+pub const Target = PactCodec.Target;
 
 /// Pacer load-diagnostic codes. Wire-stable from day one: append-only,
 /// never reorder, never rename (they cross the WASM boundary in 'PACD'

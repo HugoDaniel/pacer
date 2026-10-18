@@ -3,8 +3,10 @@
 **Start at [00-strategy.md](00-strategy.md)** — waves, status board, decision log,
 "what's next" pointer. This file holds the scope, the naming, and the plan index.
 
-Created 2026-10-18. **Execution has not started** — every item on the board is
-open. The wave was independently reviewed twice the same day; this revision
+Created 2026-10-18. **Execution started 2026-10-18** — plan 01 Phase 1
+(T1.1, the `'PACT'` codec leaf) landed; all remaining items on the board
+are open, and phases 2–4 await their separate correction. The wave was
+independently reviewed twice the same day; this revision
 applies the first review's blockers and important findings (B1–B4, I1–I11),
 the final review's three findings (HIGH-1 the closure gate's module blind
 spot, MEDIUM-2 the unstated PACM trust model, LOW-3 canonical section
