@@ -139,6 +139,30 @@ pub const MAX_PAYL_BYTES: usize = 4 * 1024 * 1024;
 /// Global explicit-trigger entry cap (v1 resource policy; derivation in
 /// the module header).
 pub const MAX_TICK_ENTRIES: usize = 131072;
+/// The folded-tick envelope: the widest tick-domain value any decoded
+/// field may carry. Scened fields (keys `at`, periodic `trig_offset`,
+/// explicit `'TICK'` entries) are ONE checked i64 add of the scene start
+/// (|v| ≤ `sjon.Pattern.MAX_TICK`) and a local position (|v| ≤
+/// `sjon.Pattern.MAX_TICK`), so their producer envelope is exactly
+/// ±2·MAX_TICK inclusive — 2·MAX_TICK itself is compile-reachable
+/// (scene start MAX_TICK + local MAX_TICK) and accepted; everything past
+/// it is producer-impossible and refused. Unfolded tick fields keep the
+/// plain grid bound: `trig_every` ∈ 1..MAX_TICK (it converts at the map
+/// origin and is never scene-folded), `'TMPO'`/`'TRAN'` `dur` stay
+/// ≤ MAX_TICK (no fold exists there). The bound keeps every eval-side
+/// subtraction (`t - at`, `t - offset`, widest intermediate `b.at -
+/// a.at` ≤ 2⁵⁵) comfortably inside i64 for every probe |t| ≤ MAX_TICK.
+pub const MAX_FOLDED_TICK: i64 = 2 * sjon.Pattern.MAX_TICK;
+
+comptime {
+    // Headroom for the eval-side arithmetic at the envelope: the widest
+    // intermediate the runtime forms from folded values is bounded by a
+    // small multiple of MAX_TICK (2·MAX_TICK + MAX_TICK ≤ 4·MAX_TICK),
+    // which must never approach the i64 ceiling. Checked-inequality
+    // form everywhere — no `@abs` on an i64 min can occur under this
+    // bound (|v| ≤ 2·MAX_TICK ≪ |i64 min|).
+    std.debug.assert(4 * sjon.Pattern.MAX_TICK < std.math.maxInt(i64));
+}
 
 // Frozen copies of the compile-side caps. `Pacb` never imports the
 // compiler; `src/root.zig` asserts each copy against its source definition.
@@ -993,11 +1017,12 @@ fn joinEntry(registry: *const RegistryStage, id: u16) ?JoinEntry {
 /// `(registry, ncomp)` triple of the joined entry (host join from
 /// `'REGS'` bytes, declared from `'DECL'` records), `scene` `NO_SCENE`
 /// or `< 'SCEN'` count (G10), per-source unused-field zero slack —
-/// key runs (≥ 1 key, strictly ascending, lanes ≥ ncomp zero,
-/// slice-bounded) and trigger schedules (periodic `every > 0`;
-/// explicit non-empty, strictly ascending, `|tick| ≤ MAX_TICK`,
-/// slice-bounded, and non-overlapping — the section is the
-/// concatenation of every schedule); scene window ends checked-added;
+/// key runs (≥ 1 key, strictly ascending, `|at| ≤ MAX_FOLDED_TICK`,
+/// lanes ≥ ncomp zero, slice-bounded) and trigger schedules (periodic
+/// `every ∈ 1..MAX_TICK`, `|offset| ≤ MAX_FOLDED_TICK`; explicit
+/// non-empty, strictly ascending, `|tick| ≤ MAX_FOLDED_TICK`
+/// (the scened fold envelope), slice-bounded, and non-overlapping — the
+/// section is the concatenation of every schedule); scene window ends checked-added;
 /// `'EMIT'` lane ordinals ≤ 4, unique (G10), reserved zero, joined.
 /// `'KEYS'` `ease_ref` is checked against the synthesized linear default
 /// when `'EASE'` is absent (T2.5 owns the real-table bound); `'EASE'`,
@@ -1211,6 +1236,13 @@ pub fn decodeRecords(
                         if (k > 0 and key.at <= run[k - 1].at) {
                             return fail(refusal, .key_invalid, key_at);
                         }
+                        // The folded-tick envelope: a scened key is one
+                        // fold of two MAX_TICK-bounded values, so
+                        // |at| ≤ 2·MAX_TICK inclusive and nothing past
+                        // it is producible.
+                        if (key.at > MAX_FOLDED_TICK or key.at < -MAX_FOLDED_TICK) {
+                            return fail(refusal, .key_invalid, key_at);
+                        }
                         var lane: usize = ncomp;
                         while (lane < 4) : (lane += 1) {
                             if (key.value[lane] != 0) {
@@ -1234,9 +1266,17 @@ pub fn decodeRecords(
                     if (trig_kind == TRIG_PERIODIC) {
                         if (key_start != 0) return fail(refusal, .record_invalid, at + 8);
                         if (key_len != 0) return fail(refusal, .record_invalid, at + 12);
-                        // The compile rule: a positive interval.
-                        if (trig_every <= 0) {
+                        // The compile rules: a positive interval that
+                        // converts at the map origin (never folded, so
+                        // the grid bound itself), and an offset within
+                        // the folded envelope (the scene start folds in
+                        // once — `t - offset` stays inside i64 for every
+                        // probe tick).
+                        if (trig_every <= 0 or trig_every > sjon.Pattern.MAX_TICK) {
                             return fail(refusal, .trigger_invalid, at + 24);
+                        }
+                        if (trig_offset > MAX_FOLDED_TICK or trig_offset < -MAX_FOLDED_TICK) {
+                            return fail(refusal, .trigger_invalid, at + 32);
                         }
                         track.source = .{ .trigger = .{ .periodic = .{
                             .every = trig_every,
@@ -1266,7 +1306,11 @@ pub fn decodeRecords(
                             if (k > 0 and tick <= sched[k - 1]) {
                                 return fail(refusal, .trigger_invalid, tick_at);
                             }
-                            if (tick > sjon.Pattern.MAX_TICK or tick < -sjon.Pattern.MAX_TICK) {
+                            // The folded envelope (scened explicit ticks
+                            // are absolute: one fold of scene start +
+                            // local, both MAX_TICK-bounded — the parity
+                            // bound `TrackTable` documents).
+                            if (tick > MAX_FOLDED_TICK or tick < -MAX_FOLDED_TICK) {
                                 return fail(refusal, .trigger_invalid, tick_at);
                             }
                             slot.* = tick;
@@ -4138,7 +4182,7 @@ test "Pacb: an explicit schedule is non-empty, ascending, tick-bounded, slice-bo
     }
     {
         var base = baseRecords();
-        base.tick[1] = (1 << 53) + 1; // beyond the tick ceiling
+        base.tick[1] = 2 * sjon.Pattern.MAX_TICK + 1; // beyond the fold envelope
         const built = try buildBaseFixture(t.allocator, &base, regs);
         defer t.allocator.free(built.buf);
         try expectRecordsRefusal(built.buf, .trigger_invalid);
@@ -4146,6 +4190,186 @@ test "Pacb: an explicit schedule is non-empty, ascending, tick-bounded, slice-bo
     {
         var base = baseRecords();
         base.trak[3].key_start = 1; // 1 + 3 > 3 ticks
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .trigger_invalid);
+    }
+}
+
+test "Pacb: keys at carries the folded 2*MAX_TICK envelope" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const folded_max: i64 = 2 * sjon.Pattern.MAX_TICK;
+
+    // Boundary acceptance: a scened key is ONE checked fold of the scene
+    // start (|v| <= MAX_TICK) and a local position (|v| <= MAX_TICK), so
+    // start MAX_TICK + local MAX_TICK lands exactly on 2*MAX_TICK —
+    // compile-legal, table-carried, and accepted here (the T3.1
+    // round-trip class the interim review named).
+    {
+        var base = baseRecords();
+        base.scen[0] = .{ .start_tick = sjon.Pattern.MAX_TICK, .dur_ticks = 1 };
+        base.keys[2].at = folded_max;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        const directory = try parseDirectory(built.buf, null);
+        var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+        defer registry.deinit();
+        var stage = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+        defer stage.deinit();
+        try t.expectEqual(folded_max, stage.keys[2].at);
+    }
+    // The negative boundary is equally legal (negative positions are
+    // producer-legal; the envelope is symmetric).
+    {
+        var base = baseRecords();
+        base.keys[0].at = -folded_max;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        const directory = try parseDirectory(built.buf, null);
+        var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+        defer registry.deinit();
+        var stage = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+        defer stage.deinit();
+        try t.expectEqual(-folded_max, stage.keys[0].at);
+    }
+    // One past the envelope refuses key_invalid: a single fold of two
+    // MAX_TICK-bounded values can never produce it (producer-impossible).
+    {
+        var base = baseRecords();
+        base.keys[2].at = folded_max + 1;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .key_invalid);
+    }
+    {
+        var base = baseRecords();
+        base.keys[0].at = -folded_max - 1;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .key_invalid);
+    }
+}
+
+test "Pacb: periodic every and offset carry their tick envelopes" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const folded_max: i64 = 2 * sjon.Pattern.MAX_TICK;
+
+    // `every` is never scene-folded (it converts at the map origin), so
+    // its envelope is the grid bound itself: 1..MAX_TICK inclusive.
+    // `offset` folds the scene start once: |offset| <= 2*MAX_TICK.
+    {
+        var base = baseRecords();
+        base.scen[0] = .{ .start_tick = sjon.Pattern.MAX_TICK, .dur_ticks = 1 };
+        base.trak[2].scene = 0;
+        base.trak[2].trig_every = sjon.Pattern.MAX_TICK;
+        base.trak[2].trig_offset = folded_max;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        const directory = try parseDirectory(built.buf, null);
+        var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+        defer registry.deinit();
+        var stage = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+        defer stage.deinit();
+        try t.expect(stage.tracks[2].source == .trigger);
+        switch (stage.tracks[2].source.trigger) {
+            .periodic => |p| {
+                try t.expectEqual(sjon.Pattern.MAX_TICK, p.every);
+                try t.expectEqual(folded_max, p.offset);
+            },
+            else => return error.UnexpectedArm,
+        }
+    }
+    // The negative offset boundary.
+    {
+        var base = baseRecords();
+        base.trak[2].trig_offset = -folded_max;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        const directory = try parseDirectory(built.buf, null);
+        var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+        defer registry.deinit();
+        var stage = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+        defer stage.deinit();
+        switch (stage.tracks[2].source.trigger) {
+            .periodic => |p| try t.expectEqual(-folded_max, p.offset),
+            else => return error.UnexpectedArm,
+        }
+    }
+    // `every` past MAX_TICK refuses (producer-impossible at the origin).
+    {
+        var base = baseRecords();
+        base.trak[2].trig_every = sjon.Pattern.MAX_TICK + 1;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .trigger_invalid);
+    }
+    // `offset` past the fold envelope refuses (the eval subtraction
+    // t - offset must stay inside i64 for every probe |t| <= MAX_TICK).
+    {
+        var base = baseRecords();
+        base.trak[2].trig_offset = folded_max + 1;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .trigger_invalid);
+    }
+    {
+        var base = baseRecords();
+        base.trak[2].trig_offset = -folded_max - 1;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        try expectRecordsRefusal(built.buf, .trigger_invalid);
+    }
+}
+
+test "Pacb: explicit schedule ticks carry the folded 2*MAX_TICK envelope" {
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const folded_max: i64 = 2 * sjon.Pattern.MAX_TICK;
+
+    // The scened-fold parity case: scene start MAX_TICK + local position
+    // MAX_TICK folds to exactly 2*MAX_TICK — compile emits it with one
+    // checked add (`Compile.buildAtList`), the table documents carrying
+    // it, and refusing it would break T3.1 round-trip parity.
+    {
+        var base = baseRecords();
+        base.scen[0] = .{ .start_tick = sjon.Pattern.MAX_TICK, .dur_ticks = 1 };
+        base.trak[3].scene = 0;
+        base.tick[2] = folded_max;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        const directory = try parseDirectory(built.buf, null);
+        var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+        defer registry.deinit();
+        var stage = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+        defer stage.deinit();
+        try t.expect(stage.tracks[3].source == .trigger);
+        switch (stage.tracks[3].source.trigger) {
+            .at => |at| try t.expectEqual(folded_max, at[2]),
+            else => return error.UnexpectedArm,
+        }
+    }
+    // The negative boundary.
+    {
+        var base = baseRecords();
+        base.tick[0] = -folded_max;
+        const built = try buildBaseFixture(t.allocator, &base, regs);
+        defer t.allocator.free(built.buf);
+        const directory = try parseDirectory(built.buf, null);
+        var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+        defer registry.deinit();
+        var stage = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+        defer stage.deinit();
+        switch (stage.tracks[3].source.trigger) {
+            .at => |at| try t.expectEqual(-folded_max, at[0]),
+            else => return error.UnexpectedArm,
+        }
+    }
+    // One past the envelope refuses — the repointed ceiling.
+    {
+        var base = baseRecords();
+        base.tick[2] = folded_max + 1;
         const built = try buildBaseFixture(t.allocator, &base, regs);
         defer t.allocator.free(built.buf);
         try expectRecordsRefusal(built.buf, .trigger_invalid);
