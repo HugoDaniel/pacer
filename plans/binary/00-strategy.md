@@ -139,18 +139,38 @@ with this wave — nothing to wait on.
      source (tree | payloads); the existing `Eval.zig` stays public API as a
      compiler-side facade/adapter outside the runtime closure. The encoder
      and decoder of `'PACB'` are separate modules at birth.
-  6. **PACM is embedded verbatim at pack**; the runtime serves it untouched
-     and never decodes it — spans stay opaque in a text-free release.
+  6. **PACM is embedded verbatim at pack; the runtime READS it before
+     serving.** A std-only runtime-side reader (`src/Pacm.zig`, 01)
+     structurally decodes the whole section and cross-checks the
+     routing-relevant fields (registry/target identity, counts,
+     transport, `'EASE'`/`'TMPO'`/`'SCEN'` payloads) against the PACB
+     sections — the operative truth — so consumers may keep authorizing
+     routing from the served metadata: a lying PACM refuses
+     (`meta_incoherent`), never misroutes. The compiler's metadata
+     encoder never enters the runtime closure; v1 claims exactly that
+     checked surface (structural safety + routing coherence, proven by
+     the negative suites), not producer authentication. Spans stay
+     opaque — pairing-checked only — in a text-free release.
   7. **The runtime artifact is a second artifact** with `prt_*` exports,
      never a mode of the full one; no text entry point exists to fall back
-     to. Its import closure is an allowlist gate with a mutation-proof
-     fixture.
+     to. Its import closure crosses into SJON at ONE audited window
+     (`src/RtSjon.zig`, the runtime's only `@import("sjon")`) and is
+     gated in two layers — a syntactic allowlist auditor with
+     mutation-proof fixtures, and a physical post-build artifact check
+     (empty import section, exact `prt_*` export set, no compiler
+     markers) — frozen in 02.
   8. **Core-only expr capability, refused loudly, never silently.**
      `CompileResult.eval_schema` is core ⊕ the document's user plugins
      (`src/Compile.zig:263-272, 329-334`), so user-plugin expr heads are a
-     real restriction of the binary path: `pacer pack` refuses them with a
-     diagnostic naming the head, resolved against a comptime core-only
-     schema — never against `eval_schema`, never a silent degradation.
+     real restriction of the binary path. `pacer pack`'s head walk is a
+     grammar-context POSITION classifier (call positions only — never
+     let/binder binding names, never pattern combinator heads) that
+     resolves each collected head against BOTH schemas and refuses
+     exactly the divergence: resolvable through `eval_schema` but not
+     through the frozen core-only binary schema ⇒ diagnostic naming the
+     head and span. Heads resolving in NEITHER schema are legal
+     form-as-data and pack clean — no silent degradation, and no
+     over-broad refusal of valid scores (01 freezes the rules).
   9. **Patterns gate on the prerequisite; a refusal blocks and escalates.**
      If SJON's owner declines, the pattern class is *blocked* — escalate to
      the user with the measured cost; "patterns stay text-path-only
@@ -158,14 +178,22 @@ with this wave — nothing to wait on.
      resolution, `pacer pack` refuses `:pattern` scores and the wave's
      pattern-free stages are an explicit prototype.
 
+- 2026-10-18 — The final independent review's findings applied against
+  source (HIGH-1 the closure gate's module blind spot, MEDIUM-2 the
+  unstated PACM trust model, LOW-3 canonical section presence), plus the
+  parent-noticed fixups: the grammar-context head scan and the per-arm
+  `EvalCore.Context.schema` contract. Decisions 6–8 re-frozen above; the
+  detailed mechanisms live in 01/02. No plan outside this wave touched;
+  no SJON-owner work was added by any of it.
+
 ## Open issues
 
 | # | Issue | Status |
 |---|---|---|
 | O1 | SJON prerequisite (binary pattern query env + `(pure …)` leaves) | **Blocking** for 02 P4 and 03's pattern legs only; handoff drafted pacer-local, unfiled. Declined ⇒ blocked class + user escalation (decision 9). |
-| O2 | Scene names / spans in the embedded PACM reference source text a text-free release doesn't ship | Non-blocking: the player audit reads names through the registry join and control ids inline; spans are inert u32 offsets. Documented opaque in `docs/binary-score.md` (created by 01). |
+| O2 | Scene names / spans in the embedded PACM reference source text a text-free release doesn't ship | Non-blocking: the player audit reads names through the registry join and control ids inline; spans are inert u32 offsets (01's reader checks only their pairing). Documented opaque in `docs/binary-score.md` (created by 01). |
 | O3 | Registry identity choice | Resolved at creation: exact canonical `'PACT'` bytes (decision 3). FNV kept as fast-reject. Frozen with PACB v1. |
-| O4 | Payload caps (`MAX_PAYLOAD_BYTES`, `MAX_PAYL_BYTES`) and the input-zone worst case | Defined in 01 as proposals-with-rationale (they are format choices, not source constants); frozen with v1; `pacbWorstCase()` comptime derivation feeds the zone assert. |
+| O4 | Payload caps (`MAX_PAYLOAD_BYTES`, `MAX_PAYL_BYTES`) and the input-zone worst case | Defined in 01 as proposals-with-rationale — measured format policy, not source constants and not mathematical claims (compact IR CAN exceed its source text; the packer ENFORCES via `pack_cap_exceeded` with the measured size, never assumes); frozen with v1; `pacbWorstCase()` comptime derivation feeds the zone assert. |
 | O5 | Size/perf outcomes | **Measured later** — 02 P2's preliminary trend (incomplete, non-binding), 04's full report + user checkpoint. No budget invented now; the numeric ratchet exists only after the user ratifies one. |
 | O6 | Pattern dry-run at load (binary) | Design decided, lands with 02 P4: `prt_load` dry-runs the first pattern cycle through the env-carrying binary query, mirroring the text path's acceptance ⊆ runtime rule (`src/PatternTrack.zig:61-70`) — decode accepts only what the frame path can evaluate. Before the prerequisite resolves there is nothing to dry-run: pack refuses pattern scores outright. |
 | O7 | `pacer/rt` as a separate class vs a mode of `Pacer` | Proposed separate (`prt_*` makes mixing a link error); 02 P3 review is the decision point. |

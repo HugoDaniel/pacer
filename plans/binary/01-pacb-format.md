@@ -59,7 +59,9 @@ section_count × { id u32, off u32, len u32 }        ; off from buffer start
 decoder refusing unknown set bits is the honest unsupported-feature path.
 Sections are emitted in the fixed canonical order below and OMITTED when
 empty (the `'PACM'` omit-when-empty byte-stability rule, `src/Abi.zig:56-59`);
-present sections must appear in canonical order:
+the [canonical presence and defaults](#canonical-presence-and-defaults-final-review-low-3--frozen-with-v1)
+freeze below completes this rule; present sections must appear in
+canonical order:
 
 | 4-CC | Payload |
 |---|---|
@@ -87,6 +89,41 @@ reads: keys → `key_start/key_len` into `'KEYS'`; expr/pattern →
 `payload_off/len` into `'PAYL'`; periodic trigger → `trig_every > 0` +
 `trig_offset`; explicit trigger → `key_start/key_len` into `'TICK'`.
 
+### Canonical presence and defaults (final-review LOW-3 — frozen with v1)
+
+One rule everywhere: **the packer always omits the degenerate form of a
+section, and the decoder refuses it when present**, so one score has
+exactly one byte encoding:
+
+- `'TRAN'` and `'PACM'` are REQUIRED — `'TRAN'` carries the transport
+  truth, and `'PACM'` always encodes its ≥ 40 B header, so neither has
+  an empty case.
+- `'REGS'` omitted ⇒ the host join is empty: `host_targets` must be 0
+  and `pact_fnv` must be FNV-1a-64 of the canonical zero-count `'PACT'`
+  encoding (the fast-reject stays well-defined); present ⇒ `count ≥ 1`.
+- `'EASE'` omitted ⇒ the program table is the shared linear default
+  alone (`src/TrackTable.zig:16-18`) and every `'KEYS'` `ease_ref` must
+  be 0 — matching PACM's linear-only omission (`src/Abi.zig:71-86`);
+  present ⇒ `program_count ≥ 2` with `program 0` linear (a linear-only
+  table is the omitted case).
+- `'TMPO'` omitted ⇒ constant tempo: the decoder synthesizes the
+  single-segment degenerate map `[{0, 'TRAN'.bpm}]` (the `[0] == {0,
+  bpm}` pin, `src/TimeMap.zig:99-115`) — behavior identical to a
+  one-segment section, which is exactly why the encoding must be
+  canonical; present ⇒ `count ≥ 2` (segment 0 alone is the omitted
+  case — PACM's constant-tempo omission, `src/Abi.zig:88-97`).
+- Every other section: present ⇒ `count ≥ 1` (`'PAYL'`/`'STRS'`:
+  `byte_size ≥ 1`), and cross-section presence is CHECKED, not
+  implied: `'KEYS'` present iff a keys track exists, `'PAYL'` iff an
+  expr/pattern track does, `'TICK'` iff an explicit-trigger track
+  does, `'STRS'` iff a control does.
+- The directory is exact, not merely well-formed: it starts immediately
+  after the 16-B file header (`off[0] == 16 + 12 × section_count`),
+  sections are CONTIGUOUS (`off[i+1] == off[i] + len[i]`), and the
+  buffer ends exactly at the last section's end — no gaps, no
+  inter-section slack, no trailing bytes. Pads and reserved fields
+  zero; ids unique; canonical order as tabled.
+
 Decode re-derives every projection through the SAME functions compile uses:
 `TimeMap.init` + `withSegments` in the documented op order
 (`src/TimeMap.zig:8-38, 84-115`), `loop_secs = map.secondsFromTick(dur)`
@@ -110,8 +147,9 @@ the host join entry; for declared ids it must equal the `'DECL'` record.
 ### Validation (decode refuses, never guesses, never traps)
 
 Directory: magic/version; unknown `required_features` bits; every
-`off/len` in bounds; sections non-overlapping and monotonic in canonical
-order; each section's counts × record width consume its length exactly
+`off/len` in bounds; sections contiguous, gap-free, byte-exact to the
+buffer end, and monotonic in canonical order (the layout rules above);
+each section's counts × record width consume its length exactly
 (including `'TICK'`); duplicate section ids refuse.
 
 Transport and domains — all BEFORE any `TimeMap` call (its contract is
@@ -131,8 +169,10 @@ Keys and easing (the `'EASE'` safety the review demanded — `Program.eval`
 asserts its invariants, `src/Easing.zig:162-170`, so decode checks them
 first): keys per keys-track ≥ 1, `at` strictly ascending (the table
 invariant, `src/TrackTable.zig:13-15`), value lanes ≥ ncomp zero;
-`ease_ref < program_count`; `program_count ≥ 1` and program 0 is linear (the
-shared default, `src/TrackTable.zig:16-18`); per program `len ∈ 1..8`,
+`ease_ref < program_count`; program 0 is linear (the shared default,
+`src/TrackTable.zig:16-18` — when `'EASE'` is absent the synthesized
+table is exactly that default and every `ease_ref` is 0; presence
+counts are the canonical rules above); per program `len ∈ 1..8`,
 `ops_len ∈ 0..4`, `t_end` strictly increasing, all floats finite, op codes
 within the frozen `Easing.Op` set (unused slots are normalized to the
 zeroed convention on copy — the format's own rule, `src/Easing.zig:143-146`);
@@ -160,38 +200,85 @@ an evaluation would not visit, and (b) must end at exactly `payload_len`
 (trailing slack inside a payload refuses). This is a syntax-level walk over
 SJON's own cursor, not a second interpreter. Per-payload and total caps
 (`MAX_PAYLOAD_BYTES`, `MAX_PAYL_BYTES`) are set here as
-**proposals-with-rationale** (format choices, not source constants): 256 KiB
-per payload / 4 MiB total — a subtree's compact IR cannot exceed the 256-KiB
-document zone it was packed from, and 4 MiB bounds `MAX_TRACKS ×` per-payload
-without letting one pathological expression dominate; frozen with v1 and
+**proposals-with-rationale** — measured format policy, not source
+constants and NOT mathematical claims: a subtree's compact IR CAN
+exceed the text it was packed from (per-node record overheads mean
+payload size scales with node count, not source bytes), so the cap is
+enforced, never assumed — 256 KiB per payload / 4 MiB total, coarse
+bounds that keep one pathological expression from dominating the
+input zone while sitting far above every corpus case, with `pack_cap_exceeded`
+carrying the measured size in its diagnostic; frozen with v1 and
 recorded in `docs/binary-score.md`. `pacbWorstCase()` (the `metaWorstCase`
 pattern, `src/Abi.zig:158-174`) derives the input-zone bound once, as
 arithmetic restating the spec.
 
-Embedded-PACM coherence (not two authorities): the operative truth at
-runtime is the PACB sections; `'PACM'` is served verbatim as metadata.
-Coherence is guaranteed (i) at construction — the packer embeds the blob it
-just encoded from the same `CompileResult` and self-checks (below); (ii) at
-load — `pacm_fnv` is recomputed over the section bytes it carries, and the
-three PACM header counts (track/key/control, fixed offsets in the frozen
-wire header, `src/Abi.zig:31-35`) are peeked and must equal the PACB counts.
-The runtime does NOT decode PACM — a full PACM reader in the closure would
-duplicate the format the npm glue already mirrors; the boundary is stated,
-not hidden.
+### Embedded-PACM coherence — a bounded cross-check, not a checksum (final-review MEDIUM-2; trust model frozen with v1)
+
+`'PACB'` is a **producer-authored, host-served asset**; the operative
+truth at runtime is the PACB sections, and `'PACM'` is embedded verbatim
+at pack and served verbatim to JS — but only after `src/Pacm.zig`, a
+std-only runtime-side READER (the encoder stays compiler-side and never
+enters the closure), has validated it at decode:
+
+1. **Structural read of the whole section** — magic/version, every
+   record width, the post-controls TLV stream walked to EXACT
+   end-of-buffer, span pairs ordered (`end ≥ start`; spans stay opaque
+   u32s — 00's O2), transport domains (`bpm` 1..1000, finite) — so JS
+   never receives bytes the format would choke on.
+2. **Semantic cross-check, field by field, of exactly what consumers
+   use to AUTHORIZE ROUTING** — the never-drop audit reads
+   `meta.tracks[i]` registry/target identity and the control registry
+   (`animader/animader/demo/lib/score.mjs:167-197`) — against the
+   decoded sections: transport header block == `'TRAN'`; `track_count`
+   == `'TRAK'` count and per-track
+   `(target_id, registry, ncomp, source, key_start, key_len)` ==
+   `'TRAK'[i]`; `key_count` == `'KEYS'` count; `control_count` ==
+   `'CTRL'` count with per-control identity/value lanes == `'CTRL'[i]`
+   and the id matched in `'STRS'`; `'SCEN'` == `'SCEN'`;
+   `'EASE'`/`'TMPO'` payloads byte-equal to their PACB sections when
+   present (both are verbatim by construction — absent both sides ⇒
+   the linear/constant defaults above).
+
+A PACM that lies about routing can therefore only REFUSE
+(`meta_incoherent`, a status-1 refusal), never misroute — the
+never-drop/route audits keep their meaning on binary assets. The
+reader's constants are frozen copies with a test-side equality assert
+against `Abi`'s (the `source`-ordinal pattern above), and its tests
+share the oracle with the npm `'PACM'` decoder
+(`npm/pacer/src/index.js:28-44`): the same golden blobs decode in both,
+views compared. `pacm_fnv` stays in `'TRAN'` as a fast-reject +
+diagnostic checksum only (decision 3's stance — FNV is not
+authentication and proves no coherence); the earlier count-peek is
+subsumed by the full read. What v1 claims is exactly this checked
+surface — structural safety and routing-relevant coherence of the
+served metadata, proven by the enumerated negative classes (Phase 2,
+03's suites) — NOT producer authentication (anyone can author a PACB)
+and NOT a blanket "forged input is semantically safe" claim; content
+trust remains the producer's, and hosts serving third-party PACBs get
+precisely the same checked boundary, nothing more.
 
 All refusals are deterministic — same bytes, same refusal, native and wasm.
 
 ### Producer — split modules, public API, `pacer pack`
 
-**Two files at birth** (the encoder could never enter the runtime closure —
-it needs `Compile`/`Abi` — and a hidden import is the facade pattern the
-closure gate exists to kill):
+**Three files at birth** (the encoder could never enter the runtime
+closure — it needs `Compile`/`Abi` — and a hidden import is the facade
+pattern the closure gate exists to kill):
 
 - `src/Pacb.zig` — constants, decoder + validator, `DecodedScore`
-  (arena-backed `.deinit()`), `pacbWorstCase`. Imports: std, `PactCodec`,
-  sjon `BinaryCursor`/`BinaryFormat`. Never `Compile`/`Schema`/`Driver`.
-- `src/PacbEncode.zig` — encoder + FNV. Imports `Compile`, `Abi`, `Pacb`,
-  `PactCodec`. Never referenced by `rt_entry` (02).
+  (arena-backed `.deinit()`), `pacbWorstCase`; decode's LAST stage is
+  the `Pacm` structural read + cross-check (below). Imports: std,
+  `PactCodec`, `Pacm`, sjon `BinaryCursor`/`BinaryFormat` (via the
+  runtime's SJON window, 02). Never `Compile`/`Schema`/`Driver`.
+- `src/Pacm.zig` — the runtime-side `'PACM'` reader: full structural
+  decode of the metadata section + the routing-relevant cross-check
+  against the decoded sections. Imports std ONLY — never `Abi` (whose
+  import of `Compile`, `src/Abi.zig:110`, would drag the compiler in);
+  the wire constants are frozen copies with a test-side equality
+  assert against `Abi`'s, and the tests share the golden-blob oracle
+  with the npm `'PACM'` decoder.
+- `src/PacbEncode.zig` — encoder + FNV. Imports `Compile`, `Abi`,
+  `Pacb`, `PactCodec`. Never referenced by `rt_entry` (02).
 
 `PacbEncode.encode(gpa, result: *const Compile.CompileResult, host_targets:
 []const Compile.Target) Error![]u8`, exported — with `Pacb` (decode) and
@@ -204,20 +291,55 @@ load-bearing). Encode requires `result.ok()`. Per expr/pattern track it
 output (`SJON/src/Binary.zig:151-157`) — recording that choice as frozen.
 Refusals, each an appended `Compile.Code`:
 
-- `pack_user_expr_unsupported` — any head the payload's forms resolve to a
-  call that a **core-only** schema cannot satisfy. The check is NOT the t=0
-  dry-run alone (an untaken branch can hide a user head behind `if`): the
-  packer walks every payload structurally (same walk as decode) collecting
-  every operator-position symbol, and each must resolve through a comptime
-  core-only schema (`sjon.Schema.Schema` over `sjon.plugins.core.plugin` —
-  the precedents are `SJON/src/wasm_common.zig:30`, `SJON/src/wasm_binary.zig:33-34`,
-  and pacer's own `src/ExprTrack.zig:298-300`) via `lookupExprFunc`
-  (`SJON/src/Schema.zig:184`) or `isCoreSpecialForm`
-  (`SJON/src/Expr.zig:3451`). NEVER checked against `result.eval_schema` —
-  it carries the document's user plugins (`src/Compile.zig:329-334`) and
-  would accept what the runtime cannot evaluate. No hardcoded name list; the
-  rule is resolution, not enumeration (`docs/binary-score.md` documents the
-  resulting capability set for humans).
+- `pack_user_expr_unsupported` — a call head the TEXT path resolves as a
+  user-plugin function. The check is NOT the t=0 dry-run alone (an
+  untaken branch can hide a user head behind `if`), and NOT a naive
+  "every operator-position symbol" sweep — the expr grammar puts
+  symbols in positions that are not calls, and refusing those would
+  reject valid scores. The packer walks every payload structurally
+  (same walk as decode) as a **position classifier** mirroring the
+  dispatch shapes of `scheduleForm`/`scheduleFormBinary`
+  (`SJON/src/Expr.zig:813-845`) — no evaluation, no env, no values, no
+  second interpreter:
+  - **eval positions (scanned):** the payload root; every element of a
+    vector in eval position (vectors evaluate element-wise — the
+    `vec_collect` walk); every branch of `if`/`cond`/`and`/`or`
+    (nothing is evaluated, so nothing is pruned); `let` binding values
+    and body; binder `xs`/`init`/`body`.
+  - **name positions (never call heads):** `let`'s binding-vector name
+    slots; the binder vectors of `map`/`filter`/`any`/`all`/`fold`
+    (`[x]`, `[acc x]` — syntactic, never-evaluated subnodes); kvpair
+    keys. A binding name that collides with a core head is still a
+    binding — heads resolve through the schema, never the env
+    (`scheduleForm` consults `special_forms` + `lookupExprFunc` only),
+    so variable shadows cannot smuggle or mask a call.
+  - **call positions:** a form in eval position whose head child is a
+    (namespace-qualified) symbol — the head is collected.
+  The special-form catalog is `isCoreSpecialForm`'s ten — `let if cond
+  and or map filter any all fold` (`SJON/src/Expr.zig:3451-3470`) — and
+  function resolution is `lookupExprFunc` (`SJON/src/Schema.zig:184`)
+  through the comptime core schema (`sjon.Schema.Schema` over
+  `sjon.plugins.core.plugin`; precedents `SJON/src/wasm_common.zig:30`,
+  `SJON/src/wasm_binary.zig:33-34`, pacer's `src/ExprTrack.zig:298-300`)
+  — resolution, not enumeration. Each collected head is resolved
+  TWICE: through the compile result's `eval_schema` (what the TEXT path
+  evaluates — core ⊕ the document's user plugins,
+  `src/Compile.zig:329-334`, `src/Eval.zig:230`) and through the frozen
+  binary-arm schema (core [+pattern at P4]). **Refusal is exactly the
+  divergence:** resolves (found OR ambiguous) through `eval_schema` but
+  not found through the binary schema ⇒ `pack_user_expr_unsupported`
+  naming the head and span. Found in both ⇒ core — identical on both
+  paths. Found in NEITHER ⇒ a form-as-data literal — legal
+  (`scheduleForm`'s not-found pass-through builds a `Value.form`;
+  "an unresolved head quietly evaluates to a form literal",
+  `src/Compile.zig:264-268`) and IDENTICAL on both paths; refusing it
+  would reject valid scores, so it packs clean. No hardcoded name list;
+  `docs/binary-score.md` documents the resulting capability set for
+  humans. Pattern payloads (P4): the pattern graph is walked
+  structurally per `PatternQuery`'s combinator vocabulary — pattern
+  heads (`stack`, `seq`, …) resolve through the pattern plugin and are
+  never expr-call heads — and ONLY `(pure <form>)` leaves' forms are
+  classified under the expr rules above.
 - `pack_patterns_unsupported` — any `:pattern` track while the SJON
   prerequisite is unresolved. Interim, honest refusal; removed by 02 P4.
   The binary runtime's leaf schema stays core-only until then (the pattern
@@ -254,7 +376,8 @@ diagnostics — no manufactured workaround.
 | File | Owns |
 |---|---|
 | `src/PactCodec.zig` | the `'PACT'` leaf codec + `Target` + `MAX_TARGETS` (THE definition) |
-| `src/Pacb.zig` | format constants, decoder/validator, `DecodedScore`, `pacbWorstCase` |
+| `src/Pacb.zig` | format constants, decoder/validator (ends in the `Pacm` cross-check), `DecodedScore`, `pacbWorstCase` |
+| `src/Pacm.zig` | the std-only runtime `'PACM'` reader + routing-relevant cross-check (frozen constants, shared JS oracle) |
 | `src/PacbEncode.zig` | encoder + FNV + the core-scope head walk |
 | `src/cli/Pack.zig` | the `pack` verb (args, targets-json adapter, report JSON), wired into `src/cli/Cli.zig` |
 | `docs/binary-score.md` | the format spec — hand-written doc of record (the `docs/cli.md` precedent); frozen constants, caps, rules |
@@ -287,13 +410,21 @@ Files to load: `src/TrackTable.zig`, `src/Easing.zig`, `src/TimeMap.zig`,
 - RED: a test-only byte builder (inside the test file, not a binary fixture)
   emits a minimal valid PACB plus one mutation per Validation class — every
   prefix of the minimal fixture (truncation sweep), directory
-  overlap/overrun/reorder/duplicate, unknown features bit, count overflow,
-  non-finite fields, easing `len`/`ops_len`/monotonicity violations,
-  out-of-domain bpm/meter/ticks, per-source non-zero slack, unsorted keys,
-  explicit-schedule disorder, payload zero/multi-root, payload trailing
-  slack, corrupt node bytes mid-payload, oversized pool, caps exceeded,
-  PACM fnv/count-peek mismatch, registry identity mismatch **including a
-  same-shaped name swap**. Each refuses with the right reason class.
+  overlap/overrun/reorder/duplicate/gap/trailing slack, unknown features
+  bit, count overflow, non-finite fields, easing `len`/`ops_len`/
+  monotonicity violations, out-of-domain bpm/meter/ticks, per-source
+  non-zero slack, unsorted keys, explicit-schedule disorder, payload
+  zero/multi-root, payload trailing slack, corrupt node bytes
+  mid-payload, oversized pool, caps exceeded, non-canonical presence
+  (a degenerate `'EASE'`/`'TMPO'`/`'REGS'`/count-0 section PRESENT; a
+  required `'TRAN'`/`'PACM'` ABSENT; cross-presence contradiction —
+  e.g. `'KEYS'` with no keys track), PACM structural garbage (bad
+  magic/version, truncated TLV stream, record-width drift, unordered
+  spans), PACM↔PACB incoherence (a track registry/target lie, a control
+  identity lie, count mismatches, `'EASE'`/`'TMPO'` payload divergence),
+  PACM fnv mismatch, registry identity mismatch **including a
+  same-shaped name swap**. Each refuses with the right reason class
+  (`meta_incoherent` for the semantic lies).
 - GREEN: `Pacb.decode` + `DecodedScore` + `pacbWorstCase`, with the
   ownership test (decode → clobber input → tables still evaluable).
 - Gate: `zig build test`.
@@ -309,7 +440,11 @@ Files to load: `src/Compile.zig:240-361`, `src/cli/Cli.zig`,
   byte-equality; `pack_user_expr_unsupported` RED twice — a user-plugin head
   in a RESULT position (dry-run visible) and one hidden in an UNTAKEN branch
   (only the head walk catches it — the unit builds the payload subtree
-  directly); targets-json adapter fixtures vs the buildJoin rules.
+  directly); the grammar-context ACCEPTANCE set — vector-literal elements,
+  `let` binding names (incl. one colliding with a core head), binder
+  vectors (`[x]`, `[acc x]`), and a form-as-data head resolving in
+  NEITHER schema that MUST pack clean (the over-broad-refusal
+  regression); targets-json adapter fixtures vs the buildJoin rules.
 - GREEN: `PacbEncode.zig`, the verb, envelope goldens via
   `zig build cli-golden` (diff reviewed).
 - Gate: `zig build verify` + `zig build cli-golden`.
@@ -320,7 +455,9 @@ Files to load: `src/Compile.zig:240-361`, `src/cli/Cli.zig`,
   decode fuzz harness never panics (`src/fuzz.zig` discipline).
 - GREEN: codes + by-name tests; harness wired into `zig build fuzz`;
   `docs/binary-score.md` written from `Pacb.zig`'s header (frozen constants,
-  caps + rationale, the payload structural-consumption rule, span opacity);
+  caps + rationale, the payload structural-consumption rule, span opacity,
+  the canonical presence/defaults rules, and the PACM trust model with its
+  exact checked-surface claim);
   `CLAUDE.md` wire-table row for `'PACB'` (data at rest; append-only;
   VERSION bumps breaking).
 - Gate: `zig build verify` + `zig build audit-diagnostics` + `zig build fuzz`.

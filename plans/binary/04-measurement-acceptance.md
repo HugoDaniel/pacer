@@ -47,6 +47,9 @@ cited with its repo path):**
   embeds the metadata blob verbatim, so the container's delta over text
   includes a metadata copy the text path encodes at runtime; the report
   states it so the comparison is read knowingly;
+- the `Pacm` reader's artifact cost as its own row (00 decision 6): the
+  cross-check rides every binary load, so its bytes and its load-time
+  cost are visible numbers, not hidden in totals;
 - program totals exclude demo music (the existing report's `musicPath`
   scoping convention).
 

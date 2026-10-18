@@ -4,10 +4,12 @@
 "what's next" pointer. This file holds the scope, the naming, and the plan index.
 
 Created 2026-10-18. **Execution has not started** — every item on the board is
-open. The wave was independently reviewed the same day; this revision applies
-that review's blockers and important findings (B1–B4, I1–I11) — a dated
-observation about the plan text, not a gate claim about code that does not
-exist yet.
+open. The wave was independently reviewed twice the same day; this revision
+applies the first review's blockers and important findings (B1–B4, I1–I11),
+the final review's three findings (HIGH-1 the closure gate's module blind
+spot, MEDIUM-2 the unstated PACM trust model, LOW-3 canonical section
+presence), and its grammar-context fixups — dated observations about the
+plan text, not gate claims about code that does not exist yet.
 
 Production animations must not ship the Pacer source compiler. Today
 `pacer.wasm` (661,334 B raw / 238,810 B gzip9 / 194,275 B Brotli in the
@@ -18,8 +20,9 @@ already splits its own (`sjon.wasm` vs the read-only `sjon-binary.wasm`,
 `SJON/src/wasm_binary.zig:1-18`): an **offline packer** compiles a score into
 a versioned binary (`'PACB'`), and a **playback-only `pacer-rt.wasm`** loads
 it — one evaluation engine shared with the compiler, same write buffers, no
-parser, no validator, no manifest loader, no metadata encoder, and no
-fallback to the compiler anywhere in the artifact.
+parser, no validator, no manifest loader, no metadata encoder (a std-only
+metadata READER with a bounded routing cross-check is the one deliberate
+addition, 01), and no fallback to the compiler anywhere in the artifact.
 
 1. `'PACB'` — the compiled-score format, the `'PACT'` codec leaf, the
    decoder/validator, and the `pacer pack` producer → [01](01-pacb-format.md).
@@ -53,7 +56,7 @@ P1–P3 touch no patterns.
 | `prt_*` | its export surface; `prt_abiVersion() = 1`, a separate lineage from `drv_abiVersion` |
 | `pacer/rt` | new npm entry, `PacerRt` class; `route.js`/`lane.js` reused verbatim |
 | `zig build parity` | new native text-vs-binary corpus walk (proposed verb) |
-| `zig build audit-rt-imports` | new import-closure allowlist gate (proposed verb) |
+| `zig build audit-rt-imports` | the closure gate over the one SJON window (`RtSjon`): layer-1 source auditor + layer-2 shipped-artifact check (proposed verb) |
 
 Every spelling marked "new"/"proposed" above is created by this wave; nothing
 pretends these commands exist today.

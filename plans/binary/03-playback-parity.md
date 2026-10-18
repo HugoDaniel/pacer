@@ -74,10 +74,14 @@ process is the point: it is the text-vs-binary A/B.
 
 **Negative suites** (binary leg; 01's mutation classes end-to-end at the
 load boundary): every-prefix truncation of a small PACB, forged
-magic/version/required-features, directory overlap/overrun/reorder, count
-overflows, NaN/±inf fields, easing domain violations, payload
-zero/multi-root/trailing-slack/corrupt-bytes, PACM fnv/count-peek mismatch,
-registry identity mismatch — each an explicit expectation, never a crash;
+magic/version/required-features, directory overlap/overrun/reorder/gap,
+count overflows, NaN/±inf fields, easing domain violations, payload
+zero/multi-root/trailing-slack/corrupt-bytes, non-canonical presence
+(degenerate section present, required section absent), PACM structural
+garbage and PACM↔PACB incoherence (track/control registry lies, count
+mismatches, `'EASE'`/`'TMPO'` divergence — 01's reader classes, each
+status 1 + `meta_incoherent` where semantic), registry identity
+mismatch — each an explicit expectation, never a crash;
 plus 01's decode fuzz harness under `zig build fuzz`.
 
 **No all-features gate before the prerequisite** (parent ruling): no
