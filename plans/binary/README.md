@@ -33,9 +33,9 @@ spot, MEDIUM-2 the unstated PACM trust model, LOW-3 canonical section
 presence), and its grammar-context fixups — dated observations about the
 plan text, not gate claims about code that does not exist yet.
 
-**Plan 02 execution started 2026-10-19 — P1 COMPLETE; P2 under way
-(T2.1–T2.4 landed; the closure gate is GREEN, T2.5's trend closes the
-phase).** T1.1 landed the binary expr leaf
+**Plan 02 execution started 2026-10-19 — P1–P3 COMPLETE (QUALIFIED);
+P4 remains gated on the SJON prerequisite and 03/04 are pending review.
+The wave is NOT complete.** T1.1 landed the binary expr leaf
 (`ExprTrack.evalAtBinary`, bit-equal to the tree arm; commit `b717d3c`);
 T1.2 extracted the one engine into `src/EvalCore.zig` over a
 tree|binary `LeafSource` with `src/Eval.zig`
@@ -68,8 +68,18 @@ the frozen 17 `prt_*` + `memory`, 3 compiler-only markers absent from
 the rt artifact and present in the full-artifact control the same
 run — with the formal `tools/smoke_rt.mjs` green on the real artifact
 (test 521/521, verify 15/15, fuzz 361/361, audit 10/10 both layers,
-smoke PASS). Next: **T2.5** — the preliminary size trend closes P2 —
-see
+smoke PASS). P2 closed when T2.5's preliminary size trend landed
+(`aac3eda`). T3.1 then extracted the shared `pact.js` / `meta.js` /
+`test/harness.js` leaves (`986051c`), and T3.2 landed `src/rt.js`
+(`PacerRt`), `test/rt.test.js`, and the append-only package surface
+(`./rt`, `pacer-rt.wasm`, build/pretest scripts) — production-artifact
+tests only, no text/reload fallback. The binary metadata contract is
+span-preserving but source-free: scene `name` is `''` (the `nameSpan`
+stays valid) and declared-only target names are `null` (DECL carries
+registry/ncomp, never names); this is documented, not invented. Node
+104/104; `zig build verify` 18/18 (410/410 Zig, corpus 38/0, node
+104/104). **P4 is blocked on the SJON owner prerequisite; 03/04 are
+untouched. The wave is not complete.** See
 [00-strategy.md](00-strategy.md)'s status board.
 
 Production animations must not ship the Pacer source compiler. Today

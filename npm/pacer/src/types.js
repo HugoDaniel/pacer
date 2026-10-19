@@ -125,7 +125,8 @@ export {};
 /**
  * A scene (named window) in score metadata. Its name is sliced from the
  * score source via `nameSpan` — scenes carry no target, so the name is
- * their identity.
+ * their identity. The binary runtime (`PacerRt`) has no source text: it
+ * preserves `nameSpan` but reports `name: ''` rather than inventing one.
  * @typedef {object} MetaScene
  * @property {string} name The scene's `:name` symbol, sliced from source.
  * @property {bigint} startTick Window start on the PPC tick grid.
@@ -241,4 +242,30 @@ export {};
  * @property {(slot: number) => number} drv_clearControl
  * @property {(targetId: number, registry: number, ncomp: number) => number} drv_registerControl
  * @property {(bpm: number) => number} drv_setBpm
+ */
+
+/**
+ * The pacer-rt.wasm export surface (the `prt_*` ABI). Modeled explicitly
+ * so `PacerRt` type-checks against the boundary instead of reaching
+ * through `any`; the constructor casts `instance.exports` to this once.
+ * A separate lineage from {@link PacerExports}: `prt_abiVersion` is 1.
+ * @typedef {object} PacerRtExports
+ * @property {WebAssembly.Memory} memory
+ * @property {() => number} prt_abiVersion
+ * @property {() => number} prt_pacbPtr
+ * @property {() => number} prt_pacbCap
+ * @property {() => number} prt_targetsPtr
+ * @property {() => number} prt_targetsCap
+ * @property {() => number} prt_metaPtr
+ * @property {() => number} prt_metaLen
+ * @property {() => number} prt_writesPtr
+ * @property {(pacbLen: number, targetsLen: number) => number} prt_load
+ * @property {() => number} prt_loadError
+ * @property {(seconds: number) => number} prt_eval
+ * @property {(tick: bigint) => number} prt_evalTicks
+ * @property {(slot: number, x: number, y: number, z: number, w: number) => number} prt_setControl
+ * @property {(slot: number) => number} prt_clearControl
+ * @property {(targetId: number, registry: number, ncomp: number) => number} prt_registerControl
+ * @property {(bpm: number) => number} prt_setBpm
+ * @property {() => number} prt_exprFailures
  */

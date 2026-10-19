@@ -50,26 +50,35 @@
       "types": "./types/route.d.ts",
       "default": "./src/route.js"
     },
+    "./rt": {
+      "types": "./types/rt.d.ts",
+      "default": "./src/rt.js"
+    },
     "./pacer.wasm": "./pacer.wasm",
+    "./pacer-rt.wasm": "./pacer-rt.wasm",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
     "types",
     "pacer.wasm",
+    "pacer-rt.wasm",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build:wasm": "cd ../.. && zig build wasm",
     "build:wasm-copy": "node -e \"require('node:fs').copyFileSync('../../zig-out/bin/pacer.wasm','pacer.wasm')\"",
+    "build:wasm-rt": "cd ../.. && zig build wasm-rt",
+    "build:wasm-rt-copy": "node -e \"require('node:fs').copyFileSync('../../zig-out/bin/pacer-rt.wasm','pacer-rt.wasm')\"",
+    "build:rt-fixture": "cd ../.. && zig build run -- pack tools/testdata/pacb/full-small.score.sjon --out npm/pacer/test/rt-fixture.pacb",
     "build:types": "tsc",
-    "build": "npm run build:wasm && npm run build:wasm-copy && npm run build:types",
+    "build": "npm run build:wasm && npm run build:wasm-rt && npm run build:wasm-copy && npm run build:wasm-rt-copy && npm run build:types",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src test",
     "format": "biome check --write src test",
-    "clean": "node -e \"const fs=require('node:fs');fs.rmSync('types',{recursive:true,force:true});fs.rmSync('pacer.wasm',{force:true})\"",
-    "pretest": "npm run build:wasm",
+    "clean": "node -e \"const fs=require('node:fs');fs.rmSync('types',{recursive:true,force:true});fs.rmSync('pacer.wasm',{force:true});fs.rmSync('pacer-rt.wasm',{force:true});fs.rmSync('test/rt-fixture.pacb',{force:true})\"",
+    "pretest": "npm run build:wasm && npm run build:wasm-rt && npm run build:wasm-rt-copy && npm run build:rt-fixture",
     "test": "node --test",
     "prepack": "npm run build",
     "prepublishOnly": "npm run lint && npm run typecheck && npm test"

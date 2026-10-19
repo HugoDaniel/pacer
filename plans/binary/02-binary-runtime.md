@@ -11,7 +11,8 @@ created by P2; the gate step runs BOTH layers — the source auditor and,
 after `wasm-rt` builds the artifact, `tools/check_rt_artifact.zig`) and
 ends in a **preliminary, non-binding size trend**; P3
 adds the npm gate.
-**Created 2026-10-18; not started.**
+**Created 2026-10-18; P1–P3 complete 2026-10-19 (P3 QUALIFIED);
+P4 is blocked on the SJON-owner prerequisite; 03/04 remain pending.**
 
 ## Why
 
@@ -640,3 +641,59 @@ _(created 2026-10-18; entries appended per phase)_
   then `ERR_MODULE_NOT_FOUND` (leaves referenced before creation).
   T3.2 (`PacerRt` + `test/rt.test.js` + append-only package wiring)
   is next.
+- **2026-10-19 — Phase P3 COMPLETE (T3.2 landed); P1–P3 COMPLETE /
+  QUALIFIED, pending P4 review and 03/04. The wave is NOT complete.**
+  `src/rt.js` adds `PacerRt`, the playback-runtime glue over the real
+  `pacer-rt.wasm` `prt_*` surface: the same registries → canonical
+  `'PACT'` flow through `pact.js`; `load(pacbBytes)` as the only load
+  verb (`PacerRt.prototype.reload` is undefined — asserted); the same
+  `eval` / `evalTicks` / `evalBytes` / `setControl` / `clearControl` /
+  `registerControl` / `setBpm` / `exprFailures` / `meta` call surface;
+  views re-taken from `exports.memory.buffer` on every call; the one
+  inert `env.sjon_host_invoke_plugin: () => 0` import. `load` is
+  transactional: a status-1 refusal leaves the old score armed (driver
+  `ok` stays true once a score is live) while the returned `ok` is the
+  load's own outcome; `status` / `reason` carry the refusal class.
+  `diagnostics` stays `[]` — a PACB has no 'PACD', so no compiler message
+  is invented.
+  **Metadata contract (source-forced, recorded not invented):** PACM
+  spans are preserved in original source byte coordinates, but the
+  binary carries no source text. The shared `decodeMeta` is called with
+  empty `docBytes`, so scene `name` is `''` while `nameSpan` remains
+  authoritative; declared-only target names are `null` because `'DECL'`
+  carries registry/ncomp only and names never cross the wire (the same
+  null `Pacer` reports for an unhosted declared target). The parity test
+  therefore asserts the eval/control/BPM render is byte-equal and that
+  the ONLY rendered difference is the source-sliced scene name; the span
+  is asserted equal. No format change, no text fallback, no fabricated
+  names.
+  **Package surface (append-only):** `exports["./rt"]`, `exports["./
+  pacer-rt.wasm"]`, `files += "pacer-rt.wasm"`, and the
+  `build:wasm-rt` / `build:wasm-rt-copy` / `build:rt-fixture` scripts;
+  `pretest` rebuilds wasm, wasm-rt, copies it, then packs
+  `full-small.score.sjon`; `build` carries both artifact legs and
+  `build:types` (emits `types/rt.d.ts`); `clean` removes both artifacts
+  and the generated fixture. The generated fixture and `pacer-rt.wasm`
+  are gitignored, never committed. `build.zig`'s verify node leg now
+  depends on `wasm-rt` + the fresh CLI fixture so a clean checkout is
+  self-contained.
+  **Tests:** `test/rt.test.js` (8 production-artifact tests) covers load
+  + exact immutable metadata (including byte-coordinate span slicing),
+  text↔binary harness parity (writes/control/BPM; one documented scene
+  name difference), registry mismatch (status 1, reason 9), transactional
+  refused reload with control/BPM/`exprFailures` held, second-load meta
+  view replacement, absent `reload`, evalTicks/control surface, and
+  robust typed-byte/zone-overflow/bad-call honesty. `exports.test.js`
+  pins the append-only package map. REDs observed: missing `rt.js`
+  (`ERR_MODULE_NOT_FOUND`), then a named FAIL for each grown behavior
+  (`setControl`, `exprFailures`, `evalTicks`).
+  **Gates (this task):** Linux node 104/104; biome 2.5.0 clean (16
+  files); `tsc --noEmit` exit 0; `npm run build:types` emitted
+  `types/rt.d.ts`; obs `npm test` 104/104 with the pretest build/copy/
+  pack; clean-checkout obs `zig build verify` 18/18 (410/410 Zig, corpus
+  38/0, node 104/104, cli-golden + score-docs current); `zig build test`
+  521/521; `zig build fuzz` 361/361; `zig build audit-rt-imports` 10/10
+  (both layers, 172,255-byte artifact); `npm pack --dry-run` exit 0
+  (35 entries, ships `pacer-rt.wasm` + `types/rt.d.ts`, no tests or
+  generated fixture). P4 stays blocked on the SJON owner prerequisite;
+  03/04 remain pending.

@@ -8,7 +8,8 @@ in, call `eval(seconds)` per frame, read packed `(target, value)` writes back. I
 never reads a clock, owns no loop, and never touches the GPU or audio graph.
 Same document + same time ⇒ byte-identical writes, in the browser and natively.
 
-ESM-only. Ships JavaScript source + generated `.d.ts` types + `pacer.wasm`.
+ESM-only. Ships JavaScript source + generated `.d.ts` types + `pacer.wasm`
+(the score-text driver) and `pacer-rt.wasm` (the playback runtime).
 
 ## Install
 
@@ -80,16 +81,48 @@ const clock = perfClock();
 })();
 ```
 
+## Playback runtime
+
+`pacer/rt` ships `PacerRt`: the same evaluator without the compiler. Pack a
+score offline with `pacer pack`, ship the resulting `.pacb` bytes, and load
+them against the matching host registries:
+
+```js
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { perfClock } from 'pacer/clock';
+import { PacerRt } from 'pacer/rt';
+
+const wasm = await readFile(fileURLToPath(import.meta.resolve('pacer/pacer-rt.wasm')));
+const pacb = await readFile('score.pacb');
+const player = await PacerRt.load(wasm, pacb);
+
+const clock = perfClock();
+const entries = player.eval(clock()); // same 'PACW' entries as Pacer
+```
+
+There is **no `reload(text)`** — the runtime has no parser. `load(pacbBytes)`
+is the only load verb, and a refused load is transactional: the old score and
+its held control/BPM state stay live, so inspect `status` / `reason` for the
+load outcome instead of dropping playback.
+
+Binary metadata preserves the `'PACM'` spans but the runtime has no source
+text: a scene's `name` is `''` (its `nameSpan` is still authoritative), and
+declared-only target names are `null` because `'DECL'` carries registry/ncomp,
+never names. Route those writes by `registry`.
+
 ## Exports
 
 | Import | Provides |
 |---|---|
 | `pacer` | `Pacer` — `load`, `reload`, `eval` / `evalTicks` / `evalBytes`, `meta`, `setControl` / `clearControl` / `registerControl`, `setBpm`, `exprFailures` |
+| `pacer/rt` | `PacerRt` — `load` (packed `.pacb` only), `eval` / `evalTicks` / `evalBytes`, `meta`, controls, `setBpm`, `exprFailures`, `status` / `reason` |
 | `pacer/route` | `toUniforms`, `routeWrites` — split write entries across registries |
 | `pacer/clock` | `perfClock`, `masterClock` — sample the master clock (audio masters when playing) |
 | `pacer/audio` | `clockOnlyHost` (alias `sointuHost`), `paramRegistry`, `applyParams` — the `AudioTargetHost` boundary |
 | `pacer/host-check` | `checkAudioTargetHost` — the host conformance kit, for consumers' test suites |
-| `pacer/pacer.wasm` | the driver binary asset |
+| `pacer/pacer.wasm` | the score-text driver binary asset |
+| `pacer/pacer-rt.wasm` | the playback runtime binary asset |
 
 ## The audio engine contract
 
@@ -142,7 +175,7 @@ This package is the JS half of the [pacer](https://git.hugodaniel.com/hugo/pacer
 repo; `pacer.wasm` is built from the Zig sources by Zig 0.16.
 
 ```sh
-npm run build      # zig build wasm → copy in → emit .d.ts (types/)
+npm run build      # zig build wasm + wasm-rt → copy both in → emit .d.ts (types/)
 npm run typecheck  # tsc --noEmit over the JSDoc-typed source
 npm run lint       # biome check src test (lint + format, read-only)
 npm run format     # biome check --write src test (apply fixes)

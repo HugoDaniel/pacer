@@ -227,11 +227,25 @@ pub fn build(b: *std.Build) void {
 
     // `zig build verify` — the whole gate in one verb: unit tests, the
     // native corpus half, then node --test against the freshly built
-    // pacer.wasm (the JS suite includes the corpus parity walk, so this
-    // is where native-vs-wasm byte equality is actually asserted).
+    // pacer.wasm + pacer-rt.wasm (the JS suite includes the corpus
+    // parity walk and the rt artifact tests, so this is where
+    // native-vs-wasm byte equality is actually asserted).
     const node_test = b.addSystemCommand(&.{ "node", "--test" });
     node_test.setCwd(b.path("npm/pacer"));
     node_test.step.dependOn(&install_wasm.step);
+    node_test.step.dependOn(&install_wasm_rt.step);
+    // rt.test.js consumes the SAME fresh CLI pack the npm pretest hook
+    // makes; verify builds it here so a clean checkout is self-contained.
+    const rt_fixture = b.addRunArtifact(cli_exe);
+    rt_fixture.setCwd(b.path("."));
+    rt_fixture.addArgs(&.{
+        "pack",
+        "tools/testdata/pacb/full-small.score.sjon",
+        "--out",
+        "npm/pacer/test/rt-fixture.pacb",
+    });
+    rt_fixture.has_side_effects = true;
+    node_test.step.dependOn(&rt_fixture.step);
     // Verify runs the corpus through its OWN run step, without `b.args`:
     // `zig build verify -- --update` must never regenerate goldens while
     // the parallel node --test step is reading them (regen is the

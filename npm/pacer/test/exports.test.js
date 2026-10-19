@@ -87,3 +87,42 @@ test('version is in lockstep across package.json, build.zig.zon, and root.zig', 
   assert.equal(zon[1], pkg.version, 'build.zig.zon .version matches package.json');
   assert.equal(root[1], pkg.version, 'src/root.zig version matches package.json');
 });
+
+test('rt surface is append-only: ./rt + pacer-rt.wasm join the old entries', async () => {
+  // The playback runtime is a NEW subpath beside every existing export —
+  // never a rename or a replacement.
+  assert.deepEqual(pkg.exports['./rt'], {
+    types: './types/rt.d.ts',
+    default: './src/rt.js',
+  });
+  assert.equal(pkg.exports['./pacer-rt.wasm'], './pacer-rt.wasm');
+  assert.ok(pkg.files.includes('pacer-rt.wasm'), 'files ships pacer-rt.wasm');
+  for (const sub of [
+    '.',
+    './audio',
+    './clock',
+    './host-check',
+    './route',
+    './pacer.wasm',
+    './package.json',
+  ]) {
+    assert.ok(sub in pkg.exports, `existing export ${sub} preserved`);
+  }
+
+  // Build wiring: the runtime artifact is rebuilt/copied and the parity
+  // fixture is packed by pretest; the full build carries the rt legs.
+  for (const name of ['build:wasm-rt', 'build:wasm-rt-copy', 'build:rt-fixture']) {
+    assert.equal(typeof pkg.scripts[name], 'string', `${name} exists`);
+  }
+  for (const need of ['build:wasm-rt', 'build:wasm-rt-copy', 'build:rt-fixture']) {
+    assert.match(pkg.scripts.pretest, new RegExp(need.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  for (const need of ['build:wasm-rt', 'build:wasm-rt-copy']) {
+    assert.match(pkg.scripts.build, new RegExp(need.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  const { PacerRt } = await import('pacer/rt');
+  assert.equal(typeof PacerRt, 'function');
+  assert.equal(typeof PacerRt.load, 'function');
+  assert.equal(PacerRt.prototype.reload, undefined);
+});
