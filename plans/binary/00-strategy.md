@@ -143,16 +143,26 @@ SJON import behind the frozen nine-row table, with the frozen
 `Pacb.MAX_TREE_DEPTH` copy equality-pinned in root's frozen-copy
 family and zero corpus/CLI drift vs the P1 HEAD — **and T2.2 landed
 `rt_entry.zig` + the `wasm-rt` verb**: the first actual
-`pacer-rt.wasm` artifact is now BUILT (172,255 bytes; closure
-UNVERIFIED — T2.3/T2.4's layer-1/2 gate is still ahead, no closure
-claim), with the transactional `prt_load` (statuses 0/1/2/3, the
-02-frozen u16 reason map), the measured static PACB zone
-(`PACB_CAP` = 6,049,576 bytes — the hard whole-blob input cap; the
-decoded heap is separate), C4 materialization, C5 scene-start
-dry-runs, and the ownership suite. Next plan-02 work is
-**T2.3/T2.4** — the layer-1/2 closure auditor and its smoke — then
-the preliminary size trend (T2.5) closes P2. The pre-existing
-`posToTickLocal` assert on a
+`pacer-rt.wasm` artifact is now BUILT (172,255 bytes), with the
+transactional `prt_load` (statuses 0/1/2/3, the 02-frozen u16 reason
+map), the measured static PACB zone (`PACB_CAP` = 6,049,576 bytes —
+the hard whole-blob input cap; the decoded heap is separate), C4
+materialization, C5 scene-start dry-runs, and the ownership suite —
+**and T2.3/T2.4 landed the two-layer closure gate**: layer 1
+(`f15ac7c`, `tools/audit_rt_imports.zig` + six mutation fixture
+trees) audits the source closure column-0 (exactly the 12 pacer + 16
+SJON allowlisted modules, the namespace→file map asserted against
+SJON `root.zig` every run); layer 2 (`tools/check_rt_artifact.zig`,
+chained into the same `zig build audit-rt-imports` verb behind fresh
+artifact builds) checks the SHIPPED bytes — empty-or-one frozen
+import with its signature asserted through the type section, the
+export set exactly the frozen 17 `prt_*` + `memory`, and 3
+compiler-only markers absent from the rt artifact while present in
+the full-artifact control the same run. The formal
+`tools/smoke_rt.mjs` passes on the real artifact (transactional
+refused-reload proof included). **P2 stays OPEN** — the preliminary
+size trend (T2.5) closes it. The pre-existing `posToTickLocal`
+assert on a
 bare unitless number in a time-pos slot (T3.2 finding, G-ter item 9)
 also remains owner-notified.
 

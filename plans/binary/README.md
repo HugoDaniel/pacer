@@ -34,7 +34,8 @@ presence), and its grammar-context fixups — dated observations about the
 plan text, not gate claims about code that does not exist yet.
 
 **Plan 02 execution started 2026-10-19 — P1 COMPLETE; P2 under way
-(T2.1 landed).** T1.1 landed the binary expr leaf
+(T2.1–T2.4 landed; the closure gate is GREEN, T2.5's trend closes the
+phase).** T1.1 landed the binary expr leaf
 (`ExprTrack.evalAtBinary`, bit-equal to the tree arm; commit `b717d3c`);
 T1.2 extracted the one engine into `src/EvalCore.zig` over a
 tree|binary `LeafSource` with `src/Eval.zig`
@@ -49,15 +50,26 @@ in root's frozen-copy family, write-side test uses on indented imports
 — pure indirection, zero corpus/CLI drift (test 487/487 with the new
 equality gate). T2.2 then landed `src/rt_entry.zig` + the `wasm-rt`
 verb: the first actual `pacer-rt.wasm` artifact is BUILT (172,255
-bytes; closure UNVERIFIED — no closure claim until T2.3/T2.4's gate),
-with the transactional `prt_load` (statuses 0/1/2/3 + the 02-frozen
-u16 reason map), the measured static PACB zone (`PACB_CAP` =
+bytes), with the transactional `prt_load` (statuses 0/1/2/3 + the
+02-frozen u16 reason map), the measured static PACB zone (`PACB_CAP` =
 6,049,576 bytes — hard whole-blob input cap; decoded heap separate),
 C4 binary-arm materialization, C5 scene-start expr dry-runs, the
 (g) three-fixture byte-equal parity sweep and the ownership suite
 (test 499/499, verify 15/15, fuzz 361/361, real-wasm node smoke
-green). Next: **T2.3/T2.4** — the layer-1/2 closure auditor and its
-smoke; then the preliminary size trend (T2.5) closes P2 — see
+green). T2.3/T2.4 then landed the closure gate: layer 1
+(`f15ac7c`) audits the source closure column-0 with six mutation
+fixture trees (exactly the 12 pacer + 16 SJON modules, the
+namespace→file map re-asserted against SJON `root.zig` every run);
+layer 2 (`tools/check_rt_artifact.zig`, chained into `zig build
+audit-rt-imports` behind fresh artifact builds) checks the shipped
+bytes — the frozen empty-or-one import with its `(i32,i32)->i32`
+signature asserted through the type section, the export set exactly
+the frozen 17 `prt_*` + `memory`, 3 compiler-only markers absent from
+the rt artifact and present in the full-artifact control the same
+run — with the formal `tools/smoke_rt.mjs` green on the real artifact
+(test 521/521, verify 15/15, fuzz 361/361, audit 10/10 both layers,
+smoke PASS). Next: **T2.5** — the preliminary size trend closes P2 —
+see
 [00-strategy.md](00-strategy.md)'s status board.
 
 Production animations must not ship the Pacer source compiler. Today

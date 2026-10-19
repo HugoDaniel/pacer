@@ -478,3 +478,83 @@ _(created 2026-10-18; entries appended per phase)_
   0x2a-as-length is a coincidence). NOT in this task (P2 stays open):
   the layer-1/2 closure auditor + mutation fixtures (T2.3/T2.4), the
   size trend (T2.5).
+- **2026-10-19 — P2 in progress: T2.3 + T2.4 landed the two-layer
+  closure gate and the formal artifact smoke (the phase gate stays
+  T2.5's — interim carry-forward, not a phase close).** T2.3
+  (`f15ac7c`): `tools/audit_rt_imports.zig` — the layer-1 source
+  auditor, column-0 BFS from `src/rt_entry.zig` under the three
+  module-aware rules (02:202-212): `@import("sjon")` legal ONLY in
+  `RtSjon.zig`; `RtSjon.zig` held to the strict nine-row alias grammar
+  (`plugins.core` nested — Zig has no dotted decl names; comments
+  stripped before the token scan so code, not prose, is governed);
+  `.zig` imports resolve against the frozen twelve-file pacer
+  allowlist, relative-`..` escapes forbidden by absence. The
+  namespace→file map is asserted against SJON `root.zig`'s export
+  table every run (`has_side_effects`; root.zig read, never
+  traversed); the SJON leg BFSes under the re-derived 16-entry
+  allowlist — 02's 15 PLUS `plugins/core.zig`, which 02:215-224's
+  enumeration missed (reached both as the `plugins.core` row's own
+  file AND from `Schema.zig:2407` column-0 in a test region);
+  `Binary.zig` absent by design (C1). Stale entries fail both lists in
+  both directions. Proof by mutation (02:280-290): six checked-in
+  fixture trees under `tools/testdata/rt-imports/`, each run through
+  the REAL tool and asserted to FAIL naming the shape (direct sjon
+  import, `sjon.Parser` row, relative-`.zig` laundering,
+  module-boundary crossing, stale both directions) — plus the
+  honest-split fixture: an INDENTED forbidden import PASSES layer 1 by
+  design (the named blind spot; layer 2 is the backstop). One genuine
+  column-0 finding on the real tree: `src/Pacb.zig:6506`'s test-region
+  helper SIGNATURE named `@import("Compile.zig").CompileResult` at
+  column 0 (the T2.2 report's "test/helper bodies only" claim was
+  inaccurate for that one line) — localized via an indented alias in
+  the test-only `ScoreAndPacm` struct; test-only, zero production
+  impact. RED observed: `no step named 'audit-rt-imports'`. T2.4 (this
+  commit): `tools/check_rt_artifact.zig` — the layer-2 physical gate,
+  chained into the same verb (`audit-rt-imports`: layer 1 → `wasm-rt`
+  + `wasm` artifacts BUILT as dependencies, never stale → the artifact
+  check on the INSTALLED `zig-out/bin` paths). The gate fails unless
+  the built `pacer-rt.wasm` has (a) an EMPTY import section or exactly
+  the one frozen function import `env.sjon_host_invoke_plugin` with
+  `(i32,i32)->i32` asserted through the type section — not just the
+  name (02:242's frozen empty-or-one allowance); (b) an export set
+  exactly equal to the frozen 17 `prt_*` + `memory`, both directions;
+  (c) the frozen 3-marker compiler-only list absent from the artifact
+  AND present in the full `pacer.wasm` control the same run (a stale
+  marker fails loudly) — `target_arity_mismatch` (Compile.Code
+  vocabulary riding 'PACD'), `repr-shape` (schema/pacer.sjon, wired to
+  wasm_entry only), `use-plugin` (SJON's text-parser directive). The
+  section parser is bounds-checked throughout (over-long LEB, section
+  size vs remaining bytes); synthetic-bytes unit tests cover the
+  02:263-268 edge matrix (empty imports pass; the single inert import
+  passes; wrong kind/module/name/signature, any second import, missing
+  /extra/wrong-kind exports, malformed inputs — 12 tests riding
+  `zig build test`). Real-artifact negatives observed exit 1:
+  full-as-rt (35 named findings — every drv_* export, all 17 missing
+  prt_*, all 3 markers present), a marker-tampered rt artifact, and a
+  truncated artifact (malformed: section size past EOF). `tools/
+  smoke_rt.mjs` is the formal smoke (superseding the T2.2 one-off):
+  real-artifact instantiate with the inert `env.sjon_host_invoke_plugin`
+  stub, `prt_abiVersion()=1`, `prt_load(full-small.pacb)` ⇒ 0 with a
+  zero-count 'PACT' (R-O1 — the fixture declares its targets),
+  metaLen 2879, `prt_eval(0.5)` 152 bytes, a CORRUPTED reload ⇒ 1
+  reason 0 with the old score live (frame byte-identical, held control
+  intact — JS-visible transactional proof), `keys-only` reload ⇒ 0
+  (metaLen 1784). RED observed: missing-tool FileNotFound from the
+  wired test module before the tool existed. Gates (obs, serial;
+  combined report `binary02-t23-t24-report.md`): `zig build test`
+  11/11 steps **521/521** (410 root + 89 CLI + 10 layer-1 + 12
+  layer-2 tool tests); `zig build audit-rt-imports` 10/10 steps —
+  layer 1 OK (12 pacer + 16 SJON, map matches root.zig) AND layer 2
+  OK (172,255-byte artifact, 1 import, frozen export set exact, 3
+  markers absent-here/present-in the 666,873-byte control); `zig build
+  verify` 15/15, 410/410, corpus 38/0, node 94/94, cli-golden +
+  score-docs current; `zig build fuzz` 5/5 361/361; node v26.10.0
+  smoke PASS (exit 0); fmt clean on all touched zig. Truth limits,
+  stated: the marker check is a physical string presence/absence gate
+  on frozen picked markers with a same-run control direction — not a
+  universal compiler-exclusion proof; layer 1 is a column-0 source
+  scan with a named indented/dynamic blind spot, so synthetics and the
+  source BFS are jointly bounded — the shipped-bytes rules (a)+(b)
+  plus lazy-linkage/DCE carry the closure claim. NOT in this task (P2
+  stays open): the preliminary size trend (T2.5) closes P2; P3
+  (T3.1/T3.2) untouched.

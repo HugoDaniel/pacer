@@ -332,7 +332,28 @@ pub fn build(b: *std.Build) void {
     run_audit_rt_imports.addDirectoryArg(sjon_dep.path("src"));
     run_audit_rt_imports.has_side_effects = true;
     const audit_rt_imports_step = b.step("audit-rt-imports", "Audit the pacer-rt import closure (layer 1: source)");
-    audit_rt_imports_step.dependOn(&run_audit_rt_imports.step);
+
+    // Layer 2 (02 T2.4) — the physical gate, chained into the same verb:
+    // layer 1 → the wasm-rt artifact (and the full-wasm control) BUILT as
+    // dependencies, never stale → the artifact check. Reads the INSTALLED
+    // zig-out/bin paths (the SJON lsp-audit wiring verbatim).
+    const check_rt_artifact = b.addExecutable(.{
+        .name = "check-rt-artifact",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/check_rt_artifact.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_check_rt_artifact = b.addRunArtifact(check_rt_artifact);
+    run_check_rt_artifact.setCwd(b.path("."));
+    run_check_rt_artifact.addArg("zig-out/bin/pacer-rt.wasm");
+    run_check_rt_artifact.addArg("zig-out/bin/pacer.wasm");
+    run_check_rt_artifact.step.dependOn(&run_audit_rt_imports.step);
+    run_check_rt_artifact.step.dependOn(&install_wasm_rt.step);
+    run_check_rt_artifact.step.dependOn(&install_wasm.step);
+    run_check_rt_artifact.has_side_effects = true;
+    audit_rt_imports_step.dependOn(&run_check_rt_artifact.step);
 
     // The gate's own unit + mutation-fixture tests ride `zig build test`
     // (02:280-290: proof by mutation — the six fixture trees under
@@ -345,4 +366,16 @@ pub fn build(b: *std.Build) void {
     audit_rt_imports_test_mod.addImport("build_options", build_options_mod);
     const audit_rt_imports_tests = b.addTest(.{ .root_module = audit_rt_imports_test_mod });
     test_step.dependOn(&b.addRunArtifact(audit_rt_imports_tests).step);
+
+    // Layer 2's synthetic-bytes tests ride `zig build test` too (the
+    // 02:263-268 edge matrix: empty imports pass; the single inert import
+    // passes; wrong kind/module/name/signature or any second import fails).
+    const check_rt_artifact_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/check_rt_artifact.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(check_rt_artifact_tests).step);
 }
