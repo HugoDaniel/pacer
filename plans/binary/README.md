@@ -33,16 +33,23 @@ spot, MEDIUM-2 the unstated PACM trust model, LOW-3 canonical section
 presence), and its grammar-context fixups — dated observations about the
 plan text, not gate claims about code that does not exist yet.
 
-**Plan 02 execution started 2026-10-19 — P1 COMPLETE.** T1.1 landed the
-binary expr leaf (`ExprTrack.evalAtBinary`, bit-equal to the tree arm;
-commit `b717d3c`); T1.2 extracted the one engine into
-`src/EvalCore.zig` over a tree|binary `LeafSource` with `src/Eval.zig`
+**Plan 02 execution started 2026-10-19 — P1 COMPLETE; P2 under way
+(T2.1 landed).** T1.1 landed the binary expr leaf
+(`ExprTrack.evalAtBinary`, bit-equal to the tree arm; commit `b717d3c`);
+T1.2 extracted the one engine into `src/EvalCore.zig` over a
+tree|binary `LeafSource` with `src/Eval.zig`
 as the alias facade — the exact public call
 `Eval.Evaluator.init(gpa, &result)` and every caller survive unmodified
 (zero respells), zero behavior change: gates `zig build test` 486/486,
 `zig build verify` 15/15 with an empty golden diff, `zig build fuzz`
-5/5 361/361. P2 (`RtSjon` window, `rt_entry.zig`, `wasm-rt`,
-transactional load, closure gate) is next — see
+5/5 361/361. T2.1 then rerouted the runtime closure through
+`src/RtSjon.zig` — the closure's single SJON import behind the frozen
+nine-row re-export table, `Pacb`'s frozen `MAX_TREE_DEPTH` copy pinned
+in root's frozen-copy family, write-side test uses on indented imports
+— pure indirection, zero corpus/CLI drift (test 487/487 with the new
+equality gate). Next: **T2.2** — `rt_entry.zig`, the `wasm-rt`
+artifact, the transactional load; then the closure gate (T2.3/T2.4)
+and the preliminary size trend close P2 — see
 [00-strategy.md](00-strategy.md)'s status board.
 
 Production animations must not ship the Pacer source compiler. Today

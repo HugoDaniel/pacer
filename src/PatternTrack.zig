@@ -8,7 +8,7 @@
 //! ## Cycle mapping (frozen, plan 03 Phase 1)
 //!
 //! 1 pattern cycle = 1 bar, as identity on the shared grid:
-//! `sjon.Pattern.PPC` IS pacer's per-bar tick count (`TimeMap` pins one
+//! `Pattern.PPC` IS pacer's per-bar tick count (`TimeMap` pins one
 //! bar = PPC ticks for every meter — the meter divides beats *within*
 //! the bar), so no conversion exists and the window math is exact
 //! integer arithmetic, transport-independent.
@@ -28,12 +28,12 @@
 //! identical haps, native and wasm32.
 
 const std = @import("std");
-const sjon = @import("sjon");
+const RtSjon = @import("RtSjon.zig");
 const TrackTable = @import("TrackTable.zig");
 
-const Ast = sjon.Ast;
-const Pattern = sjon.Pattern;
-const PatternQuery = sjon.PatternQuery;
+const Ast = RtSjon.Ast;
+const Pattern = RtSjon.Pattern;
+const PatternQuery = RtSjon.PatternQuery;
 
 pub const Tick = TrackTable.Tick;
 
@@ -102,10 +102,10 @@ pub fn cycleWindowOf(tick: Tick) Error!Pattern.Span {
 pub fn queryCycle(
     gpa: std.mem.Allocator,
     tree: *const Ast.Tree,
-    schema: sjon.Schema.Schema,
+    schema: RtSjon.Schema.Schema,
     node: Ast.NodeIndex,
     tick: Tick,
-    outer_env: ?*const sjon.Expr.Env,
+    outer_env: ?*const RtSjon.Expr.Env,
 ) Error!PatternQuery.Result {
     const window = try cycleWindowOf(tick);
     return PatternQuery.queryTreeWithEnv(gpa, tree, node, schema, window, SEED, outer_env);
@@ -172,8 +172,8 @@ pub fn coerce(value: PatternQuery.PatValue) ?[4]f32 {
 
 const t_ = std.testing;
 
-const core_plugins = [_]sjon.Plugin.Plugin{sjon.plugins.core.plugin};
-const core_schema: sjon.Schema.Schema = .{ .plugins = &core_plugins };
+const core_plugins = [_]RtSjon.Plugin.Plugin{RtSjon.plugins.core.plugin};
+const core_schema: RtSjon.Schema.Schema = .{ .plugins = &core_plugins };
 
 test "cycleWindowOf: identity windows on the PPC grid, negatives included" {
     const PPC = Pattern.PPC;
@@ -188,6 +188,7 @@ test "queryCycle: the window is the tick's enclosing cycle (slowcat alternation)
     // `(slowcat 0.1 0.2)` plays child i at cycle i — querying at a tick
     // inside cycle 1 must return the SECOND child, pinning the window
     // derivation through the real engine.
+    const sjon = @import("sjon"); // write side (parse): indented test-only
     const gpa = t_.allocator;
     var tree = try sjon.parse(gpa, "(slowcat 0.1 0.2)");
     defer tree.deinit();
@@ -203,6 +204,7 @@ test "sampleAt: fastcat slots land structurally, the boundary picks the later sl
     // `[0.1 0.2 0.3 0.4]` tiles cycle 0 into quarter-bar slots. Sampling at a
     // slot onset returns that slot (half-open), a slot boundary returns the
     // NEXT slot, and an interior tick holds its slot.
+    const sjon = @import("sjon"); // write side (parse): indented test-only
     const gpa = t_.allocator;
     var tree = try sjon.parse(gpa, "[0.1 0.2 0.3 0.4]");
     defer tree.deinit();
@@ -219,6 +221,7 @@ test "sampleAt: fastcat slots land structurally, the boundary picks the later sl
 }
 
 test "sampleAt: a silence slot has no active hap → null" {
+    const sjon = @import("sjon"); // write side (parse): indented test-only
     const gpa = t_.allocator;
     var tree = try sjon.parse(gpa, "[0.5 (silence)]");
     defer tree.deinit();
@@ -233,6 +236,7 @@ test "sampleAt: a silence slot has no active hap → null" {
 test "sampleAt: overlapping stack layers tie on onset → the last (top) layer wins" {
     // `(stack 0.1 0.2)` layers two full-cycle haps sharing onset 0; the tie
     // breaks to the last child in query order (the top declared layer).
+    const sjon = @import("sjon"); // write side (parse): indented test-only
     const gpa = t_.allocator;
     var tree = try sjon.parse(gpa, "(stack 0.1 0.2)");
     defer tree.deinit();

@@ -83,7 +83,7 @@
 //! non-reserved id table, `'CTRL'` join/env-only coherence), the T2.6
 //! payload stage (`decodePayloads`: `'PAYL'` arithmetic/caps/
 //! span discipline + the per-payload single-root structural walk over
-//! `sjon.BinaryCursor`, schema-free, producing the per-track arena
+//! `RtSjon.BinaryCursor`, schema-free, producing the per-track arena
 //! copies), and the T2.8 whole-blob assembly (`decode` →
 //! `DecodedScore` + `verifyRouting`, the PACM coherence cross-check).
 //! The stages remain individually public — each owns its section's
@@ -105,8 +105,9 @@
 //! caller that passes an ordinary allocator still gets a
 //! self-contained stage.
 //!
-//! Imports: std, sjon (`Pattern.MAX_TICK`, `BinaryCursor`, `Binary`),
-//! `PactCodec`, `TimeMap`, `TrackTable`, `Easing`, `Pacm` (the frozen
+//! Imports: std, `RtSjon.zig` — the runtime closure's single SJON window
+//! (02 T2.1: `Pattern.MAX_TICK`, `BinaryCursor`) — `PactCodec`,
+//! `TimeMap`, `TrackTable`, `Easing`, `Pacm` (the frozen
 //! end-state set). This file must NEVER import `Compile`, `Abi`,
 //! `Schema`, or `Driver` — the compiler-oracle tests (`decoded
 //! transport equals the compiled transport`, the T2.8 ownership and
@@ -118,7 +119,7 @@
 //! (asserted against its source in `src/root.zig`).
 
 const std = @import("std");
-const sjon = @import("sjon");
+const RtSjon = @import("RtSjon.zig");
 const PactCodec = @import("PactCodec.zig");
 const TimeMap = @import("TimeMap.zig");
 const TrackTable = @import("TrackTable.zig");
@@ -149,11 +150,18 @@ pub const MAX_PAYL_BYTES: usize = 4 * 1024 * 1024;
 /// Global explicit-trigger entry cap (v1 resource policy; derivation in
 /// the module header).
 pub const MAX_TICK_ENTRIES: usize = 131072;
+/// The binary payload walk's depth cap — a FROZEN COPY (02 T2.1 / C1):
+/// the source constant lives on SJON's write side (`Binary.MAX_TREE_DEPTH`,
+/// itself `BinaryFormat.MAX_TREE_DEPTH: u32 = 1024`), which the runtime
+/// closure's `RtSjon` window deliberately does not carry, so it is
+/// spelled here instead. Equality-pinned against the source in
+/// `src/root.zig`'s frozen-copy test family, like every other copy.
+pub const MAX_TREE_DEPTH: u32 = 1024;
 /// The folded-tick envelope: the widest tick-domain value any decoded
 /// field may carry. Scened fields (keys `at`, periodic `trig_offset`,
 /// explicit `'TICK'` entries) are ONE checked i64 add of the scene start
-/// (|v| ≤ `sjon.Pattern.MAX_TICK`) and a local position (|v| ≤
-/// `sjon.Pattern.MAX_TICK`), so their producer envelope is exactly
+/// (|v| ≤ `RtSjon.Pattern.MAX_TICK`) and a local position (|v| ≤
+/// `RtSjon.Pattern.MAX_TICK`), so their producer envelope is exactly
 /// ±2·MAX_TICK inclusive — 2·MAX_TICK itself is compile-reachable
 /// (scene start MAX_TICK + local MAX_TICK) and accepted; everything past
 /// it is producer-impossible and refused. Unfolded tick fields keep the
@@ -162,7 +170,7 @@ pub const MAX_TICK_ENTRIES: usize = 131072;
 /// ≤ MAX_TICK (no fold exists there). The bound keeps every eval-side
 /// subtraction (`t - at`, `t - offset`, widest intermediate `b.at -
 /// a.at` ≤ 2⁵⁵) comfortably inside i64 for every probe |t| ≤ MAX_TICK.
-pub const MAX_FOLDED_TICK: i64 = 2 * sjon.Pattern.MAX_TICK;
+pub const MAX_FOLDED_TICK: i64 = 2 * RtSjon.Pattern.MAX_TICK;
 
 comptime {
     // Headroom for the eval-side arithmetic at the envelope: the widest
@@ -171,7 +179,7 @@ comptime {
     // which must never approach the i64 ceiling. Checked-inequality
     // form everywhere — no `@abs` on an i64 min can occur under this
     // bound (|v| ≤ 2·MAX_TICK ≪ |i64 min|).
-    std.debug.assert(4 * sjon.Pattern.MAX_TICK < std.math.maxInt(i64));
+    std.debug.assert(4 * RtSjon.Pattern.MAX_TICK < std.math.maxInt(i64));
 }
 
 // Frozen copies of the compile-side caps. `Pacb` never imports the
@@ -603,7 +611,7 @@ pub fn decodeTransport(
     const dur_field = readI64(tr, 16);
     var dur: ?TrackTable.Tick = null;
     if (dur_present) {
-        if (dur_field <= 0 or dur_field > sjon.Pattern.MAX_TICK) {
+        if (dur_field <= 0 or dur_field > RtSjon.Pattern.MAX_TICK) {
             return fail(refusal, .transport_invalid, tran.off + 16);
         }
         dur = dur_field;
@@ -647,7 +655,7 @@ pub fn decodeTransport(
             const at = sec.off + 4 + i * TMPO_REC_LEN;
             const tick = readI64(bytes, at);
             const seg_bpm = readF64(bytes, at + 8);
-            if (tick > sjon.Pattern.MAX_TICK or tick < -sjon.Pattern.MAX_TICK) {
+            if (tick > RtSjon.Pattern.MAX_TICK or tick < -RtSjon.Pattern.MAX_TICK) {
                 return fail(refusal, .tempo_invalid, at);
             }
             if (i == 0) {
@@ -1338,7 +1346,7 @@ pub fn decodeRecords(
                         // the folded envelope (the scene start folds in
                         // once — `t - offset` stays inside i64 for every
                         // probe tick).
-                        if (trig_every <= 0 or trig_every > sjon.Pattern.MAX_TICK) {
+                        if (trig_every <= 0 or trig_every > RtSjon.Pattern.MAX_TICK) {
                             return fail(refusal, .trigger_invalid, at + 24);
                         }
                         if (trig_offset > MAX_FOLDED_TICK or trig_offset < -MAX_FOLDED_TICK) {
@@ -2069,7 +2077,7 @@ fn walkPayloadStructurally(
     refusal: ?*Refusal,
     payload_at: usize,
 ) DecodeError!void {
-    const BC = sjon.BinaryCursor;
+    const BC = RtSjon.BinaryCursor;
 
     var cursor = BC.Cursor.init(payload) catch {
         return fail(refusal, .payload_malformed, payload_at);
@@ -2096,7 +2104,7 @@ fn walkPayloadStructurally(
         vec: BC.VectorIter,
         children: BC.ChildIter,
     };
-    var stack: [sjon.Binary.MAX_TREE_DEPTH]WalkFrame = undefined;
+    var stack: [MAX_TREE_DEPTH]WalkFrame = undefined;
     var depth: usize = 0;
 
     var current = root;
@@ -4686,7 +4694,7 @@ test "Pacb: an explicit schedule is non-empty, ascending, tick-bounded, slice-bo
     }
     {
         var base = baseRecords();
-        base.tick[1] = 2 * sjon.Pattern.MAX_TICK + 1; // beyond the fold envelope
+        base.tick[1] = 2 * RtSjon.Pattern.MAX_TICK + 1; // beyond the fold envelope
         const built = try buildBaseFixture(t.allocator, &base, regs);
         defer t.allocator.free(built.buf);
         try expectRecordsRefusal(built.buf, .trigger_invalid);
@@ -4703,7 +4711,7 @@ test "Pacb: an explicit schedule is non-empty, ascending, tick-bounded, slice-bo
 test "Pacb: keys at carries the folded 2*MAX_TICK envelope" {
     const regs = try encodePact(t.allocator, &host_two);
     defer t.allocator.free(regs);
-    const folded_max: i64 = 2 * sjon.Pattern.MAX_TICK;
+    const folded_max: i64 = 2 * RtSjon.Pattern.MAX_TICK;
 
     // Boundary acceptance: a scened key is ONE checked fold of the scene
     // start (|v| <= MAX_TICK) and a local position (|v| <= MAX_TICK), so
@@ -4712,7 +4720,7 @@ test "Pacb: keys at carries the folded 2*MAX_TICK envelope" {
     // round-trip class the interim review named).
     {
         var base = baseRecords();
-        base.scen[0] = .{ .start_tick = sjon.Pattern.MAX_TICK, .dur_ticks = 1 };
+        base.scen[0] = .{ .start_tick = RtSjon.Pattern.MAX_TICK, .dur_ticks = 1 };
         base.keys[2].at = folded_max;
         const built = try buildBaseFixture(t.allocator, &base, regs);
         defer t.allocator.free(built.buf);
@@ -4758,16 +4766,16 @@ test "Pacb: keys at carries the folded 2*MAX_TICK envelope" {
 test "Pacb: periodic every and offset carry their tick envelopes" {
     const regs = try encodePact(t.allocator, &host_two);
     defer t.allocator.free(regs);
-    const folded_max: i64 = 2 * sjon.Pattern.MAX_TICK;
+    const folded_max: i64 = 2 * RtSjon.Pattern.MAX_TICK;
 
     // `every` is never scene-folded (it converts at the map origin), so
     // its envelope is the grid bound itself: 1..MAX_TICK inclusive.
     // `offset` folds the scene start once: |offset| <= 2*MAX_TICK.
     {
         var base = baseRecords();
-        base.scen[0] = .{ .start_tick = sjon.Pattern.MAX_TICK, .dur_ticks = 1 };
+        base.scen[0] = .{ .start_tick = RtSjon.Pattern.MAX_TICK, .dur_ticks = 1 };
         base.trak[2].scene = 0;
-        base.trak[2].trig_every = sjon.Pattern.MAX_TICK;
+        base.trak[2].trig_every = RtSjon.Pattern.MAX_TICK;
         base.trak[2].trig_offset = folded_max;
         const built = try buildBaseFixture(t.allocator, &base, regs);
         defer t.allocator.free(built.buf);
@@ -4779,7 +4787,7 @@ test "Pacb: periodic every and offset carry their tick envelopes" {
         try t.expect(stage.tracks[2].source == .trigger);
         switch (stage.tracks[2].source.trigger) {
             .periodic => |p| {
-                try t.expectEqual(sjon.Pattern.MAX_TICK, p.every);
+                try t.expectEqual(RtSjon.Pattern.MAX_TICK, p.every);
                 try t.expectEqual(folded_max, p.offset);
             },
             else => return error.UnexpectedArm,
@@ -4804,7 +4812,7 @@ test "Pacb: periodic every and offset carry their tick envelopes" {
     // `every` past MAX_TICK refuses (producer-impossible at the origin).
     {
         var base = baseRecords();
-        base.trak[2].trig_every = sjon.Pattern.MAX_TICK + 1;
+        base.trak[2].trig_every = RtSjon.Pattern.MAX_TICK + 1;
         const built = try buildBaseFixture(t.allocator, &base, regs);
         defer t.allocator.free(built.buf);
         try expectRecordsRefusal(built.buf, .trigger_invalid);
@@ -4830,7 +4838,7 @@ test "Pacb: periodic every and offset carry their tick envelopes" {
 test "Pacb: explicit schedule ticks carry the folded 2*MAX_TICK envelope" {
     const regs = try encodePact(t.allocator, &host_two);
     defer t.allocator.free(regs);
-    const folded_max: i64 = 2 * sjon.Pattern.MAX_TICK;
+    const folded_max: i64 = 2 * RtSjon.Pattern.MAX_TICK;
 
     // The scened-fold parity case: scene start MAX_TICK + local position
     // MAX_TICK folds to exactly 2*MAX_TICK — compile emits it with one
@@ -4838,7 +4846,7 @@ test "Pacb: explicit schedule ticks carry the folded 2*MAX_TICK envelope" {
     // it, and refusing it would break T3.1 round-trip parity.
     {
         var base = baseRecords();
-        base.scen[0] = .{ .start_tick = sjon.Pattern.MAX_TICK, .dur_ticks = 1 };
+        base.scen[0] = .{ .start_tick = RtSjon.Pattern.MAX_TICK, .dur_ticks = 1 };
         base.trak[3].scene = 0;
         base.tick[2] = folded_max;
         const built = try buildBaseFixture(t.allocator, &base, regs);
@@ -5968,6 +5976,7 @@ fn expectPayloadRefusal(bytes: []const u8, code: RefusalCode) !void {
 /// Compact single-root SJON binary IR for a source snippet (the frozen
 /// encoder choice, A29 — test-side oracle; the decoder only ever reads).
 fn toBinaryCompact(alloc: std.mem.Allocator, src: [:0]const u8) ![]u8 {
+    const sjon = @import("sjon"); // write side: indented test-only
     var tree = try sjon.parse(alloc, src);
     defer tree.deinit();
     const bin = try sjon.Binary.toBinary(
@@ -6314,6 +6323,7 @@ test "Pacb: node comments and spans payloads walk (positive fixture)" {
     // comment — the comment sites the cursor's own iterators consume
     // (leading inside `nextNodeView`, trailing on iterator exhaustion).
     // NOT covered: the tree-trailing block (the known gap below).
+    const sjon = @import("sjon"); // write side: indented test-only
     var tree = try sjon.parse(t.allocator, "; lead\n[; inner\n1 2 ; vtail]");
     defer tree.deinit();
     const bin = try sjon.Binary.toBinary(t.allocator, tree, .{ .with_node_comments = true });
@@ -6351,6 +6361,7 @@ test "Pacb: KNOWN GAP — tree-trailing comments payloads currently refuse" {
     // cursor capability lands, the expectation flips to acceptance;
     // refusing the flag combination as non_canonical was ruled out as a
     // unilateral narrowing.
+    const sjon = @import("sjon"); // write side: indented test-only
     var tree = try sjon.parse(t.allocator, "(+ 1 t) ; tail");
     defer tree.deinit();
     const bin = try sjon.Binary.toBinary(t.allocator, tree, .{
@@ -6768,7 +6779,7 @@ fn interpKeys(
 
 test "Pacb: decode assembles a full compiled score and owns it after the input is clobbered" {
     const ExprTrack = @import("ExprTrack.zig");
-    const PPC = sjon.Pattern.PPC;
+    const PPC = RtSjon.Pattern.PPC;
 
     var a = try compileWithPacm(t.allocator, full_source, &full_host);
     defer a.r.deinit();
@@ -6933,7 +6944,7 @@ test "Pacb: decode assembles a full compiled score and owns it after the input i
     }
     var storage: ExprTrack.EnvStorage = undefined;
     const env = ExprTrack.buildEnv(&storage, &score.transport, got_bindings[0..score.controls.len], 0, null);
-    var bres = try sjon.Expr.evalBinary(t.allocator, score.tracks[expr_idx].source.expr, env, a.r.eval_schema);
+    var bres = try RtSjon.Expr.evalBinary(t.allocator, score.tracks[expr_idx].source.expr, env, a.r.eval_schema);
     defer bres.deinit();
     try t.expect(bres.value == .vector);
     try t.expectEqual(@as(usize, 3), bres.value.vector.len);
@@ -7035,10 +7046,10 @@ test "Pacb: PACM transport lies refuse meta_incoherent" {
     try expectDecodeRefusal(built.buf, .meta_incoherent);
     putU16(pacm, 24, 4);
 
-    putI64(pacm, 16, 8 * sjon.Pattern.PPC + 1);
+    putI64(pacm, 16, 8 * RtSjon.Pattern.PPC + 1);
     repointPacmFnv(built.buf, built.layout);
     try expectDecodeRefusal(built.buf, .meta_incoherent);
-    putI64(pacm, 16, 8 * sjon.Pattern.PPC);
+    putI64(pacm, 16, 8 * RtSjon.Pattern.PPC);
 
     pacm[26] ^= 0b10;
     repointPacmFnv(built.buf, built.layout);
@@ -7162,10 +7173,10 @@ test "Pacb: PACM key-content lies refuse meta_incoherent" {
     // Key array base (past the 3 track records), relative to the blob.
     const keys: usize = 40 + 3 * 24;
 
-    putI64(pacm, keys + 32, 3 * sjon.Pattern.PPC + 1); // key 1 at
+    putI64(pacm, keys + 32, 3 * RtSjon.Pattern.PPC + 1); // key 1 at
     repointPacmFnv(built.buf, built.layout);
     try expectDecodeRefusal(built.buf, .meta_incoherent);
-    putI64(pacm, keys + 32, 3 * sjon.Pattern.PPC);
+    putI64(pacm, keys + 32, 3 * RtSjon.Pattern.PPC);
 
     putF32(pacm, keys + 32 + 8, 141); // key 1 value[0]
     repointPacmFnv(built.buf, built.layout);
@@ -7215,7 +7226,7 @@ test "Pacb: PACM scene payload divergence refuses meta_incoherent" {
     // 'SCEN' shared fields (start_tick/dur_ticks); the name span is a
     // documented source string — trusted, never cross-checked.
     const scen = pacmSectionOff(pacm, 0x4e454353); // "SCEN"
-    putI64(pacm, scen + 8 + 4, 2 * sjon.Pattern.PPC + 1); // scene 0 start
+    putI64(pacm, scen + 8 + 4, 2 * RtSjon.Pattern.PPC + 1); // scene 0 start
     repointPacmFnv(built.buf, built.layout);
     try expectDecodeRefusal(built.buf, .meta_incoherent);
 }

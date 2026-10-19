@@ -135,11 +135,16 @@ ride ABOVE plan 02, both owner decisions already asked: (1) the
 tree-trailing-comments gap — SJON `RootIter` exhaustion-consume fix vs
 approved narrowing (permission ask timed out; the KNOWN-GAP test pins
 the interim refusal, not a contract); (2) the broad post-wave review
-of 01. Plan 02's **P1 is now COMPLETE (2026-10-19)** — the
+of 01. Plan 02's **P1 is COMPLETE (2026-10-19)** — the
 `EvalCore` leaf + `Eval` facade landed with zero respells and zero
-behavior change (status board row B). Next plan-02 work is **P2** —
-`rt_entry.zig`, the `wasm-rt` artifact, the transactional load, and the
-closure gate (T2.1's `RtSjon` window first). The pre-existing `posToTickLocal` assert on a
+behavior change (status board row B). Plan 02's **P2 is now under
+way: T2.1 landed the `RtSjon` window** — the runtime closure's single
+SJON import behind the frozen nine-row table, with the frozen
+`Pacb.MAX_TREE_DEPTH` copy equality-pinned in root's frozen-copy
+family and zero corpus/CLI drift vs the P1 HEAD. Next plan-02 work is
+**T2.2** — `rt_entry.zig`, the `wasm-rt` artifact, the transactional
+load — then the closure gate (T2.3/T2.4) and the preliminary size
+trend (T2.5) close P2. The pre-existing `posToTickLocal` assert on a
 bare unitless number in a time-pos slot (T3.2 finding, G-ter item 9)
 also remains owner-notified.
 

@@ -16,7 +16,7 @@
 //! allocation, no host-stack descent (the walker discipline does not
 //! apply; programs are flat by construction).
 //!
-//! Determinism: primitives use only polynomials, `sjon.trig` kernels
+//! Determinism: primitives use only polynomials, `RtSjon.trig` kernels
 //! (`sin64`/`cos64`/`exp64`/`pow64` — bit-identical native vs wasm32),
 //! and fixed-count bisection for cubic-bezier (32 iterations, no epsilon
 //! early-exit). Exact landing on key values is STRUCTURAL — segment
@@ -27,8 +27,8 @@
 //! compiler as `pacer_ease_cap_exceeded`-class diagnostics with spans.
 
 const std = @import("std");
-const sjon = @import("sjon");
-const trig = sjon.trig;
+const RtSjon = @import("RtSjon.zig");
+const trig = RtSjon.trig;
 
 /// Stage cap per program. A bounce-and-settle needs 3; 8 is headroom.
 pub const MAX_STAGES = 8;

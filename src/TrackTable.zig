@@ -32,11 +32,11 @@
 //! never retains the caller's GPA.
 
 const std = @import("std");
-const sjon = @import("sjon");
+const RtSjon = @import("RtSjon.zig");
 const TimeMap = @import("TimeMap.zig");
 const Easing = @import("Easing.zig");
 
-pub const Tick = sjon.Pattern.Tick;
+pub const Tick = RtSjon.Pattern.Tick;
 
 /// Caps. Exceeding any is a load diagnostic with a span, never a panic.
 pub const MAX_TRACKS = 256;
@@ -146,7 +146,7 @@ pub const Source = union(enum) {
     keys: struct { start: u32, len: u32 },
     /// The `:expr` value node, evaluated against the compile result's
     /// tree each frame with the time env bound (see `ExprTrack`).
-    expr: sjon.Ast.NodeIndex,
+    expr: RtSjon.Ast.NodeIndex,
     /// A `(trigger …)` event schedule (see `Trigger`); the frame path
     /// derives its lanes from the schedule, never from `keys`/the AST.
     trigger: Trigger,
@@ -155,7 +155,7 @@ pub const Source = union(enum) {
     /// IS the per-bar tick count). Dry-run at load via `PatternTrack`
     /// (plan 03 Phase 2); the eval-time point-sample lands in Phase 3 —
     /// until then a pattern track emits no writes.
-    pattern: sjon.Ast.NodeIndex,
+    pattern: RtSjon.Ast.NodeIndex,
 };
 
 /// One animated target. `target_id`/`registry`/`ncomp` come from the
@@ -183,7 +183,7 @@ pub const Scene = struct {
     /// Span of the `:name` symbol in score-source coordinates — the
     /// editor slices the scene's name from it (`drv_meta` writes it
     /// through verbatim); the frame path never reads it.
-    name_span: sjon.Ast.Span,
+    name_span: RtSjon.Ast.Span,
     /// Window start on the transport grid.
     start_tick: Tick,
     /// Window length; child tracks play over `[start, start+dur)`.
@@ -221,7 +221,7 @@ pub const Control = struct {
     /// Span of the `:value` literal in score-source coordinates — the
     /// commit-to-text anchor for editor widgets (`drv_meta` writes it
     /// through verbatim).
-    value_span: sjon.Ast.Span,
+    value_span: RtSjon.Ast.Span,
 };
 
 arena: std.heap.ArenaAllocator,
@@ -239,8 +239,8 @@ controls: []const Control,
 /// coordinates, parallel to `tracks` / `keys` (key spans ride the same
 /// sort as their keys). Pure `drv_meta` material — the editor's
 /// timeline anchors; the frame path never reads them.
-track_spans: []const sjon.Ast.Span,
-key_spans: []const sjon.Ast.Span,
+track_spans: []const RtSjon.Ast.Span,
+key_spans: []const RtSjon.Ast.Span,
 /// `(scene …)` windows in document order; a track's `scene` field
 /// indexes here. Empty when the score declares no scenes.
 scenes: []const Scene = &.{},

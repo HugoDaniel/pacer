@@ -60,12 +60,12 @@
 //! identical result, native and wasm32.
 
 const std = @import("std");
-const sjon = @import("sjon");
+const RtSjon = @import("RtSjon.zig");
 const TrackTable = @import("TrackTable.zig");
 const TimeMap = @import("TimeMap.zig");
 
-const Ast = sjon.Ast;
-const Expr = sjon.Expr;
+const Ast = RtSjon.Ast;
+const Expr = RtSjon.Expr;
 
 pub const Tick = TrackTable.Tick;
 
@@ -171,7 +171,7 @@ pub fn buildEnv(
 pub fn evalAt(
     gpa: std.mem.Allocator,
     tree: *const Ast.Tree,
-    schema: sjon.Schema.Schema,
+    schema: RtSjon.Schema.Schema,
     transport: *const TrackTable.Transport,
     controls: []const ControlBinding,
     node: Ast.NodeIndex,
@@ -204,7 +204,7 @@ pub fn evalAt(
 pub fn evalAtBinary(
     gpa: std.mem.Allocator,
     payload: []const u8,
-    schema: sjon.Schema.Schema,
+    schema: RtSjon.Schema.Schema,
     transport: *const TrackTable.Transport,
     controls: []const ControlBinding,
     tick: Tick,
@@ -331,13 +331,18 @@ fn finite32(x: f64) ?f32 {
 
 const t_ = std.testing;
 
-const core_plugins = [_]sjon.Plugin.Plugin{sjon.plugins.core.plugin};
-const core_schema: sjon.Schema.Schema = .{ .plugins = &core_plugins };
+const core_plugins = [_]RtSjon.Plugin.Plugin{RtSjon.plugins.core.plugin};
+const core_schema: RtSjon.Schema.Schema = .{ .plugins = &core_plugins };
 
 const TestDoc = struct {
-    result: sjon.Host.HostResult,
+    // Write-side `Host.HostResult` — test-only, so the import rides the
+    // indented field (the closure split, 02:200-202): TestDoc is lazily
+    // analyzed, referenced only from tests, so no non-test build (and
+    // no runtime artifact) ever resolves it.
+    result: @import("sjon").Host.HostResult,
 
     fn init(source: [:0]const u8) !TestDoc {
+        const sjon = @import("sjon");
         return .{ .result = try sjon.validateDocument(t_.allocator, source, .{}) };
     }
     fn deinit(self: *TestDoc) void {
@@ -380,7 +385,7 @@ test "evalAt: time bindings golden at 6.5 beats (all dyadic-exact)" {
 test "evalAt: phase stays in [0,1) at negative ticks" {
     var doc = try TestDoc.init("(+ phase 0)");
     defer doc.deinit();
-    const tick: Tick = -@divExact(sjon.Pattern.PPC, 4);
+    const tick: Tick = -@divExact(RtSjon.Pattern.PPC, 4);
     const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), tick, null, 1);
     try t_.expectEqual(@as(f32, 0.75), v[0]);
 }
@@ -393,7 +398,7 @@ test "evalAt: dur is bound only when the transport declares :dur" {
         evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, null, 1),
     );
     var bounded = test_transport;
-    bounded.dur = 4 * sjon.Pattern.PPC; // 4 bars = 16 beats
+    bounded.dur = 4 * RtSjon.Pattern.PPC; // 4 bars = 16 beats
     const v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &bounded, &.{}, doc.node(0), 0, null, 1);
     try t_.expectEqual(@as(f32, 16), v[0]);
 }
@@ -501,11 +506,9 @@ test "evalAt: an unbound control name is still UnknownBinding" {
 // tree, then `Binary.toBinary(.forMode(.compact))` (what
 // `PacbEncode.encodePayload` encodes, A29) — never hand-mocked bytes. The
 // write-side SJON this needs is test-only, so it keeps an INDENTED import
-// per the closure split (02:200-202). It is spelled `sjon_w`, not `sjon`,
-// only because the file-scope production `sjon` still exists here and Zig
-// forbids a local shadowing it — T2.1's RtSjon reroute renames the
-// production import and this alias becomes plain `sjon`. The tree arm's
-// `evalAt` on the SAME env is the equivalence oracle throughout.
+// per the closure split (02:200-202) — the file's column-0 import is the
+// runtime window `RtSjon`, which carries none of the write side. The tree
+// arm's `evalAt` on the SAME env is the equivalence oracle throughout.
 // ---------------------------------------------------------------------------
 
 /// Compact single-root payload for one validated expr node of `doc`,
@@ -513,14 +516,14 @@ test "evalAt: an unbound control name is still UnknownBinding" {
 /// the one-root tree against "" (compact drops spans; strings re-intern),
 /// encode compact. Caller owns the returned bytes.
 fn compactPayload(a: std.mem.Allocator, doc: *const TestDoc, node: usize) ![]u8 {
-    const sjon_w = @import("sjon");
+    const sjon = @import("sjon");
     var tree_arena = std.heap.ArenaAllocator.init(a);
     defer tree_arena.deinit(); // no-op once finalize snapshots the arena
-    var builder = sjon_w.Ast.TreeBuilder{ .a = tree_arena.allocator() };
+    var builder = sjon.Ast.TreeBuilder{ .a = tree_arena.allocator() };
     const root = try builder.cloneNode(&doc.result.tree, doc.node(node));
     var one_root = try builder.finalize(&tree_arena, "", &.{root});
     defer one_root.deinit();
-    const bin = try sjon_w.Binary.toBinary(a, one_root, sjon_w.Binary.ToBinaryOptions.forMode(.compact));
+    const bin = try sjon.Binary.toBinary(a, one_root, sjon.Binary.ToBinaryOptions.forMode(.compact));
     defer bin.deinit();
     return a.dupe(u8, bin.data);
 }
@@ -559,7 +562,7 @@ test "evalAtBinary: phase stays in [0,1) at negative ticks — bit-equal both ar
     defer doc.deinit();
     const payload = try compactPayload(t_.allocator, &doc, 0);
     defer t_.allocator.free(payload);
-    const tick: Tick = -@divExact(sjon.Pattern.PPC, 4);
+    const tick: Tick = -@divExact(RtSjon.Pattern.PPC, 4);
     const want = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), tick, null, 1);
     const got = try evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &.{}, tick, null, 1);
     try t_.expectEqual(want, got);
@@ -700,11 +703,11 @@ test "evalAtBinary: result-shape rejections match the tree arm — boolean, arit
 }
 
 test "evalAtBinary: malformed and non-single-root payloads are errors, never traps" {
-    const sjon_w = @import("sjon");
+    const sjon = @import("sjon");
     // A valid compact encoding of a zero-root document: not single-root.
-    var tree = try sjon_w.parse(t_.allocator, "");
+    var tree = try sjon.parse(t_.allocator, "");
     defer tree.deinit();
-    const bin = try sjon_w.Binary.toBinary(t_.allocator, tree, sjon_w.Binary.ToBinaryOptions.forMode(.compact));
+    const bin = try sjon.Binary.toBinary(t_.allocator, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
     defer bin.deinit();
     try t_.expectError(
         error.MultipleRoots,

@@ -1,6 +1,6 @@
 //! Transport math: bpm/meter ↔ ticks/beats/seconds on the shared grid.
 //!
-//! One bar = one cycle = `sjon.Pattern.PPC` ticks. The meter's
+//! One bar = one cycle = `Pattern.PPC` ticks. The meter's
 //! beats-per-bar (validated 1..16 by the manifest) divides PPC exactly,
 //! so integer beat/bar positions are exact integer ticks.
 //!
@@ -42,8 +42,8 @@
 //! (they originate in user documents / host clocks), never panics.
 
 const std = @import("std");
-const sjon = @import("sjon");
-const Pattern = sjon.Pattern;
+const RtSjon = @import("RtSjon.zig");
+const Pattern = RtSjon.Pattern;
 
 pub const Tick = Pattern.Tick;
 

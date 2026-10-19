@@ -99,7 +99,7 @@
 //! entries (and `Writes.encode` bytes), native and wasm32.
 
 const std = @import("std");
-const sjon = @import("sjon");
+const RtSjon = @import("RtSjon.zig");
 const TrackTable = @import("TrackTable.zig");
 const TimeMap = @import("TimeMap.zig");
 const Writes = @import("Writes.zig");
@@ -112,7 +112,7 @@ const PatternTrack = @import("PatternTrack.zig");
 /// table's `.expr` node indices are inert sentinels there — never
 /// dereferenced, C4).
 pub const LeafSource = union(enum) {
-    tree: *const sjon.Ast.Tree,
+    tree: *const RtSjon.Ast.Tree,
     binary: struct {
         /// Compact single-root expr payloads, PARALLEL to
         /// `table.tracks`: the `.expr` track's payload at its track
@@ -138,11 +138,11 @@ pub const Context = struct {
     /// text-path semantics and must keep resolving). Binary arm — the
     /// frozen core-only schema (+ pattern at P4); user heads never
     /// enter a binary because pack refuses them (01, decision 8).
-    schema: sjon.Schema.Schema,
+    schema: RtSjon.Schema.Schema,
 };
 
 /// The shared grid position type (`i64`), re-exported for call sites.
-pub const Tick = sjon.Pattern.Tick;
+pub const Tick = RtSjon.Pattern.Tick;
 
 /// Time conversion failures (host clock out of range). The tick-domain
 /// path is total once conversion succeeded.
@@ -200,7 +200,7 @@ pub const Evaluator = struct {
     /// validated tree (text path) or the parallel binary payloads
     /// (runtime). Mutually exclusive by construction (`LeafSource`).
     source: LeafSource,
-    schema: sjon.Schema.Schema,
+    schema: RtSjon.Schema.Schema,
     /// Per-track resume cursor, indexed by track position: the last
     /// segment hit for a keyframe track (`keys[i] ≤ t < keys[i+1]`), the
     /// last event index for a trigger `:at` track (see `evalTrigger`).
@@ -427,8 +427,8 @@ pub const Evaluator = struct {
     /// `drv_evalTicks` gates it; the trigger/window integer math relies
     /// on the headroom.
     pub fn evalTicks(self: *Evaluator, t_raw: Tick) []const Writes.Entry {
-        std.debug.assert(t_raw <= sjon.Pattern.MAX_TICK);
-        std.debug.assert(t_raw >= -sjon.Pattern.MAX_TICK);
+        std.debug.assert(t_raw <= RtSjon.Pattern.MAX_TICK);
+        std.debug.assert(t_raw >= -RtSjon.Pattern.MAX_TICK);
         const table = self.table;
         const transport = &self.transport;
         var t = t_raw;
@@ -632,7 +632,7 @@ pub const Evaluator = struct {
     fn evalPatternTrack(
         self: *Evaluator,
         track: *const TrackTable.Track,
-        node: sjon.Ast.NodeIndex,
+        node: RtSjon.Ast.NodeIndex,
         t: Tick,
         scene: ?TrackTable.Scene,
     ) ?Writes.Entry {
@@ -823,10 +823,8 @@ fn hasEvalContext(comptime S: type) bool {
 // Here: the construction surface and the binary arm, pinned against the
 // tree arm on the SAME table. The compiler-side imports these tests
 // need sit INDENTED inside each test (the closure split, 02:200-202):
-// this file's column-0 imports are its production surface only. The
-// write-side sjon payload builder therefore spells its import `sjon_w`
-// (a file-scope `sjon` exists — the T1.1 transitional spelling; T2.1's
-// RtSjon reroute renames it).
+// this file's column-0 imports are its production surface only, and the
+// write-side payload builder below keeps its own indented module import.
 // ---------------------------------------------------------------------------
 
 const t_ = std.testing;
@@ -835,22 +833,22 @@ const t_ = std.testing;
 /// the frozen producer's exact spell (`TreeBuilder.cloneNode` into a
 /// fresh one-root tree, `Binary.toBinary(.forMode(.compact))`, what the
 /// pack path encodes). Test-only; caller owns the returned bytes.
-fn compactPayloadFor(a: std.mem.Allocator, tree: *const sjon.Ast.Tree, node: sjon.Ast.NodeIndex) ![]u8 {
-    const sjon_w = @import("sjon");
+fn compactPayloadFor(a: std.mem.Allocator, tree: *const RtSjon.Ast.Tree, node: RtSjon.Ast.NodeIndex) ![]u8 {
+    const sjon = @import("sjon");
     var tree_arena = std.heap.ArenaAllocator.init(a);
     defer tree_arena.deinit(); // no-op once finalize snapshots the arena
-    var builder = sjon_w.Ast.TreeBuilder{ .a = tree_arena.allocator() };
+    var builder = sjon.Ast.TreeBuilder{ .a = tree_arena.allocator() };
     const root = try builder.cloneNode(tree, node);
     var one_root = try builder.finalize(&tree_arena, "", &.{root});
     defer one_root.deinit();
-    const bin = try sjon_w.Binary.toBinary(a, one_root, sjon_w.Binary.ToBinaryOptions.forMode(.compact));
+    const bin = try sjon.Binary.toBinary(a, one_root, sjon.Binary.ToBinaryOptions.forMode(.compact));
     defer bin.deinit();
     return a.dupe(u8, bin.data);
 }
 
 /// The core-only schema — the binary arm's frozen aggregate.
-const core_plugins = [_]sjon.Plugin.Plugin{sjon.plugins.core.plugin};
-const core_only_schema: sjon.Schema.Schema = .{ .plugins = &core_plugins };
+const core_plugins = [_]RtSjon.Plugin.Plugin{RtSjon.plugins.core.plugin};
+const core_only_schema: RtSjon.Schema.Schema = .{ .plugins = &core_plugins };
 
 test "EvalCore: initContext evaluates a binary-arm context bit-equal to the facade path" {
     const Compile = @import("Compile.zig");

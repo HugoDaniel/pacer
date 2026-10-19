@@ -256,6 +256,18 @@ test "Pacb: frozen reserved-name copy matches ExprTrack.reserved_names" {
     }
 }
 
+test "Pacb: frozen MAX_TREE_DEPTH copy matches the binary format's own cap" {
+    // The payload walk's depth bound is a frozen copy (02 T2.1 / C1):
+    // the runtime closure reaches SJON only through `RtSjon.zig`, whose
+    // window carries no write-side `Binary`, so `Pacb` spells the
+    // constant itself. Root imports both sides with no cycle — this is
+    // the equality gate the copy depends on (the family precedent).
+    try std.testing.expectEqual(
+        sjon.Binary.MAX_TREE_DEPTH,
+        Pacb.MAX_TREE_DEPTH,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Pacm — frozen-copy equality gates + the producer-oracle comparisons
 // ---------------------------------------------------------------------------

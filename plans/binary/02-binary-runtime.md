@@ -395,3 +395,34 @@ _(created 2026-10-18; entries appended per phase)_
   generic init), C3 by value — both per the plan's own §0 rulings; the
   plan's EvalCore import list naming `Easing` was approximate (the moved
   engine needs none — compiler-guided, as the plan allows).
+- **2026-10-19 — P2 in progress: T2.1 landed the `RtSjon` window (the
+  phase gate stays T2.5's — interim carry-forward, not a phase close).**
+  `src/RtSjon.zig` is the runtime closure's single SJON window (C1): the
+  one column-0 `@import("sjon")` inside the closure, behind a frozen
+  nine-row re-export table — `Ast`, `Expr`, `Pattern`, `PatternQuery`,
+  `BinaryCursor`, `Schema`, `Plugin`, `trig`, `plugins.core` — every row
+  actually reached by the seven closure files (`EvalCore`, `ExprTrack`,
+  `PatternTrack`, `TrackTable`, `TimeMap`, `Easing`, `Pacb` now import
+  `RtSjon.zig` at column 0 and spell their production SJON tokens through
+  it). `BinaryFormat` is absent because SJON exports no such root name;
+  the write side stays out of the window entirely, and its one
+  closure-needed constant — the payload walk's depth cap — is a frozen
+  `Pacb.MAX_TREE_DEPTH = 1024` copy (u32, matching the source's own
+  spelling), equality-pinned against the module constant in
+  `src/root.zig`'s frozen-copy test family. Write-side test uses (parse,
+  `Binary.toBinary`, `validateDocument`, `Host`) ride INDENTED test-block
+  imports in the closure files — `TestDoc`'s field carries the one
+  inline indented spelling, lazily analyzed so no non-test build ever
+  resolves it — and the T1.x transitional `sjon_w` locals are renamed
+  back to plain `sjon` (write-side test oracles preserved verbatim).
+  Pure indirection, zero behavior change: RED = missing-module
+  (TrackTable respelled before the file existed —
+  `unable to load 'RtSjon.zig': FileNotFound`, both roots failing
+  through it); GREEN `zig build test` 487/487 (398 root + 89 CLI;
+  baseline 486 + the one equality-gate test), `zig build verify` 15/15
+  (corpus 38/0, node parity 94/94, cli-golden + score-docs current),
+  `zig build fuzz` 5/5 361/361, cli-golden regeneration byte-neutral,
+  `git diff --exit-code 1138707 -- corpus src/cli/testdata` empty.
+  `zig fmt --check` clean on every touched file. NOT in this task (P2
+  stays open): `rt_entry.zig`, the `wasm-rt` verb, the layer-1/2
+  closure auditor, the transactional load — T2.2–T2.5 next.
