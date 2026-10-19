@@ -1,0 +1,18 @@
+; keys-only — the smallest packable score with a real key table: two
+; declared targets (scalar + 3-lane), keyframe tracks only, one easing
+; program. The committed keys-only.pacb beside this file is the REAL
+; CLI's own output; regenerate with
+;   zig build run -- pack tools/testdata/pacb/keys-only.score.sjon \
+;     --out tools/testdata/pacb/keys-only.pacb
+(target :name glow :arity 1 :registry 0)
+(target :name tint :arity 3 :registry 0)
+
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(track :target glow
+  (key :at 0b :value 0.2)
+  (key :at 4b :value 0.8 :ease out-cubic))
+
+(track :target tint
+  (key :at 0b :value [1 0 0])
+  (key :at 8b :value [0 0 1]))

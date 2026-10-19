@@ -38,7 +38,7 @@ registries at all.
 | Path | What |
 |---|---|
 | `src/` | the Zig driver — compile, eval, easing, tick math, WASM entry + boundary blobs |
-| `src/cli/` | the native `pacer` binary — score IR and eval-at-t as JSON |
+| `src/cli/` | the native `pacer` binary — score IR, eval-at-t, and `pack` to `'PACB'` as JSON-first |
 | `schema/pacer.sjon` | the score schema (embedded, validates on wasm32-freestanding) |
 | `schema/pacer-corpus.sjon` | the corpus harness schema (embedded; validates every `times.sjon`) |
 | `sjon-project.sjon` | the workspace project file — what `sjon-lsp` reads to give scores editor support |

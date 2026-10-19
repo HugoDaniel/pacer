@@ -1,0 +1,17 @@
+; expr-keys — a keys track AND an expr track (core head only, so it is
+; preflight-clean): the 'PAYL' section carries the expr's compact IR
+; beside the key table. The committed expr-keys.pacb beside this file
+; is the REAL CLI's own output; regenerate with
+;   zig build run -- pack tools/testdata/pacb/expr-keys.score.sjon \
+;     --out tools/testdata/pacb/expr-keys.pacb
+(target :name glow :arity 1 :registry 0)
+(target :name flow :arity 1 :registry 0)
+
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(track :target glow
+  (key :at 0b :value 0.2)
+  (key :at 4b :value 0.8 :ease in-out-quad))
+
+(track :target flow
+  :expr (* 0.5 beat))

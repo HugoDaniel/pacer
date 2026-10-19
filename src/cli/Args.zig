@@ -18,7 +18,7 @@ const std = @import("std");
 const pacer = @import("pacer");
 const Allocator = std.mem.Allocator;
 
-pub const Verb = enum { check, ir, eval };
+pub const Verb = enum { check, ir, eval, pack };
 
 /// Upper bound on frames one invocation may request. `--fps 1e9` over a
 /// second is not a request, it is a hang.
@@ -68,6 +68,15 @@ pub const EvalOpts = struct {
     sets: []const Override = &.{},
 };
 
+/// `pack`'s own flags. `out` is always set for the verb — explicit from
+/// `--out`, or derived from the score path (the derivation allocates on
+/// the parse arena, so it aliases argv's backing store no longer than
+/// any other Command string). `targets_json` aliases argv when given.
+pub const PackOpts = struct {
+    out: []const u8,
+    targets_json: ?[]const u8 = null,
+};
+
 pub const Command = struct {
     verb: Verb,
     /// Score path, or `-` for stdin. Aliases argv.
@@ -78,6 +87,7 @@ pub const Command = struct {
     targets: []const pacer.Compile.Target,
     json: bool = false,
     eval: EvalOpts = .{},
+    pack: PackOpts = .{ .out = "" },
 };
 
 pub const Action = union(enum) {
@@ -111,6 +121,8 @@ pub fn parse(a: Allocator, argv: []const [:0]const u8) Action {
     var fps: ?f64 = null;
 
     var i: usize = 2;
+    var explicit_out: ?[]const u8 = null;
+    var targets_json: ?[]const u8 = null;
     while (i < argv.len) : (i += 1) {
         const arg = argv[i];
         if (eq(arg, "--target")) {
@@ -124,6 +136,26 @@ pub fn parse(a: Allocator, argv: []const [:0]const u8) Action {
             targets.append(a, tg) catch return .{ .usage = oom };
         } else if (eq(arg, "--json")) {
             out.json = true;
+        } else if (eq(arg, "--out") or eq(arg, "--targets-json")) {
+            // Pack-only, the mirror of the eval-only flags below.
+            if (verb != .pack)
+                return .{ .usage = say(a, "{s} is only valid for pack", .{arg}, "flag is only valid for pack") };
+            i += 1;
+            if (i >= argv.len) return .{ .usage = say(a, "{s} requires a value", .{arg}, "flag requires a value") };
+            const v = argv[i];
+            // An empty path is a typo, not a request for the default —
+            // normalizing it away would pack somewhere unnoticed.
+            if (v.len == 0)
+                return .{ .usage = say(a, "{s} requires a non-empty path", .{arg}, "flag requires a non-empty path") };
+            if (eq(arg, "--out")) {
+                // stdout carries the JSON report; the blob never joins
+                // it, so `-` is refused rather than interpreted.
+                if (eq(v, "-"))
+                    return .{ .usage = "--out cannot be `-` (stdout carries the JSON report)" };
+                explicit_out = v;
+            } else {
+                targets_json = v;
+            }
         } else if (eq(arg, "--at") or eq(arg, "--from") or eq(arg, "--to") or eq(arg, "--fps") or eq(arg, "--set")) {
             // Eval-only. `ir` reports the DOCUMENT's IR, which a live
             // override does not change — the table is a pure function of
@@ -158,6 +190,21 @@ pub fn parse(a: Allocator, argv: []const [:0]const u8) Action {
     out.path = path orelse
         return .{ .usage = say(a, "{s} requires a score path (use `-` for stdin)", .{@tagName(verb)}, "missing score path") };
     out.targets = targets.toOwnedSlice(a) catch return .{ .usage = oom };
+
+    if (verb == .pack) {
+        // The `--out` default follows the house rule (`docs/cli.md`):
+        // the score path with `.pacb`. A stdin score HAS no path to
+        // derive from, and guessing one (stdout) would corrupt the
+        // report channel — so `--out` is required, refused as usage.
+        // (Deriving `-` → `-.pacb` would instead hand the verb a stdin
+        // read every in-process test then blocks on — the fd is live.)
+        if (explicit_out == null and path.?.len == 1 and path.?[0] == '-')
+            return .{ .usage = say(a, "a stdin score has no path to derive an output from — pass --out FILE.pacb", .{}, "pack from stdin requires --out") };
+        out.pack = .{
+            .out = explicit_out orelse deriveOutPath(a, path.?) catch return .{ .usage = oom },
+            .targets_json = targets_json,
+        };
+    }
 
     if (verb == .eval) {
         if (from != null or to != null or fps != null) {
@@ -198,6 +245,16 @@ fn parseTarget(spec: []const u8) error{BadTarget}!pacer.Compile.Target {
     }
     if (it.next() != null) return error.BadTarget;
     return out;
+}
+
+/// pack's default `--out`: the score path with its last extension
+/// replaced by `.pacb` (`a.sjon` → `a.pacb`), or `.pacb` appended when
+/// the path has no extension. Given verbatim, never canonicalized — a
+/// pack must land where the user is looking, not where we tidy up.
+fn deriveOutPath(a: Allocator, path: []const u8) Allocator.Error![]const u8 {
+    const ext = std.fs.path.extension(path);
+    const stem = path[0 .. path.len - ext.len];
+    return std.fmt.allocPrint(a, "{s}.pacb", .{stem});
 }
 
 const oom = "out of memory collecting arguments";
@@ -448,6 +505,91 @@ test "parse: the eval-only flags are refused by ir and check" {
         _ = try usageMessage(a, &.{ "pacer", verb, "a.sjon", "--set", "k=1" });
         _ = try usageMessage(a, &.{ "pacer", verb, "a.sjon", "--at", "0" });
     }
+}
+
+test "parse: the pack-only flags are refused by check, ir and eval" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{ "check", "ir", "eval" }) |verb| {
+        const base: []const [:0]const u8 = if (std.mem.eql(u8, verb, "eval"))
+            &.{ "pacer", "eval", "a.sjon", "--at", "0" }
+        else
+            &.{ "pacer", verb, "a.sjon" };
+        var argv = std.ArrayList([:0]const u8).empty;
+        defer argv.deinit(a);
+        try argv.appendSlice(a, base);
+        try argv.appendSlice(a, &.{ "--out", "x.pacb" });
+        _ = try usageMessage(a, argv.items);
+        argv.items[argv.items.len - 2] = "--targets-json";
+        _ = try usageMessage(a, argv.items);
+    }
+}
+
+test "parse: the eval-only flags are refused by pack" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    _ = try usageMessage(a, &.{ "pacer", "pack", "a.sjon", "--set", "k=1" });
+    _ = try usageMessage(a, &.{ "pacer", "pack", "a.sjon", "--at", "0" });
+}
+
+test "parse: pack derives --out from the score path" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const cmd = try parseOk(a, &.{ "pacer", "pack", "a.sjon" });
+    try t.expectEqual(Verb.pack, cmd.verb);
+    try t.expectEqualStrings("a.pacb", cmd.pack.out);
+    try t.expectEqual(@as(?[]const u8, null), cmd.pack.targets_json);
+
+    // The last extension is replaced, whatever it was; a path with no
+    // extension gains one; directory components are kept as given.
+    try t.expectEqualStrings(
+        "tools/testdata/pacb/keys-only.score.pacb",
+        (try parseOk(a, &.{ "pacer", "pack", "tools/testdata/pacb/keys-only.score.sjon" })).pack.out,
+    );
+    try t.expectEqualStrings(
+        "dir/score.pacb",
+        (try parseOk(a, &.{ "pacer", "pack", "dir/score" })).pack.out,
+    );
+}
+
+test "parse: an explicit --out wins over the derived default" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cmd = try parseOk(a, &.{ "pacer", "pack", "a.sjon", "--out", "built/x.bin" });
+    try t.expectEqualStrings("built/x.bin", cmd.pack.out);
+}
+
+test "parse: pack from stdin requires --out; empty or `-` out refuses" {
+    // No default exists for a score with no path to derive from, and
+    // the blob never goes to stdout — stdout is the JSON report's
+    // channel. An empty --out is refused, not normalized away.
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const missing = try usageMessage(a, &.{ "pacer", "pack", "-" });
+    try t.expect(std.mem.indexOf(u8, missing, "--out") != null);
+
+    for ([_][:0]const u8{ "", "-" }) |bad| {
+        const msg = try usageMessage(a, &.{ "pacer", "pack", "a.sjon", "--out", bad });
+        try t.expect(std.mem.indexOf(u8, msg, "--out") != null);
+    }
+    _ = try usageMessage(a, &.{ "pacer", "pack", "a.sjon", "--out" });
+    _ = try usageMessage(a, &.{ "pacer", "pack", "a.sjon", "--targets-json" });
+    _ = try usageMessage(a, &.{ "pacer", "pack", "a.sjon", "--targets-json", "" });
+}
+
+test "parse: --targets-json is recorded for pack" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cmd = try parseOk(a, &.{ "pacer", "pack", "a.sjon", "--targets-json", "reflect.json" });
+    try t.expectEqualStrings("reflect.json", cmd.pack.targets_json.?);
 }
 
 test "parse: --json is accepted by check" {

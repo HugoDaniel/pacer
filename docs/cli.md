@@ -16,6 +16,7 @@ zig build cli          # → zig-out/bin/pacer
 pacer check FILE            Validate a score; report diagnostics.
 pacer ir    FILE            Print the compiled IR as JSON.
 pacer eval  FILE --at SECS  Print the write frames at given times.
+pacer pack  FILE --out F    Compile the score to a 'PACB' file.
 ```
 
 `FILE` may be `-`, which reads stdin and labels the input `<stdin>`.
@@ -137,6 +138,56 @@ The envelope echoes each override with the slot its key resolved to, so a
 consumer can address the same control numerically next time. `--set` is `eval`
 only: `ir` reports the *document's* IR, which a live override does not change.
 
+## `pack`
+
+Compile the score one more time and write the whole `'PACB'` container — the
+blob a runtime loads — to a file. stdout stays the JSON channel; the blob never
+joins it:
+
+```sh
+pacer pack score.sjon                     # → score.pacb (last extension swapped)
+pacer pack score.sjon --out built/x.pacb  # explicit
+```
+
+`--out` is **required** when the score is `-` (stdin has no path to derive
+one from), and cannot itself be `-` — stdout is the report's channel.
+
+The host registry can come from a pngine `getUniforms` dump instead of (or
+before, then beside) `--target` flags — file order is the `target_id` space:
+
+```sh
+pacer pack score.sjon --targets-json reflect.json --out built/x.pacb
+```
+
+The adapter replicates the player's `buildJoin` rule for rule: the twelve
+bare WGSL spellings (`f32`…`vec4u`) map to 1–4 lanes, an `elemCount`-non-zero
+field (an array) is skipped, an unknown `type` is skipped — never guessed —
+and registry is 0. The file names a HOST registry and nothing else: target
+names are never mined out of the score text.
+
+The report says what landed and how big, read off the bytes that actually
+did:
+
+```json
+"pack": {"out": "built/x.pacb", "bytes": 3700, "sections": 6,
+         "targets": {"host": 0, "declared": 2}, "pacm_bytes": 1784}
+```
+
+Before the first report byte, the verb **self-checks**: it decodes its own
+output, proves the decoded table equals the compiled one field-for-field,
+and proves the embedded `'PACM'` byte-equals a fresh encode of this compile.
+A self-check failure exits 3 having written nothing. The write itself is
+atomic (temp file + rename beside the destination), and an `--out` that
+cannot be written is a usage error naming the path — stdout untouched.
+
+v1 refuses to pack some scores rather than pack them wrongly, as ordinary
+diagnostics in score coordinates (exit 1, `pack` rides as `null`, nothing
+written): a `:pattern` track (`pack_patterns_unsupported` — the pattern query
+env is pending an upstream decision) and expr heads the core-only binary
+schema cannot resolve identically. A score that compiles clean reports
+`"ok": true` even when pack refuses it — the compile succeeded; the
+refusal is in `diagnostics` and the exit code.
+
 ## Channels and exit codes
 
 `check` is a **report** verb — its report is the product, so it goes to stdout.
@@ -152,9 +203,9 @@ On a usage error stdout gets **zero bytes** — never half an object.
 | Code | Meaning |
 |---|---|
 | 0 | No diagnostics. |
-| 1 | The score has diagnostics. |
-| 2 | Usage error — bad flags, or an input that could not be read. |
-| 3 | Internal error — out of memory, or a dead output stream. |
+| 1 | The score has diagnostics (for `pack`: or a pack preflight refusal). |
+| 2 | Usage error — bad flags, an input that could not be read, or (for `pack`) an output that could not be written. |
+| 3 | Internal error — out of memory, a dead output stream, or (for `pack`) a failed self-check. |
 
 This is SJON's table rather than pngine's, because a pacer score *is* an SJON
 document and the two binaries sit in the same pipelines: `sjon check x.sjon &&

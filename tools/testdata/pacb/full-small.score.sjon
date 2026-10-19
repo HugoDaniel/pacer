@@ -1,0 +1,41 @@
+; full-small — one of every packable section in the smallest honest
+; score: declared targets, a transport with :emit lanes and a tempo
+; segment, scalar and vector keys, two easing programs, an expr track,
+; a periodic trigger, a control with rails, and a scene with its own
+; keyed window. (No :pattern track by design — v1 packs refuse those.)
+; The committed full-small.pacb beside this file is the REAL CLI's own
+; output; regenerate with
+;   zig build run -- pack tools/testdata/pacb/full-small.score.sjon \
+;     --out tools/testdata/pacb/full-small.pacb
+(target :name glow :arity 1 :registry 0)
+(target :name tint :arity 4 :registry 0)
+(target :name pulse :arity 4 :registry 0)
+(target :name level :arity 1 :registry 1)
+(target :name mix :arity 1 :registry 1)
+(target :name beat :arity 1 :registry 0)
+(target :name bar :arity 1 :registry 0)
+
+(transport :bpm 120 :meter [4 4] :dur 4bar :end loop :emit [beat bar])
+
+(tempo :at 8b :bpm 160)
+
+(control :id depth :target mix :min 0 :max 1 :value 0.25)
+
+(track :target glow
+  (key :at 0b :value 0.1)
+  (key :at 4b :value 0.9 :ease out-cubic)
+  (key :at 8b :value 0.5 :ease in-out-quad))
+
+(track :target tint
+  (key :at 0b :value [1 0 0 1])
+  (key :at 8b :value [0 0 1 1]))
+
+(track :target level
+  :expr (* depth beat))
+
+(trigger :target pulse :every 1b :offset 1b)
+
+(scene :name drop :at 8b :dur 8b
+  (track :target glow
+    (key :at 0b :value 0.2)
+    (key :at 4b :value 0.8)))

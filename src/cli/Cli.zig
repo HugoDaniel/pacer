@@ -22,6 +22,7 @@ const Diags = @import("Diags.zig");
 const Envelope = @import("Envelope.zig");
 const Frames = @import("Frames.zig");
 const Ir = @import("Ir.zig");
+const Pack = @import("Pack.zig");
 const Source = @import("Source.zig");
 const Writer = std.Io.Writer;
 const Io = std.Io;
@@ -68,6 +69,7 @@ pub const usage_text =
     \\  pacer check -               Validate from stdin.
     \\  pacer ir FILE               Print the compiled IR as JSON.
     \\  pacer eval FILE --at SECS   Print the write frames at given times.
+    \\  pacer pack FILE             Compile the score to a 'PACB' file.
     \\
     \\Options:
     \\  --target NAME[:ncomp[:registry]]
@@ -85,6 +87,16 @@ pub const usage_text =
     \\                              included. All three flags or none.
     \\  --set ID=V[,V,V,V]          Hold a (control ...) for the whole run. ID
     \\                              is a control :id, or a slot index.
+    \\
+    \\Options for pack:
+    \\  --targets-json FILE         Host registry from a pngine getUniforms
+    \\                              dump: name -> {"type", "elemCount"}.
+    \\                              Arrays and unknown types are skipped; file
+    \\                              order is the target_id space, registry 0.
+    \\  --out FILE.pacb             Where the 'PACB' bytes go. Default: the
+    \\                              score path with .pacb; required when the
+    \\                              score is stdin. Stdout stays JSON.
+    \\
     \\  -h, --help                  Show this help.
     \\  -V, --version               Show the version.
     \\
@@ -154,12 +166,27 @@ fn runCommand(gpa: Allocator, io: Io, cmd: Args.Command, out: *Writer, err: *Wri
     var schema = try pacer.Schema.load(gpa);
     defer schema.deinit();
 
+    // `pack` is the one verb whose flags shape the load itself: the
+    // `--targets-json` registry feeds the compile join, so the adapter
+    // runs BEFORE `Driver.init`. Reflection entries come first, then
+    // any `--target` flags — one flat order, the target_id space.
+    var host_targets: []const pacer.Compile.Target = cmd.targets;
+    if (cmd.verb == .pack) {
+        if (cmd.pack.targets_json) |json_path| {
+            host_targets = Pack.hostJoin(a, io, json_path, cmd.targets) catch |e| {
+                if (e == error.OutOfMemory) return error.OutOfMemory;
+                try err.print("pacer: {s}: {s}\n", .{ json_path, Pack.joinErrorMessage(e) });
+                return Exit.usage;
+            };
+        }
+    }
+
     // A defective score is NOT an error here: `init` succeeds, `evaluator`
     // stays null, and the diagnostics sit on `result`. Only OOM fails —
     // and then `driver` is undefined and must NOT be deinited, which is
     // why the defer comes after.
     var driver: pacer.Driver = undefined;
-    try driver.init(gpa, &schema, source, cmd.targets);
+    try driver.init(gpa, &schema, source, host_targets);
     defer driver.deinit();
 
     const ctx: Envelope.Ctx = .{
@@ -167,7 +194,7 @@ fn runCommand(gpa: Allocator, io: Io, cmd: Args.Command, out: *Writer, err: *Wri
         .source = source,
         .index = &index,
         .path = cmd.path,
-        .host_target_count = cmd.targets.len,
+        .host_target_count = host_targets.len,
     };
     return switch (cmd.verb) {
         .check => if (cmd.json) Diags.renderJson(out, ctx) else Diags.renderHuman(out, ctx),
@@ -183,6 +210,33 @@ fn runCommand(gpa: Allocator, io: Io, cmd: Args.Command, out: *Writer, err: *Wri
             const ev = if (driver.evaluator) |*e| e else null;
             const code = try Frames.write(out, err, ctx, ev, cmd.eval);
             if (code == 1) _ = try Diags.renderHuman(err, ctx);
+            break :blk code;
+        },
+        .pack => blk: {
+            // Pack preflight (the v1 gates) rides the SAME envelope the
+            // compile's own diagnostics do: ordinary pacer records,
+            // collection over abort. A refusal is data about the score
+            // (exit 1) — not a usage error, not an internal one.
+            var packable = true;
+            if (driver.result.table != null) {
+                var refused: std.ArrayList(pacer.Compile.Diagnostic) = .empty;
+                try pacer.PacbEncode.preflight(a, &driver.result, &refused);
+                if (refused.items.len > 0) {
+                    // `diagnostics` is a slice: rebuild it with the
+                    // refusals appended. `ctx` aliases this same result,
+                    // so the envelope and the human render see them.
+                    const all = a.alloc(
+                        pacer.Compile.Diagnostic,
+                        driver.result.diagnostics.len + refused.items.len,
+                    ) catch return error.OutOfMemory;
+                    @memcpy(all[0..driver.result.diagnostics.len], driver.result.diagnostics);
+                    @memcpy(all[driver.result.diagnostics.len..], refused.items);
+                    driver.result.diagnostics = all;
+                    packable = false;
+                }
+            }
+            const code = try Pack.write(gpa, io, out, err, ctx, host_targets, cmd.pack, packable);
+            if (code == Exit.errors) _ = try Diags.renderHuman(err, ctx);
             break :blk code;
         },
     };
@@ -201,6 +255,7 @@ test {
     _ = @import("Frames.zig");
     _ = @import("Ir.zig");
     _ = @import("Json.zig");
+    _ = @import("Pack.zig");
     _ = @import("Source.zig");
 }
 
@@ -343,4 +398,195 @@ test "--help exits ok on stderr; stdout stays free for data" {
     try t.expectEqual(Exit.ok, c.code);
     try t.expectEqualStrings("", c.out.written());
     try t.expect(std.mem.indexOf(u8, c.err.written(), "pacer check") != null);
+}
+
+// ---------------------------------------------------------------------------
+// pack
+// ---------------------------------------------------------------------------
+
+test "pack: a clean compose-mode score reports ok under command pack" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/clean.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(out);
+    const path = try repoPath(t.allocator, "corpus/target-declared/doc.sjon");
+    defer t.allocator.free(path);
+    var c = try invoke(&.{ "pacer", "pack", path, "--out", out });
+    defer c.deinit();
+    try t.expectEqual(Exit.ok, c.code);
+    try t.expectEqualStrings("", c.err.written());
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, c.out.written(), .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    try t.expectEqualStrings("pack", root.get("command").?.string);
+    try t.expectEqual(true, root.get("ok").?.bool);
+    try t.expectEqual(@as(usize, 0), root.get("diagnostics").?.array.items.len);
+}
+
+test "pack: a defective score keeps the envelope shape and exits 1" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/defective.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(out);
+    const path = try repoPath(t.allocator, "corpus/diag-controls/doc.sjon");
+    defer t.allocator.free(path);
+    var c = try invoke(&.{ "pacer", "pack", path, "--target", "tint:3", "--out", out });
+    defer c.deinit();
+    try t.expectEqual(Exit.errors, c.code);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, c.out.written(), .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    try t.expectEqual(false, root.get("ok").?.bool);
+    try t.expectEqualStrings("pack", root.get("command").?.string);
+    try t.expectEqual(@as(usize, 5), root.get("diagnostics").?.array.items.len);
+    // The human rendering rides stderr, like the other data verbs.
+    try t.expect(std.mem.indexOf(u8, c.err.written(), "control_duplicate_id") != null);
+}
+
+test "pack: stdin without --out is a usage error, nothing on stdout" {
+    var c = try invoke(&.{ "pacer", "pack", "-" });
+    defer c.deinit();
+    try t.expectEqual(Exit.usage, c.code);
+    try t.expectEqualStrings("", c.out.written());
+    try t.expect(std.mem.indexOf(u8, c.err.written(), "--out") != null);
+}
+
+test "pack: --targets-json feeds the compile join" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const reflect = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/reflect.json", .{tmp.sub_path}, 0);
+    defer t.allocator.free(reflect);
+    const score = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/score.sjon", .{tmp.sub_path}, 0);
+    defer t.allocator.free(score);
+    const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/out.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(out);
+
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "reflect.json",
+        .data =
+        \\{ "glow": { "type": "f32", "elemCount": 0 },
+        \\  "tint": { "type": "vec3f", "elemCount": 0 } }
+        ,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "score.sjon",
+        .data =
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target glow
+        \\  (key :at 0b :value 0.1)
+        \\  (key :at 4b :value 0.9 :ease out-cubic))
+        ,
+    });
+
+    // With the reflection: compiles clean against the joined registry.
+    var ok_run = try invoke(&.{ "pacer", "pack", score, "--targets-json", reflect, "--out", out });
+    defer ok_run.deinit();
+    try t.expectEqual(Exit.ok, ok_run.code);
+    try t.expect(std.mem.indexOf(u8, ok_run.out.written(), "\"ok\":true") != null);
+
+    // Without it: the join is empty and the score's own diagnostics say
+    // so — the adapter never mines the score for target names.
+    var bare = try invoke(&.{ "pacer", "pack", score, "--out", out });
+    defer bare.deinit();
+    try t.expectEqual(Exit.errors, bare.code);
+    try t.expect(std.mem.indexOf(u8, bare.out.written(), "unknown_target") != null);
+}
+
+test "pack: a malformed targets-json file is a usage error naming the file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const reflect = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/reflect.json", .{tmp.sub_path}, 0);
+    defer t.allocator.free(reflect);
+    const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/out.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(out);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "reflect.json", .data = "[1,2,3]" });
+
+    const path = try repoPath(t.allocator, "corpus/target-declared/doc.sjon");
+    defer t.allocator.free(path);
+    var c = try invoke(&.{ "pacer", "pack", path, "--targets-json", reflect, "--out", out });
+    defer c.deinit();
+    try t.expectEqual(Exit.usage, c.code);
+    try t.expectEqualStrings("", c.out.written());
+    try t.expect(std.mem.indexOf(u8, c.err.written(), "reflect.json") != null);
+    try t.expect(std.mem.indexOf(u8, c.err.written(), "reflection") != null);
+}
+
+test "pack: a :pattern track is refused by preflight, never silently packed" {
+    // The same registry `cli_golden.sh` pins for starter (its STARTER
+    // argv), so this refusal and the starter golden move together.
+    // Starter compiles CLEAN against it — the refusal is pack's own.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/starter.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(out);
+    const path = try repoPath(t.allocator, "examples/starter.score.sjon");
+    defer t.allocator.free(path);
+    var c = try invoke(&.{
+        "pacer",     "pack",            path,
+        "--target",  "circle-radius",   "--target",
+        "circle-x",  "--target",        "circle-y",
+        "--target",  "tint:3",          "--target",
+        "flash:4",   "--target",        "spark",
+        "--target",  "master-gain:1:1", "--target",
+        "click:4:1", "--out",           out,
+    });
+    defer c.deinit();
+    try t.expectEqual(Exit.errors, c.code);
+    // The refusal rides the envelope as an ordinary pacer diagnostic.
+    try t.expect(std.mem.indexOf(u8, c.out.written(), "pack_patterns_unsupported") != null);
+    try t.expect(std.mem.indexOf(u8, c.out.written(), "\"pack\":null") != null);
+    // The human rendering names the score's own words, on stderr.
+    try t.expect(std.mem.indexOf(u8, c.err.written(), ":pattern tracks") != null);
+    // A refused pack lands nothing — no blob, no temp left behind.
+    try t.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "starter.pacb", .{}));
+    try t.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "starter.pacb.tmp", .{}));
+}
+
+test "pack: a clean compose-mode score lands a decodable .pacb" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/landed.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(out);
+    const path = try repoPath(t.allocator, "corpus/target-declared/doc.sjon");
+    defer t.allocator.free(path);
+    var c = try invoke(&.{ "pacer", "pack", path, "--out", out });
+    defer c.deinit();
+    try t.expectEqual(Exit.ok, c.code);
+    try t.expectEqualStrings("", c.err.written());
+
+    // The report says what landed, where, and how big — the blob itself
+    // never joins stdout.
+    var parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, c.out.written(), .{});
+    defer parsed.deinit();
+    const pack = parsed.value.object.get("pack").?.object;
+    try t.expectEqualStrings(out, pack.get("out").?.string);
+    try t.expect(pack.get("bytes").?.integer > 0);
+    try t.expect(pack.get("sections").?.integer >= 2);
+    try t.expectEqual(@as(i64, 0), pack.get("targets").?.object.get("host").?.integer);
+    try t.expectEqual(@as(i64, 3), pack.get("targets").?.object.get("declared").?.integer);
+    try t.expect(pack.get("pacm_bytes").?.integer > 0);
+
+    // The file: exactly the reported size, and it decodes clean back to
+    // the score's own shape (three declared targets, 120 bpm).
+    const blob = try tmp.dir.readFileAlloc(std.testing.io, "landed.pacb", t.allocator, .limited(1 << 20));
+    defer t.allocator.free(blob);
+    try t.expectEqual(@as(usize, @intCast(pack.get("bytes").?.integer)), blob.len);
+    var refusal: pacer.Pacb.Refusal = undefined;
+    var decoded = try pacer.Pacb.decode(t.allocator, blob, &refusal);
+    defer decoded.deinit();
+    try t.expectEqual(@as(usize, 3), decoded.declared.len);
+    try t.expectEqual(@as(usize, 3), decoded.tracks.len);
+    try t.expectEqual(@as(usize, 4), decoded.keys.len);
+}
+
+test "pack: an --out that cannot be written is a usage error, stdout untouched" {
+    const path = try repoPath(t.allocator, "corpus/target-declared/doc.sjon");
+    defer t.allocator.free(path);
+    var c = try invoke(&.{ "pacer", "pack", path, "--out", "no/such/dir/x.pacb" });
+    defer c.deinit();
+    try t.expectEqual(Exit.usage, c.code);
+    try t.expectEqualStrings("", c.out.written());
+    try t.expect(std.mem.indexOf(u8, c.err.written(), "no/such/dir/x.pacb") != null);
 }

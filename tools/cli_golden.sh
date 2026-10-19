@@ -121,6 +121,15 @@ corpus/diag-controls/doc.sjon
 tint:3
 --json"
 
+# A pack REFUSAL: starter's :pattern track cannot pack in v1 — the
+# envelope stays complete, `pack` rides as null, and the refusal is an
+# ordinary pacer diagnostic in score coordinates. The --out under
+# .agent/control/tmp is never written: a refusal lands nothing.
+run_case starter-pack 1 "pack
+$STARTER
+--out
+.agent/control/tmp/starter-pack.pacb"
+
 if [ "$status" -eq 0 ] && [ "$MODE" != "--update" ]; then
     echo "cli-golden: CLI envelopes are current"
 fi

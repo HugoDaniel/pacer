@@ -104,7 +104,7 @@ decided by gates, not by size.
 | Wave | Item | Status |
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
-| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 COMPLETE (T2.1–T2.8: header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader, and T2.8's whole-blob `decode`/`DecodedScore` + `verifyRouting` PACM coherence cross-check + ownership — landed 2026-10-19 with the interim-review correction before it; tree-trailing acceptance still deferred to the owner, KNOWN-GAP-pinned) + Phase 3 PARTIAL (T3.1 `src/PacbEncode.zig` encoder core landed 2026-10-19: canonical assembly of all 14 sections, `'DECL'` = the merged join's declared tail, `'EASE'`/`'TMPO'` sliced verbatim out of the single embedded `'PACM'` pass, per-track payloads via `cloneNode` + compact `toBinary`, ≥5 compiled-fixture round-trips incl. `Expr.evalBinary` t=0 parity and pack-twice byte-equality; T3.2 landed 2026-10-19: `collectCallHeads` position classifier mirroring the scheduler's shapes/abort order, `preflight` with the full-outcome I1/G11 head compare, the interim `pack_patterns_unsupported` refusal, and the three measured caps — per-payload/`'PAYL'`-total/`MAX_TICK_ENTRIES` — riding three appended `Compile.Code` variants 31–33, audit-diagnostics 34/34; T3.3 still open); phases 3–4 open — the `pacer pack` verb is next |
+| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 COMPLETE (T2.1–T2.8: header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader, and T2.8's whole-blob `decode`/`DecodedScore` + `verifyRouting` PACM coherence cross-check + ownership — landed 2026-10-19 with the interim-review correction before it; tree-trailing acceptance still deferred to the owner, KNOWN-GAP-pinned) + Phase 3 COMPLETE (T3.1 `src/PacbEncode.zig` encoder core landed 2026-10-19: canonical assembly of all 14 sections, `'DECL'` = the merged join's declared tail, `'EASE'`/`'TMPO'` sliced verbatim out of the single embedded `'PACM'` pass, per-track payloads via `cloneNode` + compact `toBinary`, ≥5 compiled-fixture round-trips incl. `Expr.evalBinary` t=0 parity and pack-twice byte-equality; T3.2 landed 2026-10-19: `collectCallHeads` position classifier mirroring the scheduler's shapes/abort order, `preflight` with the full-outcome I1/G11 head compare, the interim `pack_patterns_unsupported` refusal, and the three measured caps — per-payload/`'PAYL'`-total/`MAX_TICK_ENTRIES` — riding three appended `Compile.Code` variants 31–33, audit-diagnostics 34/34; T3.3 landed 2026-10-19: the `pacer pack` verb — `src/cli/Pack.zig` with the `--targets-json` buildJoin adapter, preflight-before-encode wiring, real self-check (decode + field-for-field table parity + fresh-`encodeMeta` PACM equality), atomic temp+rename write, `pack` report object, starter-pack refusal golden, and three REAL-CLI byte-stability fixtures; test 463/463, verify 15/15, audit 34/34); phase 4 open — codes/fuzz/docs-of-record |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |
@@ -116,9 +116,14 @@ decided by gates, not by size.
 
 ## What's next
 
-→ Plan 01 Phase 3 remainder (T3.3 the `pacer pack` verb — it wires
-`PacbEncode.preflight` ahead of `encode` so refusals surface as
-ordinary diagnostics, then adapter/goldens/fixtures). T3.2 (pack
+→ Plan 01 Phase 4 (T4.1 the diagnostics-audit closure check, T4.2 the
+never-panic decode fuzz harness over the three committed `.pacb`
+fixtures, T4.3 docs of record + the `'PACB'` wire-table row). T3.3
+(the `pacer pack` verb) landed 2026-10-19: preflight wired ahead of
+`encode` so refusals surface as ordinary diagnostics, the
+`--targets-json` buildJoin adapter, the self-check + atomic write,
+the starter-pack refusal golden, and the byte-stability fixtures;
+test 463/463, verify 15/15, audit 34/34. T3.2 (pack
 refusals) landed 2026-10-19: the `collectCallHeads` position
 classifier (mirroring `scheduleForm`/`scheduleFormBinary` shapes and
 the scheduler's abort order), `preflight`'s full-outcome I1/G11 head
