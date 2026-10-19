@@ -35,11 +35,16 @@
 //! `result.ok()` is a PRECONDITION (`Abi.encodeMeta` asserts the same).
 //! The v1 resource gates live in `preflight` below — `encode` produces
 //! whatever the table spells. DIRECT-API callers who skip `preflight`
-//! accept its documented preconditions: the caps (per-payload,
-//! total `'PAYL'`, global explicit ticks) hold, so every section fits
-//! its u32 directory fields; a pathological ≤ 256 MiB source that
-//! grows one past 4 GiB is preflight territory, never a silent wrap
-//! (T3.1's flag, recorded here).
+//! accept its documented preconditions: the caps (per-payload, total
+//! `'PAYL'`, global explicit ticks, and the compact-IR payload writer's
+//! structural caps — node count, distinct string pool, string length,
+//! depth, all MEASURED by `preflight` against the frozen `sjon.Binary`
+//! constants) hold, so every section fits its u32 directory fields and
+//! the payload writer's cap arms cannot fire; a pathological ≤ 256 MiB
+//! source that grows one past 4 GiB is preflight territory, never a
+//! silent wrap (T3.1's flag, recorded here — final-review L1 extended
+//! the precondition from the three byte/count caps to the writer's
+//! structural caps, which a legal native-band source CAN exceed).
 //!
 //! Imports `Compile`, `Abi`, `Pacb`, `Pacm`, `PactCodec`, `TrackTable`
 //! (the plan-frozen set plus the two T3.1-recorded std/shared leaves —
@@ -97,10 +102,12 @@ const PayloadSpan = struct { off: usize, len: usize };
 /// Encode one successfully compiled score + its host target join into a
 /// canonical `'PACB'` buffer. PRECONDITIONS: `result.ok()`, and (for a
 /// v1-legal pack) `preflight` reported no refusals — `encode` emits the
-/// caps-unchecked spelling of whatever the table holds (see the module
-/// header's direct-API note); `host_targets` is the same host registry
-/// list the score was compiled against (the merged join's prefix,
-/// `CompileResult.targets`).
+/// caps-unchecked spelling of whatever the table holds, so a direct-API
+/// caller who skips `preflight` owns the preconditions the module
+/// header spells (byte caps, tick cap, and the compact-IR payload
+/// writer's measured structural caps); `host_targets` is the same host
+/// registry list the score was compiled against (the merged join's
+/// prefix, `CompileResult.targets`).
 pub fn encode(
     gpa: std.mem.Allocator,
     result: *const Compile.CompileResult,
@@ -302,21 +309,30 @@ pub fn encode(
     // 'PAYL': per expr/pattern track, the value subtree cloned into a
     // one-root tree and compact-encoded (the frozen A29 choice) — never
     // a re-parse, never a shadow evaluation; the bytes are the compiled
-    // table's own AST.
+    // table's own AST. A `PayloadWriterCap` here is `unreachable` under
+    // `encode`'s documented precondition (the module header's
+    // direct-API note): v1-legal packs ran `preflight`, which MEASURES
+    // these caps and refuses the score first; the CLI always does.
     const payload_bytes = try a.alloc([]const u8, table.tracks.len);
     for (payload_bytes) |*slot| slot.* = &.{};
     var has_payload_track = false;
     var payload_total: usize = 0;
     for (table.tracks, 0..) |track, i| switch (track.source) {
         .expr => |node| {
-            const bytes = try encodePayload(a, &result.validated.result.tree, node);
+            const bytes = encodePayload(a, &result.validated.result.tree, node) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.PayloadWriterCap => unreachable,
+            };
             payload_bytes[i] = bytes;
             payload_spans[i] = .{ .off = payload_total, .len = bytes.len };
             payload_total += bytes.len;
             has_payload_track = true;
         },
         .pattern => |node| {
-            const bytes = try encodePayload(a, &result.validated.result.tree, node);
+            const bytes = encodePayload(a, &result.validated.result.tree, node) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.PayloadWriterCap => unreachable,
+            };
             payload_bytes[i] = bytes;
             payload_spans[i] = .{ .off = payload_total, .len = bytes.len };
             payload_total += bytes.len;
@@ -433,34 +449,111 @@ pub fn encode(
 /// (count prefixes included), in canonical emission order.
 const SectionBuf = struct { kind: Pacb.SectionKind, bytes: []const u8 };
 
-/// Serialize one expr/pattern value subtree: `cloneNode` into a fresh
-/// one-root tree, then the frozen compact binary encoding (A29 — no
-/// spans, no comments; the smallest deterministic spelling). The source
-/// string is unused (strings re-intern into the clone; compact drops
-/// spans), so the one-root tree finalizes against "".
-fn encodePayload(
+/// What `sjon.Binary.toBinary` itself caps on the encode side, measured
+/// over the payload subtree the writer will actually walk. `nodes` is
+/// the cloned one-root tree's node count (dominating every per-container
+/// child cap), `pool_entries` its DISTINCT interned strings (the writer's
+/// `PoolBuilder` dedupes the same way the clone re-interns, so the tree's
+/// pool IS the writer's), `max_string` the longest pool entry, `depth`
+/// the nesting the writer's depth-bounded walkers descend.
+const PayloadProfile = struct {
+    nodes: usize,
+    pool_entries: usize,
+    max_string: usize,
+    depth: u32,
+};
+
+/// The payload writer's structural-cap rejections surfaced for callers
+/// that measure before they commit (`preflight`; the CLI's self-check
+/// re-encode). NOT part of `Error` — the frozen public failure surface
+/// stays `error{OutOfMemory}`; a v1-legal pack has already refused these
+/// inputs at preflight with measured `pack_cap_exceeded` diagnostics.
+pub const PayloadWriterCapError = error{PayloadWriterCap};
+
+/// Measure one payload subtree's profile — the same clone the writer
+/// encodes, read off its finalized tree (node count, pool size, longest
+/// string, depth) without invoking the writer.
+fn payloadProfile(
     a: std.mem.Allocator,
     tree: *const sjon.Ast.Tree,
     node: sjon.Ast.NodeIndex,
-) Error![]const u8 {
+) Error!PayloadProfile {
     var builder = sjon.Ast.TreeBuilder{ .a = a };
     const root = try builder.cloneNode(tree, node);
     var tree_arena = std.heap.ArenaAllocator.init(a);
     defer tree_arena.deinit();
     var one_root = try builder.finalize(&tree_arena, "", &.{root});
     defer one_root.deinit();
-    // The writer's non-OOM outcomes are structural-cap rejections
-    // (node count, depth, string length) that a cloned subtree of a
-    // validated document cannot trip: the parser's own caps sit at or
-    // below the writer's (comptime-checked for depth), and compact mode
-    // emits no comments. Producer-impossible, like the linear default.
+
+    var max_string: usize = 0;
+    const n_strings = one_root.string_index.len - 1;
+    for (0..n_strings) |i| {
+        const len = one_root.string_index[i + 1] - one_root.string_index[i];
+        if (len > max_string) max_string = len;
+    }
+    return .{
+        .nodes = one_root.nodes.len,
+        .pool_entries = n_strings,
+        .max_string = max_string,
+        .depth = try one_root.maxDepth(a),
+    };
+}
+
+/// One measured structural refusal for a payload the writer rejected:
+/// name the FIRST frozen cap the profile exceeds; if none does (a
+/// writer arm the profile does not model — today only the output-size
+/// cap, dominated by node/string counts for any ≤ 256 MiB source), say
+/// so with the full measured profile rather than a wrong number.
+fn addPayloadStructuralDiag(
+    gpa: std.mem.Allocator,
+    diags: *std.ArrayList(Compile.Diagnostic),
+    span: sjon.Ast.Span,
+    prof: PayloadProfile,
+) Error!void {
+    if (prof.nodes > sjon.Binary.MAX_NODES) {
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload holds {d} nodes, over the {d}-node v1 compact-IR cap", .{ prof.nodes, sjon.Binary.MAX_NODES });
+    } else if (prof.pool_entries > sjon.Binary.MAX_STRING_POOL_ENTRIES) {
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload holds {d} distinct strings, over the {d}-entry v1 compact-IR pool cap", .{ prof.pool_entries, sjon.Binary.MAX_STRING_POOL_ENTRIES });
+    } else if (prof.max_string > sjon.Binary.MAX_STRING_LENGTH) {
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload's longest string is {d} bytes, over the {d}-byte v1 compact-IR cap", .{ prof.max_string, sjon.Binary.MAX_STRING_LENGTH });
+    } else if (prof.depth > sjon.Binary.MAX_TREE_DEPTH) {
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload nests {d} deep, over the {d}-level v1 compact-IR cap", .{ prof.depth, sjon.Binary.MAX_TREE_DEPTH });
+    } else {
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload exceeds a v1 compact-IR writer cap (measured: {d} nodes, {d} distinct strings, longest {d} bytes, depth {d})", .{ prof.nodes, prof.pool_entries, prof.max_string, prof.depth });
+    }
+}
+
+/// Serialize one expr/pattern value subtree: `cloneNode` into a fresh
+/// one-root tree, then the frozen compact binary encoding (A29 — no
+/// spans, no comments; the smallest deterministic spelling). The source
+/// string is unused (strings re-intern into the clone; compact drops
+/// spans), so the one-root tree finalizes against "".
+///
+/// BOUNDED: `toBinary`'s non-OOM rejections (node count, distinct pool
+/// entries, string length, depth — `MAX_*` in `sjon.Binary`) surface as
+/// `error.PayloadWriterCap` for `preflight` to measure and refuse, and
+/// for the self-check to treat as an internal invariant break. A legal
+/// native-band source CAN build a payload over the 65536-entry pool
+/// (one quoted string per ~7 source bytes), so this is reachable data
+/// about the score, not a producer-impossible arm.
+pub fn encodePayload(
+    a: std.mem.Allocator,
+    tree: *const sjon.Ast.Tree,
+    node: sjon.Ast.NodeIndex,
+) (Error || PayloadWriterCapError)![]const u8 {
+    var builder = sjon.Ast.TreeBuilder{ .a = a };
+    const root = try builder.cloneNode(tree, node);
+    var tree_arena = std.heap.ArenaAllocator.init(a);
+    defer tree_arena.deinit();
+    var one_root = try builder.finalize(&tree_arena, "", &.{root});
+    defer one_root.deinit();
     const bin = sjon.Binary.toBinary(
         a,
         one_root,
         sjon.Binary.ToBinaryOptions.forMode(.compact),
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => unreachable,
+        else => return error.PayloadWriterCap,
     };
     defer bin.deinit();
     return a.dupe(u8, bin.data);
@@ -968,11 +1061,32 @@ pub fn preflight(
     // (`span.len > MAX_PAYLOAD_BYTES`, region `> MAX_PAYL_BYTES`), so
     // a preflight-clean pack can never emit what decode would refuse.
     // Loud measured refusals only — never a truncated subset.
+    //
+    // `.pattern` tracks are NOT measured: the interim refusal above
+    // already refused the score (v1 never packs them), and measuring a
+    // refused payload could only trip the compact-IR writer's own
+    // structural caps for a pack that will not happen.
+    //
+    // The writer's structural rejections (node/pool/string/depth —
+    // final-review L1) surface through the bounded `encodePayload` and
+    // are re-measured here as ordinary `pack_cap_exceeded` diagnostics:
+    // a legal native-band source CAN exceed the 65536-entry string pool
+    // (~7 source bytes per distinct string), so the refusal carries the
+    // profile's measured numbers, never a bare "a cap tripped".
     var payload_total: usize = 0;
     var total_over_span: ?sjon.Ast.Span = null;
     for (table.tracks) |track| switch (track.source) {
-        .expr, .pattern => |node| {
-            const bytes = try encodePayload(a, tree, node);
+        .expr => |node| {
+            const bytes = encodePayload(a, tree, node) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    // Measured refusal: profile the subtree the writer
+                    // rejected and continue collecting (over abort).
+                    const prof = try payloadProfile(a, tree, node);
+                    try addPayloadStructuralDiag(gpa, diags, tree.spanOf(node), prof);
+                    continue;
+                },
+            };
             if (bytes.len > Pacb.MAX_PAYLOAD_BYTES) {
                 try addDiag(
                     gpa,
@@ -988,7 +1102,8 @@ pub fn preflight(
                 total_over_span = tree.spanOf(node);
             }
         },
-        .keys, .trigger => {},
+        // Refused above; measuring is moot (and could trip the writer).
+        .pattern, .keys, .trigger => {},
     };
     if (payload_total > Pacb.MAX_PAYL_BYTES) {
         try addDiag(
@@ -1431,6 +1546,87 @@ test "PacbEncode: preflight refuses total 'PAYL' overage across tracks, never pe
     const measured = try std.fmt.allocPrint(a, "{d}", .{expected_total});
     try t.expect(std.mem.indexOf(u8, d.message, measured) != null);
     try t.expect(std.mem.indexOf(u8, d.message, "total") != null);
+}
+
+/// One expr payload whose distinct-string pool exceeds the compact-IR
+/// writer's `MAX_STRING_POOL_ENTRIES` (65536): ~65.6k distinct quoted
+/// strings inside an UNTAKEN `if` branch — the dry-run never builds
+/// the vector (the same trick the 'PAYL' fixture uses), the walk still
+/// sees every string, and ~525 KB of source sits inside the native
+/// 1 MiB band.
+fn bigPoolSource(a: std.mem.Allocator, n: usize) ![:0]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(a);
+    try buf.appendSlice(a, transport_line);
+    try buf.appendSlice(a, "(track :target x :expr (if false [");
+    for (0..n) |i| {
+        var num: [24]u8 = undefined;
+        const s = std.fmt.bufPrint(&num, "\"s{d}\" ", .{i}) catch unreachable;
+        try buf.appendSlice(a, s);
+    }
+    try buf.appendSlice(a, "] 1))");
+    return buf.toOwnedSliceSentinel(a, 0);
+}
+
+// Final-review L1 (binary01-fc): the payload writer's structural caps
+// (node count, distinct string pool, string length, depth) are now
+// MEASURED at preflight and refused as ordinary `pack_cap_exceeded`
+// diagnostics — the writer's own rejections surface as data, never as
+// the old `unreachable`. A >64k-distinct-string payload is the one
+// construct a legal native-band source can build that trips one.
+test "PacbEncode: preflight refuses a payload over the string-pool cap with the measured count" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const tg = [_]Compile.Target{.{ .name = "x", .ncomp = 1 }};
+    const src = try bigPoolSource(a, sjon.Binary.MAX_STRING_POOL_ENTRIES + 64);
+    var r = try compileForTest(a, src, &tg);
+    defer r.deinit();
+
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r, &diags);
+    try t.expectEqual(@as(usize, 1), diags.items.len);
+    const d = diags.items[0];
+    try t.expect(d.code == .pack_cap_exceeded);
+    // Measured distinct-string count over the frozen cap, and the cap
+    // itself, both ride the message.
+    try t.expect(std.mem.indexOf(u8, d.message, "65536") != null);
+    // The span is the :expr node's own span (score coordinates).
+    const expr_span = r.validated.result.tree.spanOf(r.table.?.tracks[0].source.expr);
+    try t.expectEqual(expr_span.start, d.span.start);
+}
+
+// A :pattern track is ALREADY refused (interim v1) before the payload
+// measure — measuring its bytes can only trip the writer caps for a
+// score that is already refused, so the measure loop skips it: exactly
+// the pattern-refusal diagnostic, no crash, no structural diagnostic.
+test "PacbEncode: preflight skips measuring an over-cap :pattern payload it already refused" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const tg = [_]Compile.Target{.{ .name = "x", .ncomp = 1 }};
+    var pat: std.ArrayList(u8) = .empty;
+    defer pat.deinit(a);
+    try pat.appendSlice(a, transport_line);
+    try pat.appendSlice(a, "(track :target x :pattern (fast 2 [0.2 (pure (if false [");
+    for (0..sjon.Binary.MAX_STRING_POOL_ENTRIES + 64) |i| {
+        var num: [24]u8 = undefined;
+        const s = std.fmt.bufPrint(&num, "\"s{d}\" ", .{i}) catch unreachable;
+        try pat.appendSlice(a, s);
+    }
+    try pat.appendSlice(a, "] 0.2))]))");
+    const src = try pat.toOwnedSliceSentinel(a, 0);
+
+    var r = try compileForTest(a, src, &tg);
+    defer r.deinit();
+
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r, &diags);
+    try t.expectEqual(@as(usize, 1), diags.items.len);
+    const d = diags.items[0];
+    try t.expect(d.code == .pack_patterns_unsupported);
 }
 
 /// Build a one-trigger score with `n` explicit `:at` positions
