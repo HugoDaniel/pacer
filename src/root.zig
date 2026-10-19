@@ -57,7 +57,14 @@ pub const Easing = @import("Easing.zig");
 /// ticks, deduped easing programs).
 pub const TrackTable = @import("TrackTable.zig");
 /// Per-frame evaluator: seconds → ticks → packed write entries.
+/// Compiler-side facade over `EvalCore` (the SAME `Evaluator` type by
+/// alias) — the public path hosts keep calling.
 pub const Eval = @import("Eval.zig");
+/// The frame engine, extracted: one evaluator over a tree-OR-binary
+/// leaf source (`LeafSource`), constructed from an `EvalCore.Context`
+/// or anything carrying `.evalContext()` (a compile result). Never
+/// imports `Compile` — the runtime closure's engine leaf (02 P1).
+pub const EvalCore = @import("EvalCore.zig");
 /// The compile-result + evaluator pair with the borrow-whole lifetime
 /// encoded as structure (in-place init, ordered teardown).
 pub const Driver = @import("Driver.zig");
@@ -84,6 +91,7 @@ test {
     _ = Easing;
     _ = TrackTable;
     _ = Eval;
+    _ = EvalCore;
     _ = Driver;
     _ = ExprTrack;
     _ = PatternTrack;

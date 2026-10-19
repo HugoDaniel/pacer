@@ -46,6 +46,7 @@ const TrackTable = @import("TrackTable.zig");
 const ExprTrack = @import("ExprTrack.zig");
 const PatternTrack = @import("PatternTrack.zig");
 const Schema = @import("Schema.zig");
+const EvalCore = @import("EvalCore.zig");
 const test_support = @import("test_support.zig");
 
 const Ast = sjon.Ast;
@@ -309,6 +310,23 @@ pub const CompileResult = struct {
             if (d.code == code) return d;
         }
         return null;
+    }
+
+    /// The tree-arm `EvalCore.Context` this result vends: its own
+    /// existing borrows (table + validated tree + `eval_schema`),
+    /// verbatim — the pointers alias this result, the bundle is copied
+    /// BY VALUE into the evaluator at init (no caller stack frame is
+    /// ever borrowed, 02 C3). The engine leaf never names this type;
+    /// `Evaluator.init`'s duck-typed arm calls this method so the
+    /// historical `Eval.Evaluator.init(gpa, &result)` spelling survives
+    /// byte-for-byte (02:76-91, R-B1).
+    pub fn evalContext(result: *const CompileResult) EvalCore.Context {
+        std.debug.assert(result.table != null); // compile succeeded
+        return .{
+            .table = &result.table.?,
+            .source = .{ .tree = &result.validated.result.tree },
+            .schema = result.eval_schema,
+        };
     }
 };
 

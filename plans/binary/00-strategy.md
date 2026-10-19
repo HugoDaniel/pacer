@@ -110,7 +110,7 @@ decided by gates, not by size.
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
 | A | 01 pacb-format · all phases | ☑ **QUALIFIED** — Phases 1–4 all landed 2026-10-19 (Phase 4: T4.1 audit-diagnostics 34/34 on entry, no manufactured RED; T4.2 never-panic decode fuzz harness `src/fuzz_pacb.zig` — genuine missing-module RED, green 347/347, gates test 463/463 + verify 15/15 + audit 34/34, no parser bug found; T4.3 `docs/binary-score.md` format of record + `CLAUDE.md` `'PACB'` wire row; T4.4 wave-plan corrections record). QUALIFICATION: the tree-trailing flag-combo acceptance criterion is known-failed as shipped and stays an explicitly deferred owner decision (KNOWN-GAP test pins the current refusal as interim state, NOT an accepted contract; `pacer pack` never emits such a payload); the broad post-wave review is pending — 01 is NOT marked production-complete — **update 2026-10-19 (final-corrections finish)**: the broad review HAS run and all six of its findings are dispositioned and landed (`e1e4c42`/`00de731`/`96165ce`/`848bc8c`/`bb5b8b1`/`4cbc2fa`; record: `.agent/control/binary01-final-corrections-report.md`); both owner items remain open, so the qualification stands — still NOT production-complete |
-| B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
+| B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☑ — T1.1 `ExprTrack.evalAtBinary` (commit `b717d3c`) + T1.2 the extraction (EvalCore one engine over tree\|binary `LeafSource`, `Eval` alias facade, generic `init` + `initContext`, `CompileResult.evalContext()`) landed 2026-10-19; zero respells (`Driver`/fuzz/56 test call sites unmodified), gates: test 486/486, verify 15/15 (corpus 38/0, node 94/94), zero golden drift, fuzz 5/5 361/361 (record: `.agent/control/binary02-t12-report.md`) |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |
 | C | 02 binary-runtime · P4 pattern support (gated on the prerequisite) | ☐ |
@@ -135,11 +135,11 @@ ride ABOVE plan 02, both owner decisions already asked: (1) the
 tree-trailing-comments gap — SJON `RootIter` exhaustion-consume fix vs
 approved narrowing (permission ask timed out; the KNOWN-GAP test pins
 the interim refusal, not a contract); (2) the broad post-wave review
-of 01. Next plan work is **02 binary-runtime** — P1 the `EvalCore`
-leaf + facade layering (the `DecodedTrack`/`DecodedSource` seam 01
-froze is its input), P2 artifact + closure gate + preliminary size
-trend, P3 `pacer/rt` glue; P4 pattern support stays gated on the same
-owner decision as (1). The pre-existing `posToTickLocal` assert on a
+of 01. Plan 02's **P1 is now COMPLETE (2026-10-19)** — the
+`EvalCore` leaf + `Eval` facade landed with zero respells and zero
+behavior change (status board row B). Next plan-02 work is **P2** —
+`rt_entry.zig`, the `wasm-rt` artifact, the transactional load, and the
+closure gate (T2.1's `RtSjon` window first). The pre-existing `posToTickLocal` assert on a
 bare unitless number in a time-pos slot (T3.2 finding, G-ter item 9)
 also remains owner-notified.
 

@@ -364,3 +364,34 @@ refusal into a permanent silent subset.
 ## Progress log
 
 _(created 2026-10-18; entries appended per phase)_
+
+- **2026-10-19 — Phase P1 complete (T1.1 + T1.2).** One engine now exists:
+  `src/EvalCore.zig` carries the whole `Evaluator` verbatim (frame path,
+  control/dynamic slots, `setBpm`, `expr_failures`, `last_tick`), over a
+  `LeafSource` union — `tree` (today's borrowed-tree path) | `binary`
+  (parallel compact-payload slices, `ExprTrack.evalAtBinary` the leaf,
+  T1.1) — with `Context` by value (C3, labeled choice). Construction:
+  `initContext(gpa, ctx)` (the runtime's typed spelling) plus a generic
+  `init(gpa, source: anytype)` comptime-dispatching `Context` /
+  anything-`.evalContext()` / readable `@compileError` (C2 as re-targeted
+  by R-B1); `CompileResult.evalContext()` vends the tree-arm bundle, so
+  the exact historical `Eval.Evaluator.init(gpa, &result)` call survives
+  byte-for-byte — `Driver.zig:68`, `fuzz.zig` ×4, and the 56 in-file
+  facade test call sites all UNMODIFIED (zero respells, no `Eval.init`
+  free fn). `src/Eval.zig` is the compiler-side facade: the SAME type by
+  alias + six delegated constants + a one-line comptime identity assert;
+  its test block is byte-preserved. The engine's expr arm omits-and-
+  counts binary-leaf failures exactly like tree failures; the binary
+  pattern arm asserts the track class absent (pre-P4, no silent
+  empty-features); `Ast.NodeIndex.invalid` is the inert sentinel, guarded
+  by a debug assert at the tree-arm deref (C4/R-O2). REDs: missing-module
+  (`EvalCore.zig` FileNotFound via root discovery), then missing-decl
+  (`initContext`), both observed. GREEN: `zig build test` 486/486
+  (397 root + 89 CLI; baseline 483 + 3 EvalCore tests); `zig build
+  verify` 15/15 (corpus 38/0, node 94/94, cli-golden + score-docs
+  current); `git diff --exit-code <base> -- corpus src/cli/testdata`
+  empty; `zig build fuzz` 5/5 361/361 (the unmodified call sites are
+  R-B1's proof). Deviations recorded: C2 re-targeted (facade-by-alias +
+  generic init), C3 by value — both per the plan's own §0 rulings; the
+  plan's EvalCore import list naming `Easing` was approximate (the moved
+  engine needs none — compiler-guided, as the plan allows).
