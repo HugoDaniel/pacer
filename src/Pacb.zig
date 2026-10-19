@@ -6495,7 +6495,13 @@ const extra_track_source: [:0]const u8 =
 /// together (the result is borrowed by pointer afterwards, never moved
 /// again — the compile-result borrow rule).
 const ScoreAndPacm = struct {
-    r: @import("Compile.zig").CompileResult,
+    /// The compile half's type, aliased inside this test-only struct so
+    /// helper SIGNATURES can name it without a column-0
+    /// `@import("Compile.zig")` line — the layer-1 closure gate
+    /// (`tools/audit_rt_imports.zig`) scans column-0 lines, and the whole
+    /// struct lives in the test region.
+    const R = @import("Compile.zig").CompileResult;
+    r: R,
     pacm: []u8,
 };
 
@@ -6503,7 +6509,7 @@ fn compileOk(
     alloc: std.mem.Allocator,
     source: [:0]const u8,
     host: []const PactCodec.Target,
-) !@import("Compile.zig").CompileResult {
+) !ScoreAndPacm.R {
     const Compile = @import("Compile.zig");
     const test_support = @import("test_support.zig");
     var r = try Compile.compile(alloc, test_support.schema(), source, host);

@@ -56,6 +56,9 @@ pub fn build(b: *std.Build) void {
     // and `src/fuzz.zig`) reach `Schema`'s tests, so both need the module.
     const build_options = b.addOptions();
     build_options.addOptionPath("repo_root", b.path("."));
+    // The SJON sibling checkout's src dir — the closure gate's SJON leg
+    // root (tools/audit_rt_imports.zig fixture tests resolve it here).
+    build_options.addOptionPath("sjon_src_root", sjon_dep.path("src"));
     const build_options_mod = build_options.createModule();
     test_mod.addImport("build_options", build_options_mod);
     const tests = b.addTest(.{ .root_module = test_mod });
@@ -306,4 +309,40 @@ pub fn build(b: *std.Build) void {
     // relative argv[0] survives `--build-file` from elsewhere.
     audit_diagnostics.setCwd(b.path("."));
     audit_diagnostics_step.dependOn(&audit_diagnostics.step);
+
+    // `zig build audit-rt-imports` — the runtime closure gate, layer 1
+    // (02 T2.3): column-0 BFS from `src/rt_entry.zig` under the module-aware
+    // rules (the one `@import("sjon")` window, the strict RtSjon alias
+    // grammar, the pacer + SJON allowlists with stale-entry failure both
+    // directions, the namespace→file map asserted against SJON's root.zig
+    // every run). T2.4 chains layer 2 (the physical artifact check) into
+    // this same verb. `has_side_effects` so the gate runs EVERY invocation —
+    // a cached pass must never let an edited source slip through.
+    const audit_rt_imports = b.addExecutable(.{
+        .name = "audit-rt-imports",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/audit_rt_imports.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_audit_rt_imports = b.addRunArtifact(audit_rt_imports);
+    run_audit_rt_imports.setCwd(b.path("."));
+    run_audit_rt_imports.addDirectoryArg(b.path("src"));
+    run_audit_rt_imports.addDirectoryArg(sjon_dep.path("src"));
+    run_audit_rt_imports.has_side_effects = true;
+    const audit_rt_imports_step = b.step("audit-rt-imports", "Audit the pacer-rt import closure (layer 1: source)");
+    audit_rt_imports_step.dependOn(&run_audit_rt_imports.step);
+
+    // The gate's own unit + mutation-fixture tests ride `zig build test`
+    // (02:280-290: proof by mutation — the six fixture trees under
+    // tools/testdata/rt-imports/ each carry one known-bad shape).
+    const audit_rt_imports_test_mod = b.createModule(.{
+        .root_source_file = b.path("tools/audit_rt_imports.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    audit_rt_imports_test_mod.addImport("build_options", build_options_mod);
+    const audit_rt_imports_tests = b.addTest(.{ .root_module = audit_rt_imports_test_mod });
+    test_step.dependOn(&b.addRunArtifact(audit_rt_imports_tests).step);
 }
