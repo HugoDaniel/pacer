@@ -44,6 +44,7 @@ const test_support = @import("test_support.zig");
 const Eval = @import("Eval.zig");
 const Easing = @import("Easing.zig");
 const Writes = @import("Writes.zig");
+const fuzz_pacb = @import("fuzz_pacb.zig");
 
 const Smith = std.testing.Smith;
 const testing = std.testing;
@@ -623,4 +624,18 @@ test "fuzz Compile target joins: host prefix verbatim, appends only declared" {
             "\x40" ** 32,
         },
     });
+}
+
+// ---------------------------------------------------------------------------
+// 7. Pacb.decode — whole-'PACB' container bytes, random or fixture-derived.
+//
+//    The harness body lives in its own file, `fuzz_pacb.zig`, so the RED
+//    that introduced it was a genuine missing module rather than a
+//    fabricated missing-export seam on this root (G12); this delegating
+//    wrapper is what discovery rides (this root imports siblings
+//    directly, so the module must exist for the target to compile).
+// ---------------------------------------------------------------------------
+
+test "fuzz Pacb.decode: never-panic over random bytes and fixture mutations" {
+    try fuzz_pacb.run();
 }
