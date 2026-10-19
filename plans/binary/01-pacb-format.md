@@ -13,10 +13,15 @@ determinism gate — pack the same score twice ⇒ byte-identical output.
 2026-10-19 (T2.1–T2.7 landed 2026-10-18 with the interim-review decoder
 correction — folded-tick envelope + canonical hardening; T2.8 —
 `decode`/`DecodedScore` + the PACM coherence cross-check + ownership —
-landed 2026-10-19; the tree-trailing-comments acceptance gap stays an
-explicitly deferred owner decision, pinned by a KNOWN-GAP test);
-phases 3–4 not started — the plan as a whole is NOT done (the encoder
-is still open).**
+landed 2026-10-19); Phase 3 complete 2026-10-19 (encoder core, pack
+refusals, the `pacer pack` verb); Phase 4 complete 2026-10-19 (T4.1–T4.4:
+audit closure, never-panic decode fuzz harness, `docs/binary-score.md`
+format of record + the `CLAUDE.md` wire row, wave-plan corrections
+record). The plan is COMPLETE **QUALIFIED, not silently**: the
+tree-trailing-comments acceptance criterion is known-failed as shipped
+and stays an explicitly deferred owner decision, pinned by a KNOWN-GAP
+test (the packer never emits such a payload, so `pacer pack` output is
+unaffected); the broad post-wave review is also pending.**
 
 ## Why
 
@@ -1063,3 +1068,45 @@ generated `docs/score-language.md` byte-identical to the task base
 `c8b08b5` (diff-verified; that base was itself zero-drift vs
 `90dc758`). Known T32 time-pos assert finding
 remains open, owner-notified (unchanged by this task).
+
+- **2026-10-19 — Phase 4 complete (T4.1–T4.4).** T4.1:
+  `audit-diagnostics` green on entry (**34/34, Missing: 0** — no
+  uncovered code, so no by-name test was manufactured and no commit
+  was made, exactly the plan's "only if changes needed" branch). T4.2:
+  the never-panic decode fuzz harness — RED was the genuine
+  missing-module compile error (`src/fuzz_pacb.zig: FileNotFound`,
+  wired by one import + one delegating test in `src/fuzz.zig` BEFORE
+  the file existed — the G12 shape, not a fabricated missing-export
+  seam), GREEN `zig build fuzz` **5/5 steps, 347/347**. The harness
+  asserts only arbitrary-input invariants (`Refused` ⇒ refusal
+  well-formed with `offset` inside the buffer; success ⇒ cap-bounded
+  tables + the ownership no-alias contract + clean `deinit`; no panic;
+  no leak) over raw Smith bytes AND structured mutations of the three
+  committed fixtures (byte flips, truncations, cross-fixture splices,
+  count-field inflation drawing 131073 / `u32` max / drawn values —
+  directory exactness answers these with `count_mismatch`; the
+  past-cap `cap_exceeded` branches proper stay unit-pinned in
+  `Pacb.zig`), budget 16 KiB ≥ fixture + splice slack. Positive
+  control: the three REAL-CLI fixtures decode clean. No parser bug
+  surfaced — no regression RED, no `Pacb.zig` change, no fuzzer
+  weakening. Gates after code: `test` **463/463**, `verify` **15/15**,
+  `fuzz` **347/347**, `audit` **34/34**. T4.3: `docs/binary-score.md`
+  created as the format of record (layout, frozen constants/ordinals,
+  caps + the `MAX_TICK_ENTRIES` derivation, the folded-tick envelope,
+  canonical presence/defaults, validation summary, structural
+  consumption + the KNOWN tree-trailing gap stated as interim state
+  (owner decision pending, not an accepted contract), the PACM trust
+  model with its exact checked-surface claim, the core-expr capability
+  set under the full-outcome head-resolution rule, the producer
+  section incl. the explicit-prototype `pack_patterns_unsupported`);
+  `CLAUDE.md` gained the `'PACB'` wire-table row (data at rest,
+  append-only, `VERSION` bumps breaking) with the one distinguishing
+  sentence. T4.4 (the corrections record) lands as this entry's
+  companion commit. **Plan 01 closes QUALIFIED, not silently
+  complete**: the tree-trailing flag-combo acceptance criterion is
+  known-failed as shipped and stays an explicitly deferred owner
+  decision (KNOWN-GAP test pins the current refusal; the packer never
+  emits such a payload, so `pacer pack` output is unaffected); the
+  broad post-wave review is also pending. Next: plan 02
+  (binary-runtime) — P1 `EvalCore` layering; P4 pattern support stays
+  gated on the same owner decision.

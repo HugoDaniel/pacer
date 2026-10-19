@@ -61,6 +61,7 @@ major once 1.0 tags, a 0.x minor until then.
 | `'PACD'` diagnostics out | `Abi.encodeDiags` | driver → host |
 | `'PACM'` score metadata (+ TLV section stream) out | `Abi.encodeMeta` | driver → host |
 | `'PACW'` writes out (20-byte entries) | `Writes.encode` / `decode` | driver → host |
+| `'PACB'` compiled-score container | `Pacb.decode` / `PacbEncode.encode` + `pacer pack` | offline file (data at rest) |
 | `Compile.Code` (u16) | `src/Compile.zig` | rides in `'PACD'` |
 | `Easing.Op` (u8) | `src/Easing.zig` | rides in `'PACM'` `'EASE'` |
 | `drv_*` exports | `src/wasm_entry.zig` | the JS ABI |
@@ -68,6 +69,12 @@ major once 1.0 tags, a 0.x minor until then.
 The npm glue (`npm/pacer/src/index.js`) mirrors every blob with one `DataView`
 pass and casts the exports to the `PacerExports` typedef (`npm/pacer/src/types.js`)
 — keep both sides in lockstep.
+
+`'PACB'` is the table's one data-at-rest member: it does NOT cross the
+`pacer.wasm` boundary — `pacer pack` writes it offline and the playback
+runtime reads it. It is append-only under the same policy (a new section
+kind appends; a breaking layout change bumps its `VERSION`). Convention
+of record: `docs/binary-score.md` and `src/Pacb.zig`'s header.
 
 **The CLI's JSON is deliberately NOT in this set.** Append-only exists because a
 second, independent implementation decodes those blobs; a format with two

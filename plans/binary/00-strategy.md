@@ -8,10 +8,15 @@ Phase 2 COMPLETE 2026-10-19 (T2.1–T2.7 landed 2026-10-18, plus the
 interim-review decoder correction — folded-tick envelope + canonical
 hardening — same day; T2.8 — `decode`/`DecodedScore`, the PACM coherence
 cross-check with the per-source key-range rule, and the ownership proof —
-landed 2026-10-19); plan 01 as a whole is NOT done (phases 3–4 — the
-encoder, `pacer pack`, codes/fuzz/docs — remain open); the
-tree-trailing-comments acceptance gap stays an explicitly deferred owner
-decision pinned by a KNOWN-GAP test; plans 02–04 not started.**
+landed 2026-10-19); plan 01 Phases 3–4 COMPLETE 2026-10-19 (encoder core,
+pack refusals, `pacer pack`; audit closure, never-panic decode fuzz
+harness, `docs/binary-score.md` + the `CLAUDE.md` wire row, wave-plan
+corrections record) — plan 01 closes **QUALIFIED, not silently**: the
+tree-trailing-comments acceptance criterion is known-failed as shipped and
+stays an explicitly deferred owner decision pinned by a KNOWN-GAP test
+(interim state, not an accepted contract; `pacer pack` never emits such a
+payload), and the broad post-wave review is pending; plans 02–04 not
+started.**
 
 ## North star
 
@@ -104,7 +109,7 @@ decided by gates, not by size.
 | Wave | Item | Status |
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
-| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 COMPLETE (T2.1–T2.8: header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader, and T2.8's whole-blob `decode`/`DecodedScore` + `verifyRouting` PACM coherence cross-check + ownership — landed 2026-10-19 with the interim-review correction before it; tree-trailing acceptance still deferred to the owner, KNOWN-GAP-pinned) + Phase 3 COMPLETE (T3.1 `src/PacbEncode.zig` encoder core landed 2026-10-19: canonical assembly of all 14 sections, `'DECL'` = the merged join's declared tail, `'EASE'`/`'TMPO'` sliced verbatim out of the single embedded `'PACM'` pass, per-track payloads via `cloneNode` + compact `toBinary`, ≥5 compiled-fixture round-trips incl. `Expr.evalBinary` t=0 parity and pack-twice byte-equality; T3.2 landed 2026-10-19: `collectCallHeads` position classifier mirroring the scheduler's shapes/abort order, `preflight` with the full-outcome I1/G11 head compare, the interim `pack_patterns_unsupported` refusal, and the three measured caps — per-payload/`'PAYL'`-total/`MAX_TICK_ENTRIES` — riding three appended `Compile.Code` variants 31–33, audit-diagnostics 34/34; T3.3 landed 2026-10-19: the `pacer pack` verb — `src/cli/Pack.zig` with the `--targets-json` buildJoin adapter, preflight-before-encode wiring, real self-check (decode + field-for-field table parity + fresh-`encodeMeta` PACM equality), atomic temp+rename write, `pack` report object, starter-pack refusal golden, and three REAL-CLI byte-stability fixtures; test 463/463, verify 15/15, audit 34/34); phase 4 open — codes/fuzz/docs-of-record |
+| A | 01 pacb-format · all phases | ☑ **QUALIFIED** — Phases 1–4 all landed 2026-10-19 (Phase 4: T4.1 audit-diagnostics 34/34 on entry, no manufactured RED; T4.2 never-panic decode fuzz harness `src/fuzz_pacb.zig` — genuine missing-module RED, green 347/347, gates test 463/463 + verify 15/15 + audit 34/34, no parser bug found; T4.3 `docs/binary-score.md` format of record + `CLAUDE.md` `'PACB'` wire row; T4.4 wave-plan corrections record). QUALIFICATION: the tree-trailing flag-combo acceptance criterion is known-failed as shipped and stays an explicitly deferred owner decision (KNOWN-GAP test pins the current refusal as interim state, NOT an accepted contract; `pacer pack` never emits such a payload); the broad post-wave review is pending — 01 is NOT marked production-complete |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |
@@ -116,52 +121,27 @@ decided by gates, not by size.
 
 ## What's next
 
-→ Plan 01 Phase 4 (T4.1 the diagnostics-audit closure check, T4.2 the
-never-panic decode fuzz harness over the three committed `.pacb`
-fixtures, T4.3 docs of record + the `'PACB'` wire-table row). T3.3
-(the `pacer pack` verb) landed 2026-10-19: preflight wired ahead of
-`encode` so refusals surface as ordinary diagnostics, the
-`--targets-json` buildJoin adapter, the self-check + atomic write,
-the starter-pack refusal golden, and the byte-stability fixtures;
-test 463/463, verify 15/15, audit 34/34. T3.2 (pack
-refusals) landed 2026-10-19: the `collectCallHeads` position
-classifier (mirroring `scheduleForm`/`scheduleFormBinary` shapes and
-the scheduler's abort order), `preflight`'s full-outcome I1/G11 head
-compare against the frozen core-only binary schema, the interim
-`:pattern` refusal, and the three MEASURED caps (per-payload,
-`'PAYL'` total, `MAX_TICK_ENTRIES` = 131072 with the boundary
-round-trip pinned). T3.1 (`src/PacbEncode.zig`, the encoder core) landed
-2026-10-19: canonical assembly of all 14 sections with the frozen
-presence/omit/zero rules, `'DECL'` as the merged join's declared tail,
-`'EASE'`/`'TMPO'` sliced verbatim out of the one embedded `'PACM'`
-pass, and per-track payloads via `cloneNode` into a one-root tree +
-compact `toBinary` — green through `Pacb.decode` on compiled fixtures
-(keys-only, expr+keys, trigger/scene/control/emit, tempo-mapped,
-pattern-serialize, declared-join) with eval parity and pack-twice
-byte-equality.
-Phase 2 is COMPLETE (2026-10-19): T2.1 landed the `'PACB'`
-header/directory/caps skeleton, T2.2 the transport stage
-(`decodeTransport`: `'TRAN'`/`'TMPO'` domains before the `TimeMap`
-rebuild, compiler-pinned), T2.3 the registry identity
-(`decodeRegistry`: canonical `'PACT'` byte-compare, `'DECL'` bounds,
-fnv fast-reject), T2.4 the record sections (`decodeRecords`:
-`'TRAK'`/`'KEYS'`/`'TICK'`/`'EMIT'`/`'SCEN'`), T2.5 the ease/control
-stage (`decodeEaseControls`: `'EASE'` program invariants,
-`'STRS'`/`'CTRL'` coherence), T2.6 the payload stage
-(`decodePayloads`: `'PAYL'` structural consumption over
-`BinaryCursor`, arena-owned copies), T2.7 the std-only `'PACM'`
-reader (`Pacm.decode`: total, aliasing, frozen constants asserted in
-root, three producer-pinned oracle blobs), and T2.8 the whole-blob
-`decode` → `DecodedScore` with the PACM coherence cross-check
-(`verifyRouting` resident in `Pacb.zig` per the focused ruling, the
-per-source key-range rule B1/G9, `pacm_fnv` fast reject agreeing with
-the full walk) and the clobber-proof ownership proof (arena transfer —
-one arena, no dangling stage arenas; `Expr.evalBinary` vs the text
-path + inline key-segment math; no `Evaluator` from decoded bytes).
-The tree-trailing-comments acceptance gap remains an explicitly
-deferred owner decision (KNOWN-GAP test pins the current refusal).
-Phase 1 (the `'PACT'` codec extraction, T1.1) landed 2026-10-18 with
-its zero-diff gate.
+→ Plan 01 closed 2026-10-19, **QUALIFIED** (see the status board row):
+all four phases landed — Phase 4 closed the loop with the audit check
+(already 34/34, nothing manufactured), the never-panic decode fuzz
+harness over random bytes + the three committed fixtures (flips,
+truncations, splices, count inflation past `MAX_TICK_ENTRIES`; no
+parser bug found), `docs/binary-score.md` as the format of record plus
+the `CLAUDE.md` `'PACB'` wire row, and the wave-plan corrections
+record (per-source PACM key range, scene/emit/control validation
+completion, full-outcome head resolution, `MAX_TICK_ENTRIES`
+derivation, folded-tick envelope wording, SJON CLI prose). Two items
+ride ABOVE plan 02, both owner decisions already asked: (1) the
+tree-trailing-comments gap — SJON `RootIter` exhaustion-consume fix vs
+approved narrowing (permission ask timed out; the KNOWN-GAP test pins
+the interim refusal, not a contract); (2) the broad post-wave review
+of 01. Next plan work is **02 binary-runtime** — P1 the `EvalCore`
+leaf + facade layering (the `DecodedTrack`/`DecodedSource` seam 01
+froze is its input), P2 artifact + closure gate + preliminary size
+trend, P3 `pacer/rt` glue; P4 pattern support stays gated on the same
+owner decision as (1). The pre-existing `posToTickLocal` assert on a
+bare unitless number in a time-pos slot (T3.2 finding, G-ter item 9)
+also remains owner-notified.
 
 ## Decision log
 
