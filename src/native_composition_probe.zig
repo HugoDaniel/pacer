@@ -24,6 +24,7 @@
 const std = @import("std");
 const pacer = @import("pacer");
 const NativeRt = @import("NativeRt.zig");
+const NativeText = @import("NativeText.zig");
 
 const t = std.testing;
 
@@ -42,6 +43,11 @@ const SCORE_SOURCE: [:0]const u8 =
     \\(track :target glow (key :at 0b :value 0.2) (key :at 4b :value 0.8))
 ;
 
+/// The fixed test-harness-only diagnostic source (binary03 T5b names it).
+/// It is never packed or serialized; T5a only proves the real text entry
+/// produces actual `'PACD'` diagnostics and unloads the previous score.
+const DIAGNOSTIC_SOURCE: []const u8 = "(transport :bpm 0)\n";
+
 /// `prt_registerControl`'s frozen failure sentinel (rt_entry.NO_SLOT).
 const NO_SLOT: u32 = 0xffff_ffff;
 
@@ -54,10 +60,12 @@ test "native composition: public pacer consumer + actual private runtime object"
 }
 
 fn runComposition(gpa: std.mem.Allocator) !void {
-    // Deferred BEFORE the first load: every assertion/error exit tears the
-    // production session down. The initial call also proves idempotence.
+    // Deferred BEFORE the first load: every assertion/error exit tears BOTH
+    // production sessions down. The initial calls also prove idempotence.
     defer NativeRt.reset();
     NativeRt.reset();
+    defer NativeText.reset();
+    NativeText.reset();
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
@@ -156,6 +164,160 @@ fn runComposition(gpa: std.mem.Allocator) !void {
     try t.expectEqual(@as(u32, 0), NativeRt.metaLen());
     NativeRt.reset(); // repeated cleanup is safe
     try t.expectEqual(@as(u32, 0), NativeRt.metaLen());
+
+    // --- Actual native text entry: real `drv_*` lifecycle --------------
+    try runTextLifecycle(a, &driver, pact);
+}
+
+/// The T5a text-object proof. Every call below reaches the REAL `drv_*`
+/// definitions in the separately compiled native text object; this
+/// consumer imports only the std-only `NativeText` C facade. The public
+/// `Driver` above stays the stationary metadata/frame oracle throughout.
+fn runTextLifecycle(
+    a: std.mem.Allocator,
+    oracle: *pacer.Driver,
+    pact: []const u8,
+) !void {
+    // The oracle's initial PACM is the byte truth for the first text load.
+    const want_meta = try a.alloc(u8, pacer.Abi.metaEncodedLen(&oracle.result));
+    _ = try pacer.Abi.encodeMeta(&oracle.result, want_meta);
+
+    try t.expectEqual(@as(u32, 1), NativeText.abiVersion());
+    try t.expect(@as(usize, NativeText.docCap()) >= SCORE_SOURCE.len);
+    try t.expect(@as(usize, NativeText.targetsCap()) >= pact.len);
+
+    // --- Clean load: status 0, state/control/BPM, copied blobs ---------
+    @memcpy(NativeText.docPtr()[0..SCORE_SOURCE.len], SCORE_SOURCE);
+    @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(
+        @as(u32, 0),
+        NativeText.load(@intCast(SCORE_SOURCE.len), @intCast(pact.len)),
+    );
+    try t.expect(NativeText.metaLen() > 0);
+    try t.expectEqualSlices(u8, want_meta, NativeText.metaPtr()[0..NativeText.metaLen()]);
+
+    // A clean load still encodes a PACD header with zero records.
+    const diag_clean = try a.dupe(u8, NativeText.diagPtr()[0..NativeText.diagLen()]);
+    const clean_view = pacer.Abi.decodeDiags(diag_clean) orelse
+        return error.TestUnexpectedResult;
+    try t.expectEqual(@as(u32, 0), clean_view.count);
+
+    try t.expectEqual(@as(u32, 0), NativeText.setControl(0, 0.9, 0, 0, 0));
+    try t.expectEqual(@as(u32, 0), NativeText.setBpm(240));
+    try t.expect(oracle.evaluator.?.setControl(0, .{ 0.9, 0, 0, 0 }));
+    try t.expect(oracle.evaluator.?.setBpm(240));
+    try expectTextSecondsFrame(oracle, 0.3);
+    try expectTextTicksFrame(oracle, 7);
+
+    const frame_seconds = try captureTextWrites(a, NativeText.evalSeconds(0.3));
+    const frame_ticks = try captureTextWrites(a, NativeText.evalTicks(7));
+    const meta_before = try a.dupe(u8, NativeText.metaPtr()[0..NativeText.metaLen()]);
+    const diag_before = try a.dupe(u8, NativeText.diagPtr()[0..NativeText.diagLen()]);
+
+    // --- Over-cap bad call: status 2, every output preserved -----------
+    // docCap() + 1 is the rejected length; nothing out of bounds is read
+    // or copied. Native pointers never pass through a u32 cast.
+    try t.expectEqual(
+        @as(u32, 2),
+        NativeText.load(NativeText.docCap() + 1, @intCast(pact.len)),
+    );
+    try t.expectEqualSlices(u8, frame_seconds, try captureTextWrites(a, NativeText.evalSeconds(0.3)));
+    try t.expectEqualSlices(u8, frame_ticks, try captureTextWrites(a, NativeText.evalTicks(7)));
+    try t.expectEqualSlices(u8, meta_before, NativeText.metaPtr()[0..NativeText.metaLen()]);
+    try t.expectEqualSlices(u8, diag_before, NativeText.diagPtr()[0..NativeText.diagLen()]);
+
+    // --- Fixed diagnostic source: status 1, real PACD, unloaded --------
+    @memcpy(NativeText.docPtr()[0..DIAGNOSTIC_SOURCE.len], DIAGNOSTIC_SOURCE);
+    try t.expectEqual(
+        @as(u32, 1),
+        NativeText.load(@intCast(DIAGNOSTIC_SOURCE.len), @intCast(pact.len)),
+    );
+    try t.expect(NativeText.diagLen() > pacer.Abi.DIAGS_HEADER_LEN);
+    try t.expectEqual(@as(u32, 0), NativeText.evalSeconds(0.3));
+    try t.expectEqual(@as(u32, 0), NativeText.evalTicks(7));
+    try t.expectEqual(@as(u32, 0), NativeText.metaLen());
+
+    const diag_blob = NativeText.diagPtr()[0..NativeText.diagLen()];
+    const diag_view = pacer.Abi.decodeDiags(diag_blob) orelse
+        return error.TestUnexpectedResult;
+    try t.expect(diag_view.count > 0);
+    var records = diag_view.records();
+    var decoded: u32 = 0;
+    while (records.next()) |record| {
+        decoded += 1;
+        try t.expect(record.message.len > 0);
+    }
+    try t.expectEqual(diag_view.count, decoded);
+
+    // --- Cleanup from the diagnostic session: diagnostic state cleared -
+    NativeText.reset();
+    try expectTextUnloaded();
+
+    // --- Fresh load after diagnostic teardown --------------------------
+    @memcpy(NativeText.docPtr()[0..SCORE_SOURCE.len], SCORE_SOURCE);
+    @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(
+        @as(u32, 0),
+        NativeText.load(@intCast(SCORE_SOURCE.len), @intCast(pact.len)),
+    );
+    try t.expect(NativeText.metaLen() > 0);
+    try t.expect(NativeText.evalSeconds(0.3) > 0);
+
+    // --- Cleanup directly from a live clean score, then idempotence ----
+    NativeText.reset();
+    try expectTextUnloaded();
+    NativeText.reset();
+    try expectTextUnloaded();
+
+    // --- Fresh load after clean teardown, then final cleanup -----------
+    @memcpy(NativeText.docPtr()[0..SCORE_SOURCE.len], SCORE_SOURCE);
+    @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(
+        @as(u32, 0),
+        NativeText.load(@intCast(SCORE_SOURCE.len), @intCast(pact.len)),
+    );
+    try t.expect(NativeText.evalSeconds(0.3) > 0);
+    NativeText.reset();
+    try expectTextUnloaded();
+
+    // The public oracle was never part of the text object's session: it
+    // still compiles, evaluates, and encodes the same immutable PACM.
+    try t.expect(oracle.result.ok());
+    const entries = try oracle.evaluator.?.evalSeconds(0.3);
+    var oracle_writes: [pacer.Writes.encodedLen(pacer.EvalCore.MAX_FRAME_ENTRIES)]u8 = undefined;
+    _ = try pacer.Writes.encode(entries, &oracle_writes);
+    const oracle_meta = try a.alloc(u8, pacer.Abi.metaEncodedLen(&oracle.result));
+    _ = try pacer.Abi.encodeMeta(&oracle.result, oracle_meta);
+    try t.expectEqualSlices(u8, want_meta, oracle_meta);
+}
+
+fn expectTextSecondsFrame(oracle: *pacer.Driver, seconds: f64) !void {
+    const entries = try oracle.evaluator.?.evalSeconds(seconds);
+    try expectTextFrame(entries, NativeText.evalSeconds(seconds));
+}
+
+fn expectTextTicksFrame(oracle: *pacer.Driver, tick: i64) !void {
+    const entries = oracle.evaluator.?.evalTicks(tick);
+    try expectTextFrame(entries, NativeText.evalTicks(tick));
+}
+
+fn expectTextFrame(entries: []const pacer.Writes.Entry, got_len: u32) !void {
+    try t.expect(got_len > 0);
+    var want_buf: [pacer.Writes.encodedLen(pacer.EvalCore.MAX_FRAME_ENTRIES)]u8 = undefined;
+    const want = try pacer.Writes.encode(entries, &want_buf);
+    try t.expectEqualSlices(u8, want, NativeText.writesPtr()[0..got_len]);
+}
+
+fn captureTextWrites(a: std.mem.Allocator, len: u32) ![]u8 {
+    try t.expect(len > 0);
+    return a.dupe(u8, NativeText.writesPtr()[0..len]);
+}
+
+fn expectTextUnloaded() !void {
+    try t.expectEqual(@as(u32, 0), NativeText.evalSeconds(0.3));
+    try t.expectEqual(@as(u32, 0), NativeText.evalTicks(7));
+    try t.expectEqual(@as(u32, 0), NativeText.metaLen());
+    try t.expectEqual(@as(u32, 0), NativeText.diagLen());
 }
 
 /// Encode the public driver's frame and compare it with the production

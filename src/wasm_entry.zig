@@ -19,7 +19,7 @@
 //! diags     64 KiB  → driver writes 'PACD' blob    (drv_diagPtr/drv_diagLen)
 //! meta     320 KiB  → driver writes 'PACM' blob    (drv_metaPtr/drv_metaLen)
 //! writes   ~8 KiB   → driver writes 'PACW' buffer  (drv_writesPtr)
-//! heap              ← compile arena + evaluator (std.heap.wasm_allocator)
+//! heap              ← compile arena + evaluator (std.heap.page_allocator)
 //! ```
 //!
 //! ## Lifecycle
@@ -67,7 +67,12 @@ const Eval = @import("Eval.zig");
 const TrackTable = @import("TrackTable.zig");
 const Writes = @import("Writes.zig");
 
-const gpa = std.heap.wasm_allocator;
+/// On wasm32 `page_allocator` IS the WasmAllocator (`heap.zig` dispatches
+/// `isWasm`); natively it is PageAllocator — one spelling, both targets.
+/// The wasm instance owns its schema for life; the native text harness
+/// (`NativeHarness.reset` below) tears the schema down after its Driver.
+/// See `src/rt_entry.zig:82–86` for the same portability seam.
+const gpa = std.heap.page_allocator;
 
 const MAX_DOC_SIZE: usize = 256 * 1024;
 const MAX_TARGETS_BLOB: usize = 64 * 1024;
@@ -116,11 +121,12 @@ var writes_buffer: [WRITES_CAP]u8 align(4) = undefined;
 /// entirely inside `drv_load`.
 var targets_scratch: [Abi.MAX_TARGETS]Compile.Target = undefined;
 
-/// The preloaded score schema — parsed once, on the first `drv_load`,
-/// and held for the instance's lifetime (the wasm module is the host, and
-/// a host owns exactly one `Schema`; see `Schema.zig`). It is the
-/// outermost ring of the borrow nesting, so it is never torn down: every
-/// `Driver` built against it goes first, and the instance dies with it.
+/// The preloaded score schema — parsed once, on the first `drv_load`
+/// (a wasm instance is the host, and a host owns one `Schema`; see
+/// `Schema.zig`). It is the outermost ring of the borrow nesting, so it
+/// is only torn down after every `Driver` built against it is gone: the
+/// wasm instance dies with it, while `NativeHarness.reset` deinitializes
+/// it natively and a fresh load recreates it.
 var schema: ?Schema = null;
 
 /// Borrowed handle to `schema`, preloading on first use. Null only on
@@ -295,3 +301,52 @@ fn unload() void {
         loaded = false;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Native harness surface (binary03 T5a) — object-local only
+// ---------------------------------------------------------------------------
+
+/// Aliases of the PRODUCTION `drv_*` exports, plus the ordered native
+/// teardown. These are aliases, not wrappers: the separately compiled
+/// `src/native_text_bridge.zig` takes their addresses so the real entry is
+/// analyzed and linked into the private native text object, and the
+/// std-only `src/NativeText.zig` facade declares the same C signatures.
+///
+/// The namespace is visible only to that object and to source-owning tests;
+/// it is NOT `export`ed, adds no wasm export, is not reachable from public
+/// `root.zig`, and exposes no Schema, Driver, allocator or wire type.
+///
+/// `reset` is the object-local ordered teardown: existing `unload()` first
+/// (Driver/evaluator before the schema they borrow), then the schema
+/// deinit + null, then the test-session diagnostic length last. It is
+/// idempotent, never runs implicitly, and the next `drv_load` recreates
+/// the schema.
+pub const NativeHarness = struct {
+    pub const abiVersion = drv_abiVersion;
+    pub const docPtr = drv_docPtr;
+    pub const docCap = drv_docCap;
+    pub const targetsPtr = drv_targetsPtr;
+    pub const targetsCap = drv_targetsCap;
+    pub const load = drv_load;
+    pub const diagPtr = drv_diagPtr;
+    pub const diagLen = drv_diagLen;
+    pub const metaPtr = drv_metaPtr;
+    pub const metaLen = drv_metaLen;
+    pub const writesPtr = drv_writesPtr;
+    pub const evalSeconds = drv_eval;
+    pub const evalTicks = drv_evalTicks;
+    pub const setControl = drv_setControl;
+    pub const clearControl = drv_clearControl;
+    pub const registerControl = drv_registerControl;
+    pub const setBpm = drv_setBpm;
+    pub const exprFailures = drv_exprFailures;
+
+    pub fn reset() void {
+        unload();
+        if (schema) |*s| {
+            s.deinit();
+            schema = null;
+        }
+        diags_len = 0;
+    }
+};

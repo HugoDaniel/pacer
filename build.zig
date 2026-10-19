@@ -320,6 +320,27 @@ pub fn build(b: *std.Build) void {
         .name = "pacer-native-rt",
         .root_module = native_rt_mod,
     });
+    // The text object is a SECOND separate compilation, rooted at
+    // `native_text_bridge.zig` → actual `wasm_entry.zig`. It owns the real
+    // `drv_*` definitions and the anonymous score manifest; it imports no
+    // public `pacer` and no corpus manifest, and defines no plugin stub.
+    // `page_allocator` is the only production portability correction, so
+    // the shipped wasm artifact remains byte-identical on wasm32.
+    const native_text_mod = b.createModule(.{
+        .root_source_file = b.path("src/native_text_bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_mod },
+        },
+    });
+    native_text_mod.addAnonymousImport("pacer_schema", .{
+        .root_source_file = b.path("schema/pacer.sjon"),
+    });
+    const native_text_object = b.addObject(.{
+        .name = "pacer-native-text",
+        .root_module = native_text_mod,
+    });
     const probe_mod = b.createModule(.{
         .root_source_file = b.path("src/native_composition_probe.zig"),
         .target = target,
@@ -329,6 +350,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     probe_mod.addObject(native_rt_object);
+    probe_mod.addObject(native_text_object);
     const probe = b.addExecutable(.{
         .name = "native-composition-probe",
         .root_module = probe_mod,
