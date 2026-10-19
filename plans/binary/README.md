@@ -99,7 +99,10 @@ run typecheck && npm test`. New from this wave (all proposed, created by
 their phases): `zig build parity`, `zig build wasm-rt`, `zig build
 audit-rt-imports`. Native Zig runs ONLY via
 `obs sh -c 'cd /home/agent/worktrees/animader-init/pacer && …'` — no Linux
-Zig; the full SJON CLI is unavailable on this host (libwasmtime). Browser
+Zig; the plugin-exec (libwasmtime) SJON CLI build is unavailable on this
+host — the plugin-exec=false SJON CLI builds from the path dependency and
+runs on obs (pacer's own `verify` score-docs leg uses it, `build.zig`).
+Browser
 acceptance uses the real-GPU OpenCode browser-tester with the parent starting
 servers; no plan here claims a browser result.
 

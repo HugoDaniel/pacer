@@ -166,13 +166,29 @@ each section's counts × record width consume its length exactly
 
 Transport and domains — all BEFORE any `TimeMap` call (its contract is
 asserts, `src/TimeMap.zig:84-97`): `bpm` finite and 1..1000; `beats_per_bar`
-1..16; `dur > 0` when the present-flag is set; `|tick| ≤ MAX_TICK` wherever
-a tick rides; `'TMPO'` ascending, `[0].tick == 0`, `[0].bpm == 'TRAN'.bpm`,
-every segment bpm finite and 1..1000, count ≤ `MAX_TEMPO_SEGMENTS`.
+1..16; `dur > 0` when the present-flag is set; the tick envelope is
+fold-dependent (the interim decoder review's R1/R2, architect-ruled):
+scened fields — keys `at`, periodic `trig_offset`, explicit `'TICK'`
+entries — accept `|v| ≤ 2·MAX_TICK` **inclusive** (each is one checked
+i64 add of a scene start ≤ MAX_TICK and a local position ≤ MAX_TICK, so
+2·MAX_TICK itself is compile-reachable and accepted), while unfolded
+fields keep the plain grid bound — `trig_every` ∈ 1..MAX_TICK (never
+scene-folded) and `'TRAN'`/`'TMPO'` ticks stay ≤ MAX_TICK (no fold
+exists there); `'TMPO'` ascending, `[0].tick == 0`, `[0].bpm ==
+'TRAN'.bpm`, every segment bpm finite and 1..1000, count ≤
+`MAX_TEMPO_SEGMENTS`.
 
-Records: counts ≤ the caps table (00-strategy Global constraints);
-`ncomp ∈ 1..4`; `scene == 0xffff (NO_SCENE, src/TrackTable.zig:53)` or <
-`MAX_SCENES`; `trig_kind`/`source`/`name` ordinals in range; per-source
+Records: counts ≤ the caps table (00-strategy Global constraints) and
+the **global `'TICK'` count ≤ `MAX_TICK_ENTRIES`** (the cap proposal
+below — decode checks directory exactness first, then the cap);
+`ncomp ∈ 1..4`; `scene == 0xffff (NO_SCENE, src/TrackTable.zig:53)` or
+**< the actual `'SCEN'` count** (the table invariant is a valid index
+into `scenes`, `src/TrackTable.zig:25`; compile assigns structurally
+`< scenes.len`, `src/Compile.zig:965` — the row count, not the cap);
+`'EMIT'` count ≤ 5 with **unique** name ordinals (the `EmitName`
+field-count ceiling and lane uniqueness `Eval` asserts,
+`src/Eval.zig:184-186`) and a scalar joined entry per lane;
+`trig_kind`/`source`/`name` ordinals in range; per-source
 unused fields MUST be zero (`trig_every`/`trig_offset` zero for
 keys/expr/pattern; `payload_off/len` zero for keys and periodic triggers;
 `key_start/len` zero for expr/pattern); `reserved`/pad fields zero.
@@ -192,12 +208,18 @@ zeroed convention on copy — the format's own rule, `src/Easing.zig:143-146`);
 
 Triggers/scenes: `trig_every > 0` for periodic (the compile rule,
 `plans/00-strategy.md:543-546`); explicit schedules non-empty, strictly
-ascending, in tick range; scene `start_tick + dur_ticks` checked-add (compile
+ascending, inside the folded envelope above (`|v| ≤ 2·MAX_TICK`
+inclusive); scene `start_tick + dur_ticks` checked-add (compile
 raises `tick_overflow` — decode refuses the same class).
 
 Controls: ids unique, non-empty, not reserved, in range of `'STRS'`;
-`type`/min/max flags coherent (a min/max flag set ⇒ the corresponding lanes
-are finite); env-only controls use `target_id == 0xffff`
+`type` ordinal ≤ 2 (`TrackTable.ControlType` is `enum(u8)`
+slider/xy/color, `src/TrackTable.zig:195` — a wider byte is
+illegal-enum behavior at first switch, a decoder trap decode must
+pre-empt) and env-only `ncomp ∈ 1..4` (no join entry exists to check
+it against, `src/TrackTable.zig:212-214`); `type`/min/max flags
+coherent (a min/max flag set ⇒ the corresponding lanes are finite);
+env-only controls use `target_id == 0xffff`
 (`TrackTable.NO_TARGET`).
 
 Payloads (the structural-consumption rule): each payload passes
@@ -220,7 +242,20 @@ enforced, never assumed — 256 KiB per payload / 4 MiB total, coarse
 bounds that keep one pathological expression from dominating the
 input zone while sitting far above every corpus case, with `pack_cap_exceeded`
 carrying the measured size in its diagnostic; frozen with v1 and
-recorded in `docs/binary-score.md`. `pacbWorstCase()` (the `metaWorstCase`
+recorded in `docs/binary-score.md`. `MAX_TICK_ENTRIES` = **131072**
+joins them under the same proposals-with-rationale authority, with
+this derivation: the wasm artifact's static doc zone is 256 KiB
+(`MAX_DOC_SIZE`, `src/wasm_entry.zig:72`), explicit `:at` entries are
+a direct literal vector with no sharing/repetition construct
+(`buildAtList`, `src/Compile.zig:1105-1131`), and each entry costs at
+least 2 source bytes (shortest atom + separator/delimiter, amortized)
+— so the **global** sum of explicit ticks across **all** tracks of any
+wasm-compilable score is ≤ 256×1024/2 = 131072 (worst-case `'TICK'`
+section ≈ 1 MiB). A conservative producer bound, not a claim of
+tightness; native-band sources (256 KiB–1 MiB, `src/cli/Source.zig:20`)
+and direct-API compiles can exceed it, and `pack` refuses loudly with
+the measured count (`pack_cap_exceeded`). The text path stays
+uncapped — a v1 binary-format resource policy. `pacbWorstCase()` (the `metaWorstCase`
 pattern, `src/Abi.zig:158-174`) derives the input-zone bound once, as
 arithmetic restating the spec.
 
@@ -243,8 +278,13 @@ enters the closure), has validated it at decode:
    (`animader/animader/demo/lib/score.mjs:167-197`) — against the
    decoded sections: transport header block == `'TRAN'`; `track_count`
    == `'TRAK'` count and per-track
-   `(target_id, registry, ncomp, source, key_start, key_len)` ==
-   `'TRAK'[i]`; `key_count` == `'KEYS'` count; `control_count` ==
+   `(target_id, registry, ncomp, source)` == `'TRAK'[i]`, with the
+   key-range comparison **per source** (B1/G9: a keys track's PACM
+   `key_start/key_len` == the `'TRAK'` fields; every other source's
+   meta range is the constant `(0,0)` — `Abi.encodeMeta`'s own
+   spelling for non-keys, `src/Abi.zig:437-440` — never compared
+   against a real `'TICK'` slice, which `'TRAK'` carries for an
+   explicit trigger); `key_count` == `'KEYS'` count; `control_count` ==
    `'CTRL'` count with per-control identity/value lanes == `'CTRL'[i]`
    and the id matched in `'STRS'`; `'SCEN'` == `'SCEN'`;
    `'EASE'`/`'TMPO'` payloads byte-equal to their PACB sections when
@@ -337,11 +377,19 @@ Refusals, each an appended `Compile.Code`:
   TWICE: through the compile result's `eval_schema` (what the TEXT path
   evaluates — core ⊕ the document's user plugins,
   `src/Compile.zig:329-334`, `src/Eval.zig:230`) and through the frozen
-  binary-arm schema (core [+pattern at P4]). **Refusal is exactly the
-  divergence:** resolves (found OR ambiguous) through `eval_schema` but
-  not found through the binary schema ⇒ `pack_user_expr_unsupported`
-  naming the head and span. Found in both ⇒ core — identical on both
-  paths. Found in NEITHER ⇒ a form-as-data literal — legal
+  binary-arm schema (core [+pattern at P4]). **Refusal is the
+  full-outcome compare** (I1/G11 — the identity rule, replacing the
+  earlier "found in both ⇒ identical"): a head packs clean iff the
+  binary schema resolves it `.found` **in the core plugin** AND the
+  text `eval_schema` resolves it `.found` with the **SAME (plugin,
+  func) identity**; `eval_schema` resolving `.ambiguous` refuses even
+  when the binary schema finds the head (a user plugin redeclaring a
+  core name makes the bare head ambiguous on BOTH schedule paths —
+  `error.AmbiguousFunction`, `SJON/src/Schema.zig:143-168`,
+  `SJON/src/Expr.zig:2854`); `eval_schema` finding it in a non-core
+  plugin (binary: not-found) or with a different identity likewise
+  refuses — `pack_user_expr_unsupported` naming the head and span.
+  Found in NEITHER ⇒ a form-as-data literal — legal
   (`scheduleForm`'s not-found pass-through builds a `Value.form`;
   "an unresolved head quietly evaluates to a form literal",
   `src/Compile.zig:264-268`) and IDENTICAL on both paths; refusing it
@@ -1110,3 +1158,52 @@ remains open, owner-notified (unchanged by this task).
   broad post-wave review is also pending. Next: plan 02
   (binary-runtime) — P1 `EvalCore` layering; P4 pattern support stays
   gated on the same owner decision.
+
+- **2026-10-19 — T4.4 wave-plan corrections record (tracked-docs only;
+  no source, no other tracked file).** This entry IS the record (G14).
+  Body corrections applied above, each with its source evidence:
+  1. Validation, records bullet — `scene` bound is the actual `'SCEN'`
+     count, not `MAX_SCENES` (`src/TrackTable.zig:25` invariant;
+     compile assigns structurally `< scenes.len`,
+     `src/Compile.zig:965`); `'EMIT'` gains count ≤ 5 + unique name
+     ordinals + scalar joined entry (`src/Eval.zig:184-186`;
+     R-optional 5); controls gain `type` ordinal ≤ 2
+     (`src/TrackTable.zig:195`) and env-only `ncomp ∈ 1..4`
+     (`:212-214`); the counts sentence gains the global `'TICK'`
+     count ≤ `MAX_TICK_ENTRIES`.
+  2. Embedded-PACM cross-check — the per-track `key_start/key_len`
+     comparison is PER SOURCE: keys equal; expr/trigger/pattern
+     compare `(0,0)` (`src/Abi.zig:437-440`; B1/G9 — the literal
+     per-track equality this plan carried would refuse every valid
+     explicit-trigger score).
+  3. Producer refusal rule — "found in both ⇒ identical" replaced by
+     the full-outcome identity compare (I1/G11;
+     `SJON/src/Schema.zig:143-168` → `error.AmbiguousFunction`,
+     `SJON/src/Expr.zig:2854`).
+  4. Caps — `MAX_TICK_ENTRIES = 131072` with the producer derivation
+     (256 KiB wasm doc zone ÷ ≥ 2 source bytes per literal `:at`
+     element, summed globally; conservative, not claimed tight;
+     native-band refusal at pack with the measured count; text path
+     uncapped) (G6/I2).
+  5. Transport/triggers wording — the folded-tick envelope (G-bis
+     R1/R2, architect-ruled; T24 ruling 2 OVERTURNED): scened fields
+     `|v| ≤ 2·MAX_TICK` inclusive, `trig_every` ∈ 1..MAX_TICK,
+     transport ticks ≤ MAX_TICK unchanged.
+  6. `plans/binary/README.md` — the "full SJON CLI unavailable" prose
+     corrected: only the plugin-exec (libwasmtime) build is
+     unavailable; the plugin-exec=false CLI builds from the path dep
+     and runs on obs (`build.zig`'s `verify` score-docs leg) (A52/G14).
+  Cross-referenced, already recorded at their owning sites and NOT
+  rewritten here: the T3.3 `--targets-json` adapter premise ("parse
+  via `sjon.Json`") — `sjon.Json.fromJson` maps SJON-tagged objects
+  and rejects plain ones, so the adapter consumes the same
+  `std.json.Value` surface natively (`src/cli/Pack.zig` module
+  header); `verifyRouting`'s resolved placement in `Pacb.zig`, not
+  std-only `Pacm` (`src/Pacb.zig:2246`, focused ruling); the T3.1/T3.2
+  false premises of §G-ter (recorded there). The
+  tree-trailing-comments KNOWN GAP is NOT claimed resolved by this
+  record — it stays an owner decision (SJON `RootIter`
+  exhaustion-consume vs approved narrowing), pinned by the KNOWN-GAP
+  test as interim state, not an accepted contract. Gate:
+  `zig build verify` green (15/15; docs-only change, score-docs leg
+  unaffected), diff reviewed.
