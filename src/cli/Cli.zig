@@ -668,3 +668,108 @@ test "pack: an --out that cannot be written is a usage error, stdout untouched" 
     try t.expectEqualStrings("", c.out.written());
     try t.expect(std.mem.indexOf(u8, c.err.written(), "no/such/dir/x.pacb") != null);
 }
+
+// Final-review L3 (binary01-fc): the atomic write's MID-FAILURE arm.
+// The test above covers refusal at create (no temp ever exists); this
+// one forces a refusal PART-WAY through the blob — a real OS EFBIG via
+// RLIMIT_FSIZE in a forked child (SIGXFSZ ignored there so the write
+// returns instead of killing the writer), with the limit set to half
+// the blob's measured size so genuine partial bytes land first. From
+// OUTSIDE the child, a mid-write refusal must leave: exit 2, stdout
+// untouched, the prior destination byte-identical (the rename never
+// ran), and NO `<out>.tmp` behind. Not a mock: the kernel refuses.
+const fork_c = struct {
+    extern "c" fn fork() c_int;
+    extern "c" fn waitpid(pid: c_int, status: *c_int, options: c_int) c_int;
+    extern "c" fn _exit(code: c_int) noreturn;
+};
+
+test "pack: a real mid-write refusal leaves no temp and never touches the prior output" {
+    // OpenBSD-only mechanics (fork/setrlimit/SIGXFSZ); the build's only
+    // native test host is obs, but keep the guard honest anyway.
+    if (@import("builtin").os.tag != .openbsd) return error.SkipZigTest;
+
+    const prior = "PRIOR-OUTPUT-BYTES";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/out.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(out);
+    const tmp_out = try std.fmt.allocPrint(t.allocator, "{s}.tmp", .{out});
+    defer t.allocator.free(tmp_out);
+    const result = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/result.txt", .{tmp.sub_path}, 0);
+    defer t.allocator.free(result);
+    const score = try repoPath(t.allocator, "corpus/target-declared/doc.sjon");
+    defer t.allocator.free(score);
+
+    // Measure the real blob first: a successful pack's report carries
+    // `"bytes":N`. The refusal limit is half of that, so the temp file
+    // provably holds PART of the blob when the kernel says no.
+    const probe_out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/probe.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(probe_out);
+    var probe = try invoke(&.{ "pacer", "pack", score, "--out", probe_out });
+    defer probe.deinit();
+    try t.expectEqual(Exit.ok, probe.code);
+    const bytes_field = std.mem.indexOf(u8, probe.out.written(), "\"bytes\":") orelse
+        return error.TestUnexpectedResult;
+    const digits = probe.out.written()[bytes_field + "\"bytes\":".len ..];
+    var n: usize = 0;
+    for (digits) |ch| {
+        if (ch < '0' or ch > '9') break;
+        n = n * 10 + (ch - '0');
+    }
+    try t.expect(n > 1);
+    const fsize: std.posix.rlim_t = @intCast(n / 2);
+
+    // Seed the destination with prior bytes — the failure must leave
+    // them untouched (the rename is the only thing that ever replaces).
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = out, .data = prior });
+
+    // Ignore SIGXFSZ pre-fork so the child's refused write RETURNS
+    // EFBIG instead of dying by signal; restore the disposition after.
+    const ign = std.posix.Sigaction{
+        .handler = .{ .handler = std.posix.SIG.IGN },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    var old: std.posix.Sigaction = undefined;
+    std.posix.sigaction(std.posix.SIG.XFSZ, &ign, &old);
+
+    const pid = fork_c.fork();
+    try t.expect(pid >= 0);
+    if (pid == 0) {
+        // Child: cap file sizes at half the blob, run the REAL verb.
+        std.posix.setrlimit(.FSIZE, .{ .cur = fsize, .max = fsize }) catch fork_c._exit(99);
+        var cout: std.Io.Writer.Allocating = .init(t.allocator);
+        var cerr: std.Io.Writer.Allocating = .init(t.allocator);
+        const code = run(t.allocator, std.testing.io, &.{ "pacer", "pack", score, "--out", out }, &cout.writer, &cerr.writer) catch fork_c._exit(98);
+        var buf: [48]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "{d} {d} {d}", .{ code, cout.written().len, cerr.written().len }) catch fork_c._exit(97);
+        std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = result, .data = line }) catch fork_c._exit(96);
+        fork_c._exit(0);
+    }
+    var status: c_int = 0;
+    _ = fork_c.waitpid(pid, &status, 0);
+    std.posix.sigaction(std.posix.SIG.XFSZ, &old, null);
+
+    const ustatus: u32 = @bitCast(status);
+    try t.expect(std.posix.W.IFEXITED(ustatus));
+    try t.expectEqual(@as(u32, 0), std.posix.W.EXITSTATUS(ustatus));
+
+    // The child's verdict: usage-class refusal, stdout untouched.
+    const marker = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, result, t.allocator, .limited(4096));
+    defer t.allocator.free(marker);
+    var parts = std.mem.tokenizeScalar(u8, marker, ' ');
+    const code = try std.fmt.parseInt(u8, parts.next() orelse return error.TestUnexpectedResult, 10);
+    const outlen = try std.fmt.parseInt(usize, parts.next() orelse return error.TestUnexpectedResult, 10);
+    try t.expectEqual(Exit.usage, code);
+    try t.expectEqual(@as(usize, 0), outlen);
+
+    // The prior output is byte-identical — the rename never ran.
+    const after = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, out, t.allocator, .limited(4096));
+    defer t.allocator.free(after);
+    try t.expectEqualStrings(prior, after);
+
+    // And the partial temp is GONE — no `<out>.tmp` litter behind a
+    // refused mid-write. (RED until the write-failure arm cleans up.)
+    try t.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, tmp_out, .{}));
+}

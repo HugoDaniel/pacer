@@ -175,10 +175,16 @@ did:
 
 Before the first report byte, the verb **self-checks**: it decodes its own
 output, proves the decoded table equals the compiled one field-for-field,
-and proves the embedded `'PACM'` byte-equals a fresh encode of this compile.
-A self-check failure exits 3 having written nothing. The write itself is
-atomic (temp file + rename beside the destination), and an `--out` that
-cannot be written is a usage error naming the path — stdout untouched.
+proves the embedded `'PACM'` byte-equals a fresh encode of this compile, and
+re-encodes every expression/pattern payload through the production writer to
+byte-compare the `'PAYL'` content (presence alone proves nothing — `'PACM'`
+never carries the payload bytes). A self-check failure exits 3 having written
+nothing. The write itself is atomic (temp file + rename beside the
+destination), a refused write — including a refusal *part-way through* the
+blob — leaves no partial temp behind and never touches prior output, and an
+`--out` that cannot be written is a usage error naming the path — stdout
+untouched. The temp name is fixed (`<out>.tmp`): one writer per destination
+at a time is the verb's scope; no uniqueness is claimed.
 
 v1 refuses to pack some scores rather than pack them wrongly, as ordinary
 diagnostics in score coordinates (exit 1, `pack` rides as `null`, nothing

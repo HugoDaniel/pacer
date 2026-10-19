@@ -256,11 +256,20 @@ pub fn write(
     // both beside the destination (same directory, same filesystem —
     // rename over the target is the atomic step). A failure here is a
     // usage error naming the path: the score packed; the disk said no.
+    // The temp name is FIXED (`<out>.tmp`), so two concurrent packs to
+    // the same `--out` would race on one temp file — the verb's
+    // documented scope is ONE writer per destination at a time; no
+    // uniqueness is claimed or provided.
     const tmp_path = std.fmt.allocPrint(gpa, "{s}.tmp", .{opts.out}) catch
         return error.OutOfMemory;
     defer gpa.free(tmp_path);
     const cwd = Io.Dir.cwd();
     cwd.writeFile(io, .{ .sub_path = tmp_path, .data = blob }) catch |e| {
+        // A mid-write refusal (disk full, RLIMIT_FSIZE, …) can leave a
+        // PARTIAL temp behind — remove it, best effort like the failed
+        // rename below: a disk that refused the write may refuse the
+        // unlink too, and the diagnostic still names the destination.
+        cwd.deleteFile(io, tmp_path) catch {};
         try err.print("pacer: {s}: could not write ({s})\n", .{ opts.out, @errorName(e) });
         return 2;
     };
