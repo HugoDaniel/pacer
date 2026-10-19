@@ -4,9 +4,11 @@
 **Wire impact:** none (test architecture only).
 **Gates:** new `zig build parity` (proposed; created by P1) joins the wave's
 gate set; `zig build verify`; npm gate for the wasm leg.
-**Created 2026-10-18; IN PROGRESS 2026-10-19 — T1–T2 task-complete
-(private native composition proof; shared corpus parser). P1–P3 acceptance
-remains open; T3 is next. No phase checkbox is claimed.**
+**Created 2026-10-18; IN PROGRESS 2026-10-19 — T1–T3 task-complete
+(private native composition proof; shared corpus parser; native parity
+runner/classifier). P1 COMPLETE (measured totals in the progress log);
+P2–P3 acceptance remains open (anchors, lifecycle grammar, negatives are
+next). No phase checkbox is claimed.**
 
 ## Why
 
@@ -159,3 +161,41 @@ _(created 2026-10-18; entries appended per phase)_
   wasm export, wire/version or public-root export change. P1–P3 acceptance,
   the parity runner, anchors and loader negatives remain open. Evidence:
   `.agent/control/binary03-t2-report.md`.
+- **2026-10-19 — T3 COMPLETE; P1 CLOSED (task/gate only; P2–P3 open).**
+  `src/parity_runner.zig` is a public-`pacer` consumer over the named
+  `corpus_harness` leaf, linked to T1's separately compiled runtime object
+  through the std-only `NativeRt` facade (no runtime/source import). It
+  enumerates the corpus sorted, reads bounded doc/times/expected files
+  (symlinked docs followed), requires ONE initial `(load :ok …)` golden
+  record (later reload records are never the initial classification),
+  compiles through a stationary public `Driver`, and assigns every case
+  exactly once from the compile outcome plus compiled track source TAGS:
+  clean non-pattern, clean pattern, or load-failing.
+  - clean non-pattern: pack from the ORIGINAL host join, load through the
+    real `prt_load`, compare fresh `Abi.encodeMeta` == embedded `'PACM'` ==
+    the runtime copy, then replay every current script form and compare the
+    complete `'PACW'` blob plus control/BPM/registration acceptance and the
+    expr-failure counter. Mismatches name case, step, surface, lengths, and
+    the first differing byte (or end-of-buffer).
+  - clean pattern: `skipped-pending-SJON`; the existing
+    `pack_patterns_unsupported` preflight refusal is asserted and `encode`
+    is never called.
+  - load-failing: compile refusal asserted; neither pack API is called, so
+    no `'PACB'` bytes exist.
+  `src/ParityTests.zig` is a separate test root (8 named tests + the
+  discovery block) covering the initial/later/duplicate/malformed/unknown
+  golden records, clean/dirty pattern and disagreement classification, the
+  diagnostic pack guard, the pattern preflight guard, and a real production
+  frame mutated on a copy (named first-byte mismatch) then restored.
+  Measured on the current 38-case corpus: **19 clean non-pattern replayed,
+  4 clean pattern skipped-pending-SJON (examples-starter, pattern-basic,
+  pattern-env, rig-studio — skips are not passes), 15 load-failing
+  compile-refused with no PACB, 0 failed**. RED: no `parity` step, then the
+  missing parity source (FileNotFound). GREEN: `parity` 8/8 steps;
+  `test` 537/537 (407 root + 6 harness + 89 CLI + 1 probe + 9 parity + 10
+  audit-tool + 15 artifact-tool); `verify` 28/28 steps with 423/423 Zig
+  tests, corpus 38/0, node 104/104; `audit-rt-imports` 10/10 with the
+  frozen 17 `prt_*` + memory. `zig build parity -- --update` is rejected.
+  No corpus/golden, fixture, schema, JS, wire/version, public-root export,
+  wasm export or production-load change. Evidence:
+  `.agent/control/binary03-t3-report.md`.

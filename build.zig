@@ -348,6 +348,74 @@ pub fn build(b: *std.Build) void {
     verify_step.dependOn(&run_probe.step);
     verify_step.dependOn(&run_probe_tests.step);
 
+    // `zig build parity` — binary03 T3 (plan 03 P1): the native playback
+    // parity runner. A public-`pacer` consumer, exactly like the CLI: it
+    // imports the actual `pacer` module + named `corpus_harness` leaf and
+    // links T1's separately compiled `native_rt_object`. No relative Pacer
+    // core/runtime import appears in this source graph.
+    //
+    // The run step gets exactly one directory argument and NO `b.args`
+    // forwarding: `zig build parity -- --update` cannot regenerate goldens.
+    // It depends on a CHECK-ONLY native corpus run (also no forwarded args),
+    // so the parity verb exercises the current committed corpus first.
+    // `has_side_effects` keeps the comparisons running on every invocation.
+    const parity_mod = b.createModule(.{
+        .root_source_file = b.path("src/parity_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "pacer", .module = pacer_mod },
+            .{ .name = "sjon", .module = sjon_mod },
+            .{ .name = "corpus_harness", .module = corpus_harness_mod },
+        },
+    });
+    parity_mod.addObject(native_rt_object);
+    const parity_exe = b.addExecutable(.{
+        .name = "parity-runner",
+        .root_module = parity_mod,
+    });
+    const run_parity = b.addRunArtifact(parity_exe);
+    run_parity.addDirectoryArg(b.path("corpus"));
+    run_parity.has_side_effects = true;
+
+    const run_corpus_parity_check = b.addRunArtifact(corpus_runner);
+    run_corpus_parity_check.addDirectoryArg(b.path("corpus"));
+    run_corpus_parity_check.has_side_effects = true;
+
+    const parity_step = b.step("parity", "Native text/binary parity over the golden corpus");
+    parity_step.dependOn(&run_corpus_parity_check.step);
+    parity_step.dependOn(&run_parity.step);
+    // The runner accepts exactly its directory argument. Any build-level
+    // extra argument (including the corpus verb's `--update`) is rejected
+    // here, never forwarded: parity measures, it cannot regenerate.
+    if (b.args) |args| {
+        if (args.len != 0) {
+            const reject_parity_args = b.addFail("parity: extra arguments (including --update) are rejected");
+            parity_step.dependOn(&reject_parity_args.step);
+        }
+    }
+
+    // The parity runner's tests are their OWN root (the CLI precedent). They
+    // link the same real runtime object and never become part of `src/root.zig`.
+    const parity_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/ParityTests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "pacer", .module = pacer_mod },
+            .{ .name = "sjon", .module = sjon_mod },
+            .{ .name = "corpus_harness", .module = corpus_harness_mod },
+        },
+    });
+    parity_test_mod.addObject(native_rt_object);
+    const parity_tests = b.addTest(.{ .root_module = parity_test_mod });
+    const run_parity_tests = b.addRunArtifact(parity_tests);
+    test_step.dependOn(&run_parity_tests.step);
+    // `verify` currently depends on the root test run explicitly, not on the
+    // whole `test` step; attach this root here too so the parity tests are
+    // never silently skipped by the whole gate.
+    verify_step.dependOn(&run_parity_tests.step);
+
     // `zig build fuzz` — never-panic harnesses over the byte-eating and
     // arbitrary-input entrypoints (compile, decodeTargets, Writes.decode,
     // Easing builders). A SEPARATE target so `verify` stays fast; same
