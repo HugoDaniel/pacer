@@ -478,10 +478,12 @@ fn payloadProfile(
     tree: *const sjon.Ast.Tree,
     node: sjon.Ast.NodeIndex,
 ) Error!PayloadProfile {
-    var builder = sjon.Ast.TreeBuilder{ .a = a };
-    const root = try builder.cloneNode(tree, node);
+    // Same arena contract as `encodePayload`: the builder allocates
+    // from the arena finalize snapshots, so `one_root.deinit` frees it.
     var tree_arena = std.heap.ArenaAllocator.init(a);
-    defer tree_arena.deinit();
+    defer tree_arena.deinit(); // no-op after finalize clears the slot
+    var builder = sjon.Ast.TreeBuilder{ .a = tree_arena.allocator() };
+    const root = try builder.cloneNode(tree, node);
     var one_root = try builder.finalize(&tree_arena, "", &.{root});
     defer one_root.deinit();
 
@@ -541,10 +543,14 @@ pub fn encodePayload(
     tree: *const sjon.Ast.Tree,
     node: sjon.Ast.NodeIndex,
 ) (Error || PayloadWriterCapError)![]const u8 {
-    var builder = sjon.Ast.TreeBuilder{ .a = a };
-    const root = try builder.cloneNode(tree, node);
+    // The builder MUST allocate from the arena `finalize` snapshots
+    // into the tree: `Tree.deinit` frees that arena alone, so a builder
+    // on the raw `a` would strand its nodes/strings (a leak the
+    // self-check's payload re-encode exposed under the test GPA).
     var tree_arena = std.heap.ArenaAllocator.init(a);
-    defer tree_arena.deinit();
+    defer tree_arena.deinit(); // no-op after finalize clears the slot
+    var builder = sjon.Ast.TreeBuilder{ .a = tree_arena.allocator() };
+    const root = try builder.cloneNode(tree, node);
     var one_root = try builder.finalize(&tree_arena, "", &.{root});
     defer one_root.deinit();
     const bin = sjon.Binary.toBinary(

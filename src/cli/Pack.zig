@@ -323,8 +323,11 @@ fn lanesBitsEqual(a: [4]f32, b: [4]f32) bool {
 
 /// Decode `blob` and prove it is THIS compile: the decoded table equals
 /// the compiled one field-for-field everywhere the container carries
-/// the field, and the embedded `'PACM'` byte-equals a fresh
-/// `Abi.encodeMeta` pass over the same result. (`Pacb.decode` itself
+/// the field, the embedded `'PACM'` byte-equals a fresh
+/// `Abi.encodeMeta` pass over the same result, and every expr/pattern
+/// `'PAYL'` slice byte-equals a fresh `encodePayload` pass over its
+/// source node (content, not just presence — 'PACM' never carries the
+/// payload bytes). (`Pacb.decode` itself
 /// already cross-checks the sections against the embedded metadata —
 /// `verifyRouting` — so this adds the two things decode cannot know:
 /// that the metadata is this compile's, and that the decoded table
@@ -411,8 +414,7 @@ fn selfCheck(
     }
 
     // Tracks: identity fields plus the per-source routing (a keys
-    // track's run indexes; a trigger's schedule; expr/pattern presence —
-    // payload CONTENT is the PACM-equality ring above, not this one).
+    // track's run indexes; a trigger's schedule; expr/pattern presence).
     if (table.tracks.len != d.tracks.len)
         return selfcheckFail(err, "{d} tracks decoded, compiled {d}", .{ d.tracks.len, table.tracks.len });
     for (table.tracks, d.tracks) |ct, cd| {
@@ -442,6 +444,45 @@ fn selfCheck(
         };
         if (!schedule_ok)
             return selfcheckFail(err, "track {d} source differs from the compiled one", .{ct.target_id});
+    }
+
+    // Payload CONTENT (final-review L2): the rings above prove payload
+    // PRESENCE, and 'PACM' never carries 'PAYL' bytes (SCEN/EASE/TMPO
+    // only) — so a payload whose content differs while every length,
+    // offset, and metadata field stays honest was invisible. Close that
+    // exactly: re-encode each payload track's source node through the
+    // SAME production writer (`encodePayload`, the only 'PAYL' producer)
+    // and byte-compare against the decoded slice. One compile, one
+    // writer, spelled twice — the bytes must agree.
+    for (table.tracks, d.tracks) |ct, cd| {
+        switch (ct.source) {
+            .keys, .trigger => {},
+            .expr, .pattern => |node| {
+                const fresh = pacer.PacbEncode.encodePayload(gpa, &result.validated.result.tree, node) catch |e| switch (e) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    // `encode` produced these very bytes under its
+                    // documented precondition; a writer cap firing NOW
+                    // is an internal invariant break, not a property of
+                    // the score.
+                    error.PayloadWriterCap => return selfcheckFail(
+                        err,
+                        "track {d}: payload re-encode tripped a compact-IR writer cap (internal)",
+                        .{ct.target_id},
+                    ),
+                };
+                defer gpa.free(fresh);
+                const decoded_payload = switch (cd.source) {
+                    .expr, .pattern => |bytes| bytes,
+                    .keys, .trigger => unreachable, // the identity loop matched sources
+                };
+                if (!std.mem.eql(u8, fresh, decoded_payload))
+                    return selfcheckFail(
+                        err,
+                        "track {d}: 'PAYL' content differs from a fresh encode of this compile",
+                        .{ct.target_id},
+                    );
+            },
+        }
     }
 
     // Keys: position, easing ref, and bit-equal lanes.
@@ -747,4 +788,74 @@ test "selfcheck: a foreign compile and a tampered blob are caught" {
     tampered[tampered.len - 1] ^= 0xff;
     try t.expectError(error.SelfcheckFailed, selfCheck(a, &sink.writer, &r, &.{}, tampered));
     try t.expect(std.mem.indexOf(u8, sink.written(), "refused") != null);
+}
+
+// Final-review L2 (binary01-fc): payload CONTENT. PACM carries only
+// SCEN/EASE/TMPO — never 'PAYL' — so the ring above cannot see a
+// payload whose bytes differ while every length, offset, and metadata
+// field stays honest. The self-check now re-encodes each expr track's
+// source node through the production writer and byte-compares against
+// the decoded slice. The tamper below flips ONE byte inside the
+// payload's string pool: structurally valid (decode accepts it, same
+// lengths everywhere) — only the content compare can catch it.
+test "selfcheck: a structurally valid tampered payload is caught by the content compare" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The 200-char string dominates the payload's pool, so a flip at
+    // the pool region's midpoint lands inside its CONTENT — never a
+    // length prefix — and every structural field stays honest.
+    const clean: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(target :name glow :arity 1 :registry 0)
+        \\(track :target glow :expr (let [s "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] 1))
+    ;
+    var schema = try pacer.Schema.load(t.allocator);
+    defer schema.deinit();
+    var r = try pacer.Compile.compile(t.allocator, &schema, clean, &.{});
+    defer r.deinit();
+    try t.expect(r.ok());
+
+    const blob = try pacer.PacbEncode.encode(a, &r, &.{});
+
+    // Positive control first: the clean blob passes.
+    {
+        var sink: std.Io.Writer.Allocating = .init(t.allocator);
+        defer sink.deinit();
+        _ = try selfCheck(a, &sink.writer, &r, &.{}, blob);
+        try t.expectEqualStrings("", sink.written());
+    }
+
+    // Locate 'PAYL' through the real directory, flip one pool byte.
+    var refusal: pacer.Pacb.Refusal = undefined;
+    const directory = try pacer.Pacb.parseDirectory(blob, &refusal);
+    const payl_sec = directory.find(.payl) orelse return error.TestUnexpectedResult;
+    // One expr track: its payload is the whole region after the
+    // byte-size u32, and it is one compact-IR buffer — 16-byte header
+    // (pool_offset at +8, roots_offset at +12), the string pool spans
+    // [pool_offset, roots_offset), the roots block follows.
+    const payload_start = payl_sec.off + 4;
+    const roots_rel = std.mem.readInt(u32, blob[payload_start + 12 ..][0..4], .little);
+    // Pool entries sort by (length, bytes), so the 200-char string is
+    // the LAST entry and its content is exactly the pool's final 200
+    // bytes: [roots_offset-200, roots_offset). Flipping the midpoint
+    // lands provably inside string CONTENT — never a length prefix,
+    // never a count varint, and every structural field stays honest.
+    const flip_at = payload_start + roots_rel - 100;
+    const tampered = try a.dupe(u8, blob);
+    tampered[flip_at] ^= 0x20;
+
+    // Structurally valid: the SAME lengths everywhere mean decode
+    // accepts it whole (this is what makes the tamper invisible to
+    // every check but the content compare).
+    var decoded = try pacer.Pacb.decode(a, tampered, &refusal);
+    defer decoded.deinit();
+    try t.expectEqual(@as(usize, 1), decoded.tracks.len);
+    try t.expect(decoded.tracks[0].source == .expr);
+
+    var sink: std.Io.Writer.Allocating = .init(t.allocator);
+    defer sink.deinit();
+    try t.expectError(error.SelfcheckFailed, selfCheck(a, &sink.writer, &r, &.{}, tampered));
+    try t.expect(std.mem.indexOf(u8, sink.written(), "'PAYL'") != null);
 }
