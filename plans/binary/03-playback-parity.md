@@ -4,13 +4,15 @@
 **Wire impact:** none (test architecture only).
 **Gates:** new `zig build parity` (proposed; created by P1) joins the wave's
 gate set; `zig build verify`; npm gate for the wasm leg.
-**Created 2026-10-18; IN PROGRESS 2026-10-19 — T1–T4 task-complete
+**Created 2026-10-18; IN PROGRESS 2026-10-19 — T1–T5a task-complete
 (private native composition proof; shared corpus parser; native parity
-runner/classifier; three ordinary text-first anchors). P1 COMPLETE
-(measured totals in the progress log); P2 PARTIAL — 3 of 5 anchors
-(tempo-82bpm, clock-nonmonotonic, scene-seek) are landed; P2–P3
-acceptance remains open (reload/registry anchors, lifecycle grammar and
-negatives are next). No phase checkbox is claimed.**
+runner/classifier; three ordinary text-first anchors; portable native
+text lifecycle proof). P1 COMPLETE (measured totals in the progress
+log); P2 PARTIAL — 3 of 5 anchors (tempo-82bpm, clock-nonmonotonic,
+scene-seek) are landed; P2–P3 acceptance remains open (reload/registry
+anchors, lifecycle grammar and negatives are next — T5b). The two owner
+questions remain unanswered, binary02 P3 is not accepted, and no phase
+checkbox is claimed.**
 
 ## Why
 
@@ -240,3 +242,49 @@ _(created 2026-10-18; entries appended per phase)_
   lifecycle grammar/JS leg remain T5 work. No owner decision, SJON
   permission, pattern acceptance or metadata claim changed. Evidence:
   `.agent/control/binary03-t4-report.md`.
+- **2026-10-19 — T5a COMPLETE (task only; P2 remains OPEN).** Portable
+  native text entry and the real `drv_*` lifecycle proof, no grammar,
+  schema, renderer, JS or anchor change. `src/wasm_entry.zig` now takes
+  `std.heap.page_allocator` (on wasm32 the same WasmAllocator dispatch;
+  no load-algorithm change), exposes an object-local `NativeHarness` alias
+  namespace over every production `drv_*`, and adds `reset` with the
+  ordered teardown: existing `unload()` (Driver/evaluator first), then
+  `schema.deinit()` + `schema = null`, then `diags_len = 0` last.
+  `src/native_text_bridge.zig` is the separately compiled native-only
+  `b.addObject` root; it takes every alias address at comptime, rejects
+  wasm targets, pins all producer ABI types against the std-only
+  `src/NativeText.zig` C facade (`callconv(.c)`, real native pointers),
+  and defines only `pacer_native_text_reset`. `build.zig` gives that
+  object the target-matched SJON module and only the anonymous
+  `pacer_schema`; it imports no public `pacer`, corpus manifest, plugin
+  stub or wasmtime link. The composition probe links public `pacer` +
+  both private objects and its shared main/test assertion now runs the
+  actual text load: clean `drv_load` 0 with control/BPM and copied
+  PACW/PACM/PACD (`decodeDiags` count 0) → over-cap `docCap()+1` call 2
+  with frames/meta/diags preserved → fixed diagnostic source status 1
+  with a decoded non-empty PACD and zero eval/meta → cleanup from the
+  diagnostic session → fresh load → cleanup from a live clean score,
+  repeated cleanup, fresh load after teardown → final zero surface. Both
+  native resets are deferred before any load; the public Driver stays the
+  stationary PACM/frame oracle. RED: missing `src/NativeText.zig`
+  FileNotFound in both executable and test compile modes. The producer
+  guard was demonstrated separately by a bounded temporary
+  `NativeHarness.load` signature perturbation, which produced the exact
+  `native_text_bridge: drv_load producer ABI drift` error and was restored
+  byte-identically (`src/wasm_entry.zig` sha256
+  `eae854d5f7c678a14fb2c6d60be0cb1bed1b7d531e047f53fe40083e13349329`
+  before/after). GREEN post-commit `0f59936`: `native-composition` 10/10
+  steps + 1/1 test; `test` 23/23 steps, 537/537; `verify` 30/30 steps
+  with 423/423 Zig, corpus 41/0, node 107/107; `audit-rt-imports` 10/10
+  on the frozen 17 `prt_*` + memory; `parity` 8/8 steps, 41 cases = 22
+  clean non-pattern replayed, 4 skipped-pending-SJON, 15 load-failing,
+  0 failed. Both wasm artifacts are byte-identical to the pre-change
+  build (`pacer.wasm` 666873 B / `97dc08e4…22f2ffc`; `pacer-rt.wasm`
+  172255 B / `caddd6fd…134751dd3`) and their explicit export sets are
+  unchanged (19 and 18 entries; no `pacer_native_*` export).
+  `tools/smoke_rt.mjs` PASS. `corpus/`, `src/cli/testdata/` and
+  `tools/testdata/pacb/` are byte-identical to `a491078`; fmt/diff-check
+  clean. **P2 is NOT complete:** only 3 of the 5 anchors have landed and
+  T5b's lifecycle grammar/JS leg remains; P3 is not accepted and the two
+  owner questions remain unanswered. Evidence:
+  `.agent/control/binary03-t5a-report.md`.
