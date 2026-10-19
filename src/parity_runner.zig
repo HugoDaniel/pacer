@@ -77,6 +77,8 @@ const CorpusHarness = @import("corpus_harness");
 const sjon = @import("sjon");
 const NativeRt = @import("NativeRt.zig");
 const NativeText = @import("NativeText.zig");
+const negatives = @import("parity_negatives.zig");
+const build_options = @import("build_options");
 
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -172,7 +174,42 @@ pub fn main(init: std.process.Init) !u8 {
             return 1;
         },
     };
+
+    // T6a: the production-loader negative suite. Fixtures are the committed
+    // `tools/testdata/pacb` blobs, read through bounded file APIs — never
+    // regenerated, never routed through a CLI subprocess.
+    const fixtures = readNegativeFixtures(arena, io) catch |err| {
+        try out.print("parity: cannot read negative fixtures: {s}\n", .{@errorName(err)});
+        return 1;
+    };
+    negatives.run(gpa, out, fixtures) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            try out.print("parity: negative suite failed: {s}\n", .{@errorName(err)});
+            return 1;
+        },
+    };
+
     return if (totals.failed == 0) 0 else 1;
+}
+
+/// Bounded reads of the three committed fixture blobs T6a mutates.
+fn readNegativeFixtures(a: Allocator, io: Io) !negatives.Fixtures {
+    const load = struct {
+        fn one(alloc: Allocator, io_in: Io, name: []const u8) ![]u8 {
+            const path = try std.fmt.allocPrint(
+                alloc,
+                "{s}/tools/testdata/pacb/{s}.pacb",
+                .{ build_options.repo_root, name },
+            );
+            return sjon.CappedRead.readFile(io_in, path, alloc, MAX_FILE_BYTES);
+        }
+    };
+    return .{
+        .keys_only = try load.one(a, io, "keys-only"),
+        .expr_keys = try load.one(a, io, "expr-keys"),
+        .full_small = try load.one(a, io, "full-small"),
+    };
 }
 
 /// Walk the corpus once. A case failure increments `failed` and the walk

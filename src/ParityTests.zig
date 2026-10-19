@@ -13,10 +13,13 @@
 
 const std = @import("std");
 const pacer = @import("pacer");
+const sjon = @import("sjon");
 const runner = @import("parity_runner.zig");
+const negatives = @import("parity_negatives.zig");
 const CorpusHarness = @import("corpus_harness");
 const NativeRt = @import("NativeRt.zig");
 const NativeText = @import("NativeText.zig");
+const build_options = @import("build_options");
 
 const t = std.testing;
 
@@ -25,6 +28,38 @@ test {
     // build.zig, never through `src/root.zig`.
     _ = @import("parity_runner.zig");
     _ = @import("NativeRt.zig");
+    _ = @import("parity_negatives.zig");
+}
+
+/// Read the three committed fixture blobs the production-loader negative
+/// suite mutates. Bounded reads; no fixture is ever written.
+fn negativeFixtures(a: std.mem.Allocator) !negatives.Fixtures {
+    const load = struct {
+        fn one(alloc: std.mem.Allocator, name: []const u8) ![]u8 {
+            const path = try std.fmt.allocPrint(
+                alloc,
+                "{s}/tools/testdata/pacb/{s}.pacb",
+                .{ build_options.repo_root, name },
+            );
+            return sjon.CappedRead.readFile(t.io, path, alloc, 1 << 20);
+        }
+    };
+    return .{
+        .keys_only = try load.one(a, "keys-only"),
+        .expr_keys = try load.one(a, "expr-keys"),
+        .full_small = try load.one(a, "full-small"),
+    };
+}
+
+test "negatives: production prt_load exact refusals and transactional state" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var sink: std.Io.Writer.Allocating = .init(a);
+    defer sink.deinit();
+    try negatives.run(a, &sink.writer, try negativeFixtures(a));
+    try t.expect(std.mem.indexOf(u8, sink.written(), "skipped 0") != null);
 }
 
 const HOST_TARGETS = [_]pacer.Compile.Target{

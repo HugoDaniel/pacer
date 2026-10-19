@@ -420,6 +420,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "corpus_harness", .module = corpus_harness_mod },
         },
     });
+    parity_mod.addImport("build_options", build_options_mod);
     parity_mod.addObject(native_rt_object);
     parity_mod.addObject(native_text_object);
     const parity_exe = b.addExecutable(.{
@@ -459,6 +460,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "corpus_harness", .module = corpus_harness_mod },
         },
     });
+    parity_test_mod.addImport("build_options", build_options_mod);
     parity_test_mod.addObject(native_rt_object);
     parity_test_mod.addObject(native_text_object);
     const parity_tests = b.addTest(.{ .root_module = parity_test_mod });
