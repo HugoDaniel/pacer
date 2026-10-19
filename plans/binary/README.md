@@ -39,8 +39,9 @@ plan text, not gate claims about code that does not exist yet.
 **Plan 02 execution started 2026-10-19 — P1–P2 COMPLETE; P3
 IMPLEMENTED — NOT ACCEPTED (missing source-free scene names break the
 approved identical-metadata / unmasked-harness parity; owner decision
-pending); P4 remains gated on the SJON prerequisite and 03/04 are
-pending review. The wave is NOT complete.** T1.1 landed the binary expr leaf
+pending); P4 remains gated on the SJON prerequisite; 03 is in progress
+(T1–T2 task-complete, P1–P3 open) and 04 is untouched. The wave is NOT
+complete.** T1.1 landed the binary expr leaf
 (`ExprTrack.evalAtBinary`, bit-equal to the tree arm; commit `b717d3c`);
 T1.2 extracted the one engine into `src/EvalCore.zig` over a
 tree|binary `LeafSource` with `src/Eval.zig`
@@ -89,8 +90,9 @@ invented. The masked parity line in `test/rt.test.js` is bounded output
 characterization only. Node 104/104; `zig build verify` 18/18 (410/410
 Zig, corpus 38/0, node 104/104). **2026-10-19 review correction:** P3
 acceptance stays open until the scene-name capability decision. **P4 is
-blocked on the SJON owner prerequisite; 03/04 are untouched. The wave
-is not complete.** See
+blocked on the SJON owner prerequisite; 04 is untouched, and 03 is in
+progress (T1–T2 task-complete, P1–P3 open). The wave is not complete.**
+See
 [00-strategy.md](00-strategy.md)'s status board.
 
 Production animations must not ship the Pacer source compiler. Today

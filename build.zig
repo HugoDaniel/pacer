@@ -22,6 +22,24 @@ pub fn build(b: *std.Build) void {
     });
     const sjon_mod = sjon_dep.module("sjon");
 
+    // The shared corpus-harness parser is a named std/SJON-only leaf. It
+    // owns the harness vocabulary's embedded manifest; consumers (`test`'s
+    // cap pin and the corpus executable) import it by name rather than by a
+    // parallel relative source path. Its own parser tests get a separate
+    // test root below, because a named dependency's tests are not assumed to
+    // be discovered by the root test binary.
+    const corpus_harness_mod = b.createModule(.{
+        .root_source_file = b.path("src/CorpusHarness.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_mod },
+        },
+    });
+    corpus_harness_mod.addAnonymousImport("pacer_corpus_schema", .{
+        .root_source_file = b.path("schema/pacer-corpus.sjon"),
+    });
+
     const pacer_mod = b.addModule("pacer", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -41,13 +59,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "sjon", .module = sjon_mod },
+            .{ .name = "corpus_harness", .module = corpus_harness_mod },
         },
     });
     test_mod.addAnonymousImport("pacer_schema", .{
         .root_source_file = b.path("schema/pacer.sjon"),
-    });
-    test_mod.addAnonymousImport("pacer_corpus_schema", .{
-        .root_source_file = b.path("schema/pacer-corpus.sjon"),
     });
     // The repo root, handed to the test binaries as an absolute path so the
     // `sjon-project.sjon` test can load the workspace the way `sjon-lsp`
@@ -138,13 +154,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "sjon", .module = sjon_mod },
+            .{ .name = "corpus_harness", .module = corpus_harness_mod },
         },
     });
     corpus_mod.addAnonymousImport("pacer_schema", .{
         .root_source_file = b.path("schema/pacer.sjon"),
-    });
-    corpus_mod.addAnonymousImport("pacer_corpus_schema", .{
-        .root_source_file = b.path("schema/pacer-corpus.sjon"),
     });
     const corpus_runner = b.addExecutable(.{
         .name = "corpus-runner",
@@ -156,6 +170,27 @@ pub fn build(b: *std.Build) void {
     run_corpus.has_side_effects = true;
     const corpus_step = b.step("corpus", "Verify the golden corpus (native); `-- --update` regenerates");
     corpus_step.dependOn(&run_corpus.step);
+
+    // The shared parser's tests are their OWN root. `src/root.zig` no longer
+    // imports the corpus runner (whose parser tests moved into the leaf), and
+    // this explicit test root proves discovery instead of assuming a named
+    // dependency's inline tests run in the root test binary. It is a second
+    // module instance over the same file, so it owns its own anonymous corpus
+    // manifest and imports the same `sjon` module.
+    const corpus_harness_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/CorpusHarness.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_mod },
+        },
+    });
+    corpus_harness_test_mod.addAnonymousImport("pacer_corpus_schema", .{
+        .root_source_file = b.path("schema/pacer-corpus.sjon"),
+    });
+    const corpus_harness_tests = b.addTest(.{ .root_module = corpus_harness_test_mod });
+    const run_corpus_harness_tests = b.addRunArtifact(corpus_harness_tests);
+    test_step.dependOn(&run_corpus_harness_tests.step);
 
     // `zig build cli` — the native `pacer` binary: `ir` / `eval` / `check`,
     // JSON on stdout, everything else on stderr.
@@ -256,6 +291,7 @@ pub fn build(b: *std.Build) void {
     const verify_step = b.step("verify", "test + native corpus + node/wasm corpus parity");
     verify_step.dependOn(&run_tests.step);
     verify_step.dependOn(&run_corpus_verify.step);
+    verify_step.dependOn(&run_corpus_harness_tests.step);
     verify_step.dependOn(&node_test.step);
     verify_step.dependOn(&cli_golden_check.step);
 

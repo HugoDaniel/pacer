@@ -114,7 +114,7 @@ decided by gates, not by size.
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☑ **COMPLETE** — T2.1–T2.5 landed 2026-10-19: the `RtSjon` window, `rt_entry.zig` + the real `pacer-rt.wasm` (172,255 B), the two-layer closure gate (source audit + physical artifact check, real negatives), transactional load/ownership tests, and the preliminary non-binding trend (`aac3eda`: rt 172,255 raw / 57,827 brotli11; static PACB zone 6,049,576 B; `Pacm` reader Δ 4,125 raw, same-build ablation; no verdict). Gates at T2.5: test 521/521, verify 15/15 (corpus 38/0, node 94/94), fuzz 361/361, audit 10/10 both layers |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ⚠ **IMPLEMENTED — NOT ACCEPTED (metadata parity open)** — T3.1 shared `pact.js` / `meta.js` / `test/harness.js` leaves (`986051c`); T3.2 `PacerRt` (`src/rt.js`), 8 production-artifact tests, append-only `./rt` + `pacer-rt.wasm` package surface, build/pretest wiring, build.zig verify dependency. No `reload(text)`; transactional binary `load`. Binary metadata is span-preserving but source-free (scene `name` `''`, declared-only names `null`); missing scene names break the approved identical-metadata / unmasked-harness parity, and the masked parity line is bounded output characterization only — NOT passed acceptance. Owner decision pending; no requirement changed, no name invented. Node 104/104, verify 18/18 (410/410 Zig, corpus 38/0), test 521/521, fuzz 361/361, audit 10/10; pack dry-run ships `pacer-rt.wasm` + `types/rt.d.ts`. P4 review and 03/04 pending; wave NOT complete. **2026-10-19 review correction:** P3 acceptance stays open until the owner rules on the missing scene-name capability or authorizes the metadata extension. |
 | C | 02 binary-runtime · P4 pattern support (gated on the prerequisite) | ☐ BLOCKED on the SJON-owner prerequisite; no pattern parity claimed |
-| C | 03 playback-parity · P1–P3 (non-pattern legs) | ☐ pending (not run by 02 P3) |
+| C | 03 playback-parity · P1–P3 (non-pattern legs) | ◐ **IN PROGRESS** — T1–T2 task-complete (private native composition proof; shared corpus parser); P1–P3 acceptance remains open, T3 runner next |
 | C | 03 playback-parity · P4 wasm leg + pattern legs | ☐ pending (blocked with 02 P4) |
 | D | 04 measurement-acceptance · report + user checkpoint | ☐ pending (non-binding trend only; no verdict) |
 | D | 04 measurement-acceptance · pacer-local smoke; consumer handoff stays blocked until authorized | ☐ pending |
@@ -178,8 +178,11 @@ identical-metadata / unmasked-harness parity; the test's mask is
 bounded output characterization, not acceptance**, and the owner
 decision remains pending. No text/reload fallback exists
 (`PacerRt.prototype.reload` is undefined).
-**P4 remains BLOCKED on the SJON-owner prerequisite; plans 03 and 04
-are untouched. The wave is NOT complete.** The pre-existing
+**P4 remains BLOCKED on the SJON-owner prerequisite. Plan 03 is in
+progress: T1–T2 are task-complete (private native composition proof;
+shared corpus parser), while its parity runner, anchors, loader negatives
+and P1–P3 acceptance remain open. Plan 04 is untouched. The wave is NOT
+complete.** The pre-existing
 `posToTickLocal` assert on a
 bare unitless number in a time-pos slot (T3.2 finding, G-ter item 9)
 also remains owner-notified.

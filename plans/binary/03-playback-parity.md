@@ -4,7 +4,9 @@
 **Wire impact:** none (test architecture only).
 **Gates:** new `zig build parity` (proposed; created by P1) joins the wave's
 gate set; `zig build verify`; npm gate for the wasm leg.
-**Created 2026-10-18; not started.**
+**Created 2026-10-18; IN PROGRESS 2026-10-19 — T1–T2 task-complete
+(private native composition proof; shared corpus parser). P1–P3 acceptance
+remains open; T3 is next. No phase checkbox is claimed.**
 
 ## Why
 
@@ -135,3 +137,25 @@ _(created 2026-10-18; entries appended per phase)_
   materializer change. P1–P3 acceptance, the parity runner, anchors and
   loader negatives remain open. Evidence:
   `.agent/control/binary03-t1-report.md`.
+- **2026-10-19 — T2 COMPLETE (task only; P1 remains open).** Extracted the
+  existing harness parser unchanged into the named std/SJON-only leaf
+  `src/CorpusHarness.zig`: neutral public `Target`/`Step`/`Harness`,
+  `manifest_src`, a frozen `MAX_TARGETS` (equality-pinned to
+  `Abi.MAX_TARGETS` by a source-owning root test), `parse` over any holder
+  with the existing `.preloaded` field, and `targetsAs` field copying.
+  `src/corpus_runner.zig` now loads its harness manifest from the leaf,
+  converts neutral targets to `Compile.Target` before `Driver.init` in the
+  per-case arena, and keeps its canonical renderer untouched. The old
+  `root.zig` runner-discovery import is gone; the moved parser tests run in
+  their own explicit test root (6 tests) attached to `test` and `verify`,
+  with a separate anonymous corpus-manifest import. Grammar, target
+  order/defaults, width checks, pattern diagnostics and zero-host-target
+  cases are unchanged. RED: missing `src/CorpusHarness.zig` FileNotFound.
+  GREEN: `test` 528/528 (407 root + 6 harness + 89 CLI + 10 audit-tool + 15
+  artifact-tool + 1 probe); `corpus` 38/0; `verify` 26/26 with 414/414 Zig
+  and node 104/104; `native-composition` 8/8; `audit-rt-imports` 10/10 with
+  the frozen 17 `prt_*` + memory. `corpus/`, `src/cli/testdata/` and
+  `tools/testdata/pacb/` are byte-identical to `dd57196`. No schema, JS,
+  wasm export, wire/version or public-root export change. P1–P3 acceptance,
+  the parity runner, anchors and loader negatives remain open. Evidence:
+  `.agent/control/binary03-t2-report.md`.

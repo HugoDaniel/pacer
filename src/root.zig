@@ -97,13 +97,17 @@ test {
     _ = PatternTrack;
     _ = Writes;
     _ = Abi;
-    // Not part of the `pacer` module — the corpus runner is its own
-    // executable root — but its harness vocabulary earns the same
-    // discovery as everything else.
-    _ = @import("corpus_runner.zig");
+    // The corpus harness parser's tests have their own explicit test root
+    // (`build.zig`), because it is a named std/SJON-only module. This
+    // source-owning binary keeps only the frozen-copy pin below.
     // The playback runtime's entry is its own wasm root (like
     // wasm_entry, discovered here for its native export tests only).
     _ = @import("rt_entry.zig");
+}
+
+test "corpus harness: the frozen target cap equals Abi.MAX_TARGETS" {
+    const CorpusHarness = @import("corpus_harness");
+    try std.testing.expectEqual(@as(usize, Abi.MAX_TARGETS), CorpusHarness.MAX_TARGETS);
 }
 
 test "sjon dependency wiring: tick grid + trig kernels reachable" {
