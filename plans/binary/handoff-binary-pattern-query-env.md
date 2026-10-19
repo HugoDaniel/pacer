@@ -1,12 +1,19 @@
 # Handoff — the binary pattern query needs the host's outer env (and its `(pure …)` leaves back)
 
-**Status: drafted (unfiled).** This is a pacer-local prerequisite handoff
-for the [binary wave](README.md). It becomes an ask in SJON's own tree —
-`SJON/docs/plans/asks/` — only if and when SJON's owner accepts it for
-filing, under whatever number SJON's ledger assigns then; pacer does not
-file, number, or link it. Evidence below was gathered 2026-10-18 against
-pacer `5f28aaa` and the sibling SJON checkout, and re-verified during this
-wave's plan review.
+**Status: filed as SJON
+[`docs/plans/asks/29-binary-pattern-query-env.md`](../../../SJON/docs/plans/asks/29-binary-pattern-query-env.md)
+on 2026-10-19 — awaiting the SJON verdict.** This is the pacer-local
+prerequisite handoff for the [binary wave](README.md); pacer does not
+number, verdict or implement it. Evidence was re-verified 2026-10-19
+against pacer `aaf88b2` and SJON `ab1a2cc5`: the tree env path and the
+`cycle`/`tick`/`seed` shadow are green (`queryTreeWithEnv`); the binary
+entries still take no `outer_env` and a `(pure <form>)` leaf still compiles
+to `silence` (three haps become two; three become zero with `dropped`
+1 → 0; a static diagnostic disappears; a haps-budget trip becomes a
+success). The tree-trailing `BinaryCursor` gap is filed as a
+self-contained companion section in the same ask. Native probe logs:
+`SJON/.agent/control/probe-pattern-env.log` and
+`SJON/.agent/control/probe-tree-trailing.log`.
 
 **Priority (pacer's view): High — blocking.** Full binary pattern parity
 (expr leaves reading the host env, `(pure …)` included) is REQUIRED for the
