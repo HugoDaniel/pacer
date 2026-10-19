@@ -4,15 +4,15 @@
 **Wire impact:** none (test architecture only).
 **Gates:** new `zig build parity` (proposed; created by P1) joins the wave's
 gate set; `zig build verify`; npm gate for the wasm leg.
-**Created 2026-10-18; IN PROGRESS 2026-10-19 — T1–T5a task-complete
+**Created 2026-10-18; IN PROGRESS 2026-10-19 — T1–T5b task-complete
 (private native composition proof; shared corpus parser; native parity
-runner/classifier; three ordinary text-first anchors; portable native
-text lifecycle proof). P1 COMPLETE (measured totals in the progress
-log); P2 PARTIAL — 3 of 5 anchors (tempo-82bpm, clock-nonmonotonic,
-scene-seek) are landed; P2–P3 acceptance remains open (reload/registry
-anchors, lifecycle grammar and negatives are next — T5b). The two owner
-questions remain unanswered, binary02 P3 is not accepted, and no phase
-checkbox is claimed.**
+runner/classifier; five text-first anchors; portable native text lifecycle
+proof; shared lifecycle grammar and native/JS replay). P1 COMPLETE and
+P2 COMPLETE (task/gate: all five anchors, shared text/native-JS
+compatibility and `zig build parity` green). P3 remains open: the
+production-loader negative suites, full pattern legs, binary wasm corpus
+and browser work are still pending. The two owner questions remain
+unanswered, binary02 P3 is not accepted, and no phase checkbox is claimed.**
 
 ## Why
 
@@ -288,3 +288,45 @@ _(created 2026-10-18; entries appended per phase)_
   T5b's lifecycle grammar/JS leg remains; P3 is not accepted and the two
   owner questions remain unanswered. Evidence:
   `.agent/control/binary03-t5a-report.md`.
+- **2026-10-19 — T5b COMPLETE; P2 CLOSED (task/gate only; P3 open).**
+  Commits `c1d5bfe` (shared lifecycle grammar + actual text/binary replay
+  adapters) and `48ed070` (the final two text-first anchors), plus this
+  progress record. The harness schema and both parsers now close the flat
+  `(reload :kind bad-call|diagnostics|bad-version|current)` and
+  `(registry-mismatch :mode structural|name-swap)` forms: a missing, extra
+  or unknown key/value is refused by the native schema (span diagnostic)
+  and by the JS leaf; no default kind or mode exists. A script containing
+  either form executes its WHOLE step list through the actual production
+  `drv_*` entry (the T5a text object linked into the corpus runner), while
+  ordinary scripts retain the byte-identical source-local path. The
+  parity runner executes both actual loaders against the frozen per-path
+  table: text/binary bad-call status 2 with meta/frame/counter/reason
+  preservation; text diagnostics status 1 with real PACD, meta 0 and zero
+  eval while the binary arm is explicitly not packed; binary bad-version
+  status 1/reason 1 and registry mismatches status 1/reason 9 from VALID
+  canonical PACT bytes (structural arity change and same-length name
+  swap), never malformed status 2; `current` resets both. Cross-path frame
+  equality is suspended during the diagnostic divergence; repeated clocks
+  are explicit per-path state oracles; the bad-version probe captures its
+  counter immediately before the incrementing eval. New anchors:
+  `corpus/reload-atomicity` (document/dynamic control, BPM nudge, genuine
+  beat-1 expr omission, preset metadata/frames/counter) and
+  `corpus/registry-mismatch` (nonempty two-name same-shaped join).
+  Authoring was text-first: check-only saw the two missing goldens (43
+  cases, 2 failed), `zig build corpus -- --update` regenerated 43/43, and
+  all 41 pre-existing `expected.sjon` hashes are identical before/after.
+  An independent authored-semantics oracle (tool-derived bits 0.3/0.6/0.5/
+  1.0, ticks 90090/180180/216216, f32 lanes, registry flags, repeat frames
+  and the exact echo sequences) passes. Post-commit gates: `test` 23/23
+  with **541/541**; `corpus` 43/0; `parity` 43 = **24 clean non-pattern
+  replayed (+2), 4 skipped-pending-SJON, 15 load-failing, 0 failed**;
+  `verify` 30/30 with **427/427 Zig, corpus 43/0, node 113/113**;
+  `native-composition` 10/10 + 1/1; `audit-rt-imports` 10/10 with the
+  frozen 17 `prt_*` + memory. npm Biome 2.5.0 `src test` lint and the
+  library-only `tsc --noEmit` are green (tests execute under verify; no
+  test-file typecheck claim). No production JS API, load algorithm, wire
+  format, version, export set or old golden changed. **P2 is complete
+  (task/gate only); P3 is still open** — the T6 negative suites, full
+  pattern legs, binary wasm corpus and browser work are not done, and the
+  two owner questions remain unanswered. Evidence:
+  `.agent/control/binary03-t5b-report.md`.
