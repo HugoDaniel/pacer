@@ -62,12 +62,27 @@ test "classifier: initial load true and false are read at the initial position" 
     );
 }
 
-test "classifier: a later reload record is never the initial classification" {
+test "classifier: later reload records are never the initial classification" {
     const golden = runner.GENERATED_HEADER ++
         "\n(load :ok true)\n(meta :bpm \"0000000000000000\")\n(reload :kind current :status 0)\n(load :ok false)\n";
     // The initial record is true; the later `(load :ok false)` is a reload
     // and must not overwrite it.
     try t.expectEqual(true, (try runner.parseInitialLoad(golden)).initial_ok);
+}
+
+test "classifier: lifecycle records are known but never a classification" {
+    const golden = runner.GENERATED_HEADER ++
+        "\n(load :ok true)\n" ++
+        "(reload :kind bad-version :skipped binary-only)\n" ++
+        "(registry-mismatch :mode structural :skipped binary-only)\n" ++
+        "(load :ok false)\n";
+    try t.expectEqual(true, (try runner.parseInitialLoad(golden)).initial_ok);
+    // Unknown heads are still refused; lifecycle heads are not a silent
+    // wildcard for arbitrary records.
+    try t.expectError(
+        error.UnknownTopLevelForm,
+        runner.parseInitialLoad(runner.GENERATED_HEADER ++ "\n(load :ok true)\n(reloadx :kind current)\n"),
+    );
 }
 
 test "classifier: duplicate initial records are refused" {
