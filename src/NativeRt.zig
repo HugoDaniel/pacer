@@ -10,9 +10,11 @@
 //! Pointers are real native pointers. Lengths, statuses, the widened
 //! `prt_loadError` word and every scalar stay `u32`; the evaluator's
 //! `f64`/`i64`/`f32` arguments keep their production widths. The
-//! `comptime` block below pins every signature, so an ABI drift in the
-//! entry fails this facade's compilation instead of silently linking a
-//! mismatched call.
+//! `comptime` block below pins every FACADE declaration, so this file's
+//! own call sites cannot drift. It does not compare against the producer:
+//! C linkage cannot, so `src/native_rt_bridge.zig` separately pins the
+//! actual `Rt.NativeHarness` alias types in the object that owns the real
+//! `prt_*` definitions. Both sides must change together to compile.
 //!
 //! `reset` is the one native-only cleanup symbol (`pacer_native_rt_reset`),
 //! defined by `src/native_rt_bridge.zig`; it is never part of a wasm
