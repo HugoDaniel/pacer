@@ -112,7 +112,7 @@ decided by gates, not by size.
 | A | 01 pacb-format · all phases | ☑ **QUALIFIED** — Phases 1–4 all landed 2026-10-19 (Phase 4: T4.1 audit-diagnostics 34/34 on entry, no manufactured RED; T4.2 never-panic decode fuzz harness `src/fuzz_pacb.zig` — genuine missing-module RED, green 347/347, gates test 463/463 + verify 15/15 + audit 34/34, no parser bug found; T4.3 `docs/binary-score.md` format of record + `CLAUDE.md` `'PACB'` wire row; T4.4 wave-plan corrections record). QUALIFICATION: the tree-trailing flag-combo acceptance criterion is known-failed as shipped and stays an explicitly deferred owner decision (KNOWN-GAP test pins the current refusal as interim state, NOT an accepted contract; `pacer pack` never emits such a payload); the broad post-wave review is pending — 01 is NOT marked production-complete — **update 2026-10-19 (final-corrections finish)**: the broad review HAS run and all six of its findings are dispositioned and landed (`e1e4c42`/`00de731`/`96165ce`/`848bc8c`/`bb5b8b1`/`4cbc2fa`; record: `.agent/control/binary01-final-corrections-report.md`); both owner items remain open, so the qualification stands — still NOT production-complete |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☑ — T1.1 `ExprTrack.evalAtBinary` (commit `b717d3c`) + T1.2 the extraction (EvalCore one engine over tree\|binary `LeafSource`, `Eval` alias facade, generic `init` + `initContext`, `CompileResult.evalContext()`) landed 2026-10-19; zero respells (`Driver`/fuzz/56 test call sites unmodified), gates: test 486/486, verify 15/15 (corpus 38/0, node 94/94), zero golden drift, fuzz 5/5 361/361 (record: `.agent/control/binary02-t12-report.md`) |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☑ **COMPLETE** — T2.1–T2.5 landed 2026-10-19: the `RtSjon` window, `rt_entry.zig` + the real `pacer-rt.wasm` (172,255 B), the two-layer closure gate (source audit + physical artifact check, real negatives), transactional load/ownership tests, and the preliminary non-binding trend (`aac3eda`: rt 172,255 raw / 57,827 brotli11; static PACB zone 6,049,576 B; `Pacm` reader Δ 4,125 raw, same-build ablation; no verdict). Gates at T2.5: test 521/521, verify 15/15 (corpus 38/0, node 94/94), fuzz 361/361, audit 10/10 both layers |
-| B | 02 binary-runtime · P3 `pacer/rt` glue | ☑ **COMPLETE / QUALIFIED** — T3.1 shared `pact.js` / `meta.js` / `test/harness.js` leaves (`986051c`); T3.2 `PacerRt` (`src/rt.js`), 8 production-artifact tests, append-only `./rt` + `pacer-rt.wasm` package surface, build/pretest wiring, build.zig verify dependency. No `reload(text)`; transactional binary `load`. Binary metadata is span-preserving but source-free (scene `name` `''`, declared-only names `null`) — documented contract gap, no invented names. Node 104/104, verify 18/18 (410/410 Zig, corpus 38/0), test 521/521, fuzz 361/361, audit 10/10; pack dry-run ships `pacer-rt.wasm` + `types/rt.d.ts`. QUALIFIED pending P4 review and 03/04; wave NOT complete |
+| B | 02 binary-runtime · P3 `pacer/rt` glue | ⚠ **IMPLEMENTED — NOT ACCEPTED (metadata parity open)** — T3.1 shared `pact.js` / `meta.js` / `test/harness.js` leaves (`986051c`); T3.2 `PacerRt` (`src/rt.js`), 8 production-artifact tests, append-only `./rt` + `pacer-rt.wasm` package surface, build/pretest wiring, build.zig verify dependency. No `reload(text)`; transactional binary `load`. Binary metadata is span-preserving but source-free (scene `name` `''`, declared-only names `null`); missing scene names break the approved identical-metadata / unmasked-harness parity, and the masked parity line is bounded output characterization only — NOT passed acceptance. Owner decision pending; no requirement changed, no name invented. Node 104/104, verify 18/18 (410/410 Zig, corpus 38/0), test 521/521, fuzz 361/361, audit 10/10; pack dry-run ships `pacer-rt.wasm` + `types/rt.d.ts`. P4 review and 03/04 pending; wave NOT complete. **2026-10-19 review correction:** P3 acceptance stays open until the owner rules on the missing scene-name capability or authorizes the metadata extension. |
 | C | 02 binary-runtime · P4 pattern support (gated on the prerequisite) | ☐ BLOCKED on the SJON-owner prerequisite; no pattern parity claimed |
 | C | 03 playback-parity · P1–P3 (non-pattern legs) | ☐ pending (not run by 02 P3) |
 | C | 03 playback-parity · P4 wasm leg + pattern legs | ☐ pending (blocked with 02 P4) |
@@ -162,15 +162,19 @@ the full-artifact control the same run. The formal
 `tools/smoke_rt.mjs` passes on the real artifact (transactional
 refused-reload proof included). **P2 is COMPLETE** — T2.5's preliminary
 size trend (`aac3eda`) closed it with the mandated non-binding label.
-**P3 is COMPLETE / QUALIFIED**: T3.1 extracted the shared
-`pact.js` / `meta.js` / `test/harness.js` leaves (`986051c`), and T3.2
-landed `PacerRt` (`src/rt.js`), the production-artifact test suite
-(`test/rt.test.js`), and the append-only package surface (`./rt`,
-`pacer-rt.wasm`, `build:wasm-rt*` + `build:rt-fixture`, pretest/build
-wiring). The binary metadata contract is honestly bounded: spans are
-preserved, but source-derived values are unavailable (scene name `''`;
-declared-only target names `null`, since DECL carries no names). No
-text/reload fallback exists (`PacerRt.prototype.reload` is undefined).
+**P3 is IMPLEMENTED — NOT ACCEPTED (metadata parity open)**: T3.1
+extracted the shared `pact.js` / `meta.js` / `test/harness.js` leaves
+(`986051c`), and T3.2 landed `PacerRt` (`src/rt.js`), the
+production-artifact test suite (`test/rt.test.js`), and the append-only
+package surface (`./rt`, `pacer-rt.wasm`, `build:wasm-rt*` +
+`build:rt-fixture`, pretest/build wiring). The binary metadata
+implementation preserves spans, but source-derived values are
+unavailable (scene name `''`; declared-only target names `null`, since
+DECL carries no names). **Missing scene names break the approved
+identical-metadata / unmasked-harness parity; the test's mask is
+bounded output characterization, not acceptance**, and the owner
+decision remains pending. No text/reload fallback exists
+(`PacerRt.prototype.reload` is undefined).
 **P4 remains BLOCKED on the SJON-owner prerequisite; plans 03 and 04
 are untouched. The wave is NOT complete.** The pre-existing
 `posToTickLocal` assert on a

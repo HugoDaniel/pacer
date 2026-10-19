@@ -11,8 +11,11 @@ created by P2; the gate step runs BOTH layers — the source auditor and,
 after `wasm-rt` builds the artifact, `tools/check_rt_artifact.zig`) and
 ends in a **preliminary, non-binding size trend**; P3
 adds the npm gate.
-**Created 2026-10-18; P1–P3 complete 2026-10-19 (P3 QUALIFIED);
-P4 is blocked on the SJON-owner prerequisite; 03/04 remain pending.**
+**Created 2026-10-18; P1–P2 complete 2026-10-19; P3 implemented but
+NOT ACCEPTED 2026-10-19 (missing source-free scene names break the
+approved identical-metadata / unmasked-harness parity; owner decision
+pending); P4 is blocked on the SJON-owner prerequisite; 03/04 remain
+pending.**
 
 ## Why
 
@@ -641,8 +644,10 @@ _(created 2026-10-18; entries appended per phase)_
   then `ERR_MODULE_NOT_FOUND` (leaves referenced before creation).
   T3.2 (`PacerRt` + `test/rt.test.js` + append-only package wiring)
   is next.
-- **2026-10-19 — Phase P3 COMPLETE (T3.2 landed); P1–P3 COMPLETE /
-  QUALIFIED, pending P4 review and 03/04. The wave is NOT complete.**
+- **2026-10-19 — Phase P3 implementation landed (T3.2); P1–P2 COMPLETE,
+  P3 IMPLEMENTED — NOT ACCEPTED (metadata parity open; see the dated
+  review correction below), pending P4 and 03/04. The wave is NOT
+  complete.**
   `src/rt.js` adds `PacerRt`, the playback-runtime glue over the real
   `pacer-rt.wasm` `prt_*` surface: the same registries → canonical
   `'PACT'` flow through `pact.js`; `load(pacbBytes)` as the only load
@@ -664,9 +669,11 @@ _(created 2026-10-18; entries appended per phase)_
   carries registry/ncomp only and names never cross the wire (the same
   null `Pacer` reports for an unhosted declared target). The parity test
   therefore asserts the eval/control/BPM render is byte-equal and that
-  the ONLY rendered difference is the source-sliced scene name; the span
-  is asserted equal. No format change, no text fallback, no fabricated
-  names.
+  the one rendered difference in this bounded characterization is the
+  source-sliced scene name; the span is asserted equal. **That mask is
+  NOT acceptance of the identical-metadata requirement** — an unmasked
+  render is not byte-equal while the name is missing. No format change,
+  no text fallback, no fabricated names.
   **Package surface (append-only):** `exports["./rt"]`, `exports["./
   pacer-rt.wasm"]`, `files += "pacer-rt.wasm"`, and the
   `build:wasm-rt` / `build:wasm-rt-copy` / `build:rt-fixture` scripts;
@@ -679,8 +686,9 @@ _(created 2026-10-18; entries appended per phase)_
   self-contained.
   **Tests:** `test/rt.test.js` (8 production-artifact tests) covers load
   + exact immutable metadata (including byte-coordinate span slicing),
-  text↔binary harness parity (writes/control/BPM; one documented scene
-  name difference), registry mismatch (status 1, reason 9), transactional
+  text↔binary harness parity (writes/control/BPM; one scene-name line is
+  masked as bounded output characterization — NOT acceptance of the
+  identical-metadata requirement), registry mismatch (status 1, reason 9), transactional
   refused reload with control/BPM/`exprFailures` held, second-load meta
   view replacement, absent `reload`, evalTicks/control surface, and
   robust typed-byte/zone-overflow/bad-call honesty. `exports.test.js`
@@ -697,3 +705,32 @@ _(created 2026-10-18; entries appended per phase)_
   (35 entries, ships `pacer-rt.wasm` + `types/rt.d.ts`, no tests or
   generated fixture). P4 stays blocked on the SJON owner prerequisite;
   03/04 remain pending.
+- **2026-10-19 — Review correction: P3 acceptance is OPEN (metadata
+  parity); audit findings 2 and 3 fixed with real RED→GREEN.** Evidence:
+  `src/rt.js` supplies `EMPTY_DOC_BYTES` to the shared decoder and
+  `src/meta.js` obtains scene names by slicing those bytes, so the
+  unmasked full-small harness render exposes `name: ''` where the text
+  driver renders `drop`. `test/rt.test.js` masks that one line as
+  **bounded output characterization ONLY — not passed acceptance**. The
+  approved identical-metadata / unmasked-harness requirement is
+  unchanged; the owner decision is pending (accept source-free runtime
+  metadata without scene names, or authorize the needed upstream
+  format/metadata extension). No name was invented and no masking is
+  counted as acceptance. Raw `'PACW'` parity remains separately
+  measured. **Audit fixes:** `tools/audit_rt_imports.zig` refuses `..`
+  above either leg root BY NAME (`02c8214`) — the new
+  `escape-above-root` fixture makes the escaped basenames
+  `../Writes.zig` and `../../Ast.zig` collide with allowlisted entries;
+  valid `plugins/../Ast.zig` still resolves; real closure stays 12
+  pacer + 16 SJON. `tools/check_rt_artifact.zig` validates the wasm
+  version (`1eee95d`), requires complete consumption of every
+  interpreted type/import/export section (`aa2001b`; zero import count
+  + tail included), and rejects duplicate export names (`b7beadd`) —
+  each a synthetic RED through the exposed `checkModule` path before
+  GREEN. Final correction gates (obs, serial): `zig build test`
+  524/524; `zig build audit-rt-imports` 10/10 (both layers OK);
+  `zig build verify` 18/18 (410/410, corpus 38/0, node 104/104,
+  cli-golden + score-docs current); `zig build fuzz` 5/5 361/361;
+  Linux `node tools/smoke_rt.mjs` PASS (exit 0). `zig fmt --check`
+  clean on the touched Zig paths. P3 remains NOT ACCEPTED; P4/03/04
+  untouched.

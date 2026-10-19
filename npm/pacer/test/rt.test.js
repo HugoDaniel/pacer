@@ -9,8 +9,9 @@
 // slices from source are not recoverable by the runtime: scene `name` is
 // '' (its nameSpan stays authoritative), and declared-only target names
 // are null because 'DECL' carries registry/ncomp only (names never cross
-// the wire). Tests assert the gap explicitly instead of manufacturing
-// names.
+// the wire). Tests characterize the gap explicitly instead of
+// manufacturing names. That characterization is NOT acceptance of the
+// approved identical-metadata requirement — the owner decision is open.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -155,10 +156,14 @@ test('parity: text Pacer and binary PacerRt run the same harness byte-for-byte',
     assert.deepEqual(rt.evalBytes(seconds), text.evalBytes(seconds), `t=${seconds}`);
   }
 
-  // The same script through the ONE shared renderer. Everything — load,
-  // diagnostics, meta, every write, control acceptance, bpm acceptance —
-  // must be byte-equal; the only permitted difference is a scene name,
-  // because PACM stores a span and the binary has no source text.
+  // The same script through the ONE shared renderer. Raw eval bytes are
+  // the determinism claim above; here everything — load, diagnostics,
+  // meta, every write, control acceptance, bpm acceptance — is compared
+  // as bounded output characterization. One scene-name line differs
+  // because PACM stores a span and the binary has no source text. The
+  // mask below is NOT acceptance of the approved identical-metadata /
+  // unmasked-harness parity; that requirement remains unmet pending an
+  // owner decision. The assertions are unchanged.
   const textRendered = await renderCase(fullSmallDoc, harness, text);
   const rtRendered = await renderCase(fullSmallDoc, harness, rt);
   const textLines = textRendered.split('\n');

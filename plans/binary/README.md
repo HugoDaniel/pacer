@@ -22,10 +22,13 @@ interim `:pattern` refusal, and the three measured caps on
 `Compile.Code` 31–33 — landed 2026-10-19); the
 tree-trailing-comments acceptance gap stays an explicitly deferred
 owner decision (SJON cross-repo edit vs approved narrowing), pinned by
-a KNOWN-GAP test. Plan 01 as a whole is NOT done: the rest of phases
-3–4 (the `pacer pack` verb, codes/fuzz/docs) remain
-open, as do plans
-02–04. The wave was
+a KNOWN-GAP test. Plan 01's phases 3–4 have since landed (the
+`pacer pack` verb, codes/fuzz/docs) and the broad review's six
+corrections are dispositioned (`.agent/control/binary01-final-corrections-report.md`;
+confirm log `.agent/control/binary01-confirm.log`); plan 01 remains
+QUALIFIED — not production-complete — only because its two owner items
+stay open (the SJON tree-trailing acceptance gap and the pattern
+refusal). Plans 02–04 continue. The wave was
 independently reviewed twice the same day; this revision
 applies the first review's blockers and important findings (B1–B4, I1–I11),
 the final review's three findings (HIGH-1 the closure gate's module blind
@@ -33,9 +36,11 @@ spot, MEDIUM-2 the unstated PACM trust model, LOW-3 canonical section
 presence), and its grammar-context fixups — dated observations about the
 plan text, not gate claims about code that does not exist yet.
 
-**Plan 02 execution started 2026-10-19 — P1–P3 COMPLETE (QUALIFIED);
-P4 remains gated on the SJON prerequisite and 03/04 are pending review.
-The wave is NOT complete.** T1.1 landed the binary expr leaf
+**Plan 02 execution started 2026-10-19 — P1–P2 COMPLETE; P3
+IMPLEMENTED — NOT ACCEPTED (missing source-free scene names break the
+approved identical-metadata / unmasked-harness parity; owner decision
+pending); P4 remains gated on the SJON prerequisite and 03/04 are
+pending review. The wave is NOT complete.** T1.1 landed the binary expr leaf
 (`ExprTrack.evalAtBinary`, bit-equal to the tree arm; commit `b717d3c`);
 T1.2 extracted the one engine into `src/EvalCore.zig` over a
 tree|binary `LeafSource` with `src/Eval.zig`
@@ -73,13 +78,19 @@ smoke PASS). P2 closed when T2.5's preliminary size trend landed
 `test/harness.js` leaves (`986051c`), and T3.2 landed `src/rt.js`
 (`PacerRt`), `test/rt.test.js`, and the append-only package surface
 (`./rt`, `pacer-rt.wasm`, build/pretest scripts) — production-artifact
-tests only, no text/reload fallback. The binary metadata contract is
-span-preserving but source-free: scene `name` is `''` (the `nameSpan`
-stays valid) and declared-only target names are `null` (DECL carries
-registry/ncomp, never names); this is documented, not invented. Node
-104/104; `zig build verify` 18/18 (410/410 Zig, corpus 38/0, node
-104/104). **P4 is blocked on the SJON owner prerequisite; 03/04 are
-untouched. The wave is not complete.** See
+tests only, no text/reload fallback. The binary metadata implementation
+preserves spans but is source-free: scene `name` is `''` (the
+`nameSpan` stays valid) and declared-only target names are `null` (DECL
+carries registry/ncomp, never names). That is a capability gap, not an
+accepted contract: without the scene name the unmasked harness render
+is not byte-equal to the text driver's, so P3 is NOT accepted; the
+owner decision is pending, no requirement changed, and no name
+invented. The masked parity line in `test/rt.test.js` is bounded output
+characterization only. Node 104/104; `zig build verify` 18/18 (410/410
+Zig, corpus 38/0, node 104/104). **2026-10-19 review correction:** P3
+acceptance stays open until the scene-name capability decision. **P4 is
+blocked on the SJON owner prerequisite; 03/04 are untouched. The wave
+is not complete.** See
 [00-strategy.md](00-strategy.md)'s status board.
 
 Production animations must not ship the Pacer source compiler. Today
