@@ -883,3 +883,55 @@ _(created 2026-10-18; entries appended per phase)_
   narrowing); only the flag-combo acceptance fixture rides with it. No
   encoder, `pack` CLI, runtime, npm, or wire-format change; corpus and
   CLI goldens byte-identical.
+
+### Phase 3 — T3.1 (encoder core, landed 2026-10-19)
+
+**T3.1 `src/PacbEncode.zig` — the encoder core + round-trip.**
+`encode(gpa, result, host_targets)` (precondition `result.ok()`, error
+set `error{OutOfMemory}` alone — the v1 caps preflight is T3.2's)
+mirrors one `Compile.CompileResult` + the actual host join into the
+canonical container; `fnv1a64` is the public checksum spelling. All 14
+sections emit in the frozen order with the frozen presence/omit rules
+(degenerate `'EASE'`/`'TMPO'`/`'REGS'`/`'DECL'`/record sections
+omitted; `'TRAN'`/`'PACM'` always); the directory is contiguous,
+gap-free, exact-end, and the zero-filled output keeps every
+pad/reserved byte zero. `'DECL'` is `result.targets[host_targets.len..]`
+(A22) while `'REGS'` carries the canonical `'PACT'` of the ACTUAL
+passed host list (empty ⇒ the zero-count spelling `'TRAN'` checksums);
+`'EASE'`/`'TMPO'` are sliced verbatim out of the ONE `Abi.encodeMeta`
+pass whose blob is embedded whole (pinned on the wire: the sections
+byte-equal the embedded PACM's own TLV payloads); expr/pattern
+payloads are `cloneNode` into a one-root tree + `toBinary(.compact)`
+(A29) — no shadow evaluation anywhere, the table's own AST only.
+`Pacb.strsEntryLess` went public so the encoder sorts `'STRS'` with
+the decoder's own comparator (one definition of the order); the
+encoder additionally imports `Pacm` (std-only leaf) to reuse its TLV
+walk for the verbatim slices rather than duplicate it. Tests (7
+vertical RED→GREEN behaviors + 2 pin blocks, 9 new tests): the
+missing-module compile error; transport-only, keys-only,
+expr+keys (payload byte-oracle + `Expr.evalBinary` at t=0 ≡ text-path
+`ExprTrack.evalAt`, same env, same `[4]f32`),
+trigger/scene/control/emit, tempo-mapped (EASE/TMPO verbatim pins),
+and declared-join (incl. the host-mix case) round-trips — each with
+exact table parity and pack-twice byte-equality; the pattern-track
+test PASSED IMMEDIATELY as a pin (the payload path treats expr and
+pattern uniformly by design — no manufactured RED; NO pattern
+evaluation parity is claimed, T3.2's preflight owns refusing pattern
+scores until the runtime wave lands the SJON env); wire-pin blocks
+assert the header literals, per-record zero pads, and FNV-1a-64 known
+answers. Two fixture defects were corrected during RED (a scalar expr
+on a 3-comp target — `expr_result_invalid`; `:every` needs its unit)
+plus two implementation defects caught by already-green tests
+(sorting sections by the enum's 4-CC value put `'PACM'` before
+`'TRAN'`; a stale-frame error trace sent the first investigation
+astray until a diagnostic print isolated the real failure). RED
+evidence and commands: `.agent/control/binary01-t31-red{1..7}.log`,
+GREEN + pins: `binary01-t31-green{1..7}.log`, `-pins.log`; gates:
+`zig build test` **429/429 (368 root + 61 CLI)**, `zig fmt --check`
+clean, `zig build verify` **15/15 steps, 368/368 tests, corpus
+37/0 failed, node parity current, cli-golden + score-docs current**,
+`zig build cli-golden` **4/4**, and `git diff --exit-code` empty for
+`corpus`/`src/cli/testdata` plus zero drift vs `90dc758` over
+corpus/CLI/docs/npm. The decoder's independently assembled test
+fixtures are untouched (only `strsEntryLess` visibility); no T3.2
+classifier/preflight codes, no CLI/runtime/npm/sibling change.

@@ -1476,8 +1476,10 @@ fn isReservedControlName(name: []const u8) bool {
 }
 
 /// `'STRS'` sort order: by length first, then bytes — the canonical
-/// spelling the packer emits and decode requires.
-fn strsEntryLess(a: []const u8, b: []const u8) bool {
+/// spelling the packer emits and decode requires. Public: the T3.1
+/// encoder sorts its `'STRS'` entries with THIS comparator, so producer
+/// and decoder share one definition of the order (no second spelling).
+pub fn strsEntryLess(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return a.len < b.len;
     return std.mem.order(u8, a, b) == .lt;
 }

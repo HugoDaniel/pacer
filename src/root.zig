@@ -38,6 +38,10 @@ pub const Pacb = @import("Pacb.zig");
 /// record) — a total decode of untrusted bytes whose views alias the
 /// input, so the playback runtime's closure never drags the compiler in.
 pub const Pacm = @import("Pacm.zig");
+/// `'PACB'` encoder core: canonical assembly of the compiled-score
+/// container from one `Compile.CompileResult` + the host target join
+/// (Phase 3 T3.1). Round-trips through `Pacb.decode`.
+pub const PacbEncode = @import("PacbEncode.zig");
 /// Score compiler: preloaded schema → `sjon.validateDocument` → the
 /// compiled `TrackTable` (targets joined, ticks converted, programs
 /// deduped), with pacer's own wire-stable diagnostic codes.
@@ -74,6 +78,7 @@ test {
     _ = PactCodec;
     _ = Pacb;
     _ = Pacm;
+    _ = PacbEncode;
     _ = Compile;
     _ = TimeMap;
     _ = Easing;

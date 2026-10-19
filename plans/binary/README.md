@@ -13,11 +13,15 @@ the interim decoder review's correction (folded-tick envelope
 `MAX_FOLDED_TICK = 2·MAX_TICK`, batched canonical hardening —
 EASE-refs/features-bit/DECL-presence/KEYS-overlap/EMIT-scalar — and
 the mismatched-directory defense for the early stage reads) landed
-before it; the
+before it; Phase 3 PARTIAL (T3.1, the `src/PacbEncode.zig` encoder
+core — canonical assembly, verbatim `'PACM'`-pass `'EASE'`/`'TMPO'`
+slices, `cloneNode`+compact payloads, compiled-fixture round-trips —
+landed 2026-10-19); the
 tree-trailing-comments acceptance gap stays an explicitly deferred
 owner decision (SJON cross-repo edit vs approved narrowing), pinned by
-a KNOWN-GAP test. Plan 01 as a whole is NOT done: phases 3–4 (the
-encoder, `pacer pack`, codes/fuzz/docs) remain open, as do plans
+a KNOWN-GAP test. Plan 01 as a whole is NOT done: the rest of phases
+3–4 (pack refusals, the `pacer pack` verb, codes/fuzz/docs) remain
+open, as do plans
 02–04. The wave was
 independently reviewed twice the same day; this revision
 applies the first review's blockers and important findings (B1–B4, I1–I11),
