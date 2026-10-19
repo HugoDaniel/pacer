@@ -168,10 +168,14 @@ fn parseModule(arena: Allocator, bytes: []const u8, why: *[]const u8) ParseError
         why.* = "not a wasm module (bad magic)";
         return error.Malformed;
     }
-    _ = r.take(4) orelse {
+    const version = r.take(4) orelse {
         why.* = "missing version word";
         return error.Malformed;
     };
+    if (!std.mem.eql(u8, version, &WASM_VERSION)) {
+        why.* = "unsupported wasm version (want 1.0.0.0)";
+        return error.Malformed;
+    }
 
     var types: std.ArrayList(Sig) = .empty;
     var imports: std.ArrayList(Import) = .empty;
@@ -506,7 +510,8 @@ pub fn main(init: std.process.Init) !u8 {
 
 const testing = std.testing;
 
-const HEADER = MAGIC ++ [_]u8{ 0x01, 0x00, 0x00, 0x00 };
+const WASM_VERSION = [_]u8{ 0x01, 0x00, 0x00, 0x00 };
+const HEADER = MAGIC ++ WASM_VERSION;
 
 /// uleb128-encode `v` onto `out`.
 fn encUleb(a: Allocator, out: *std.ArrayList(u8), v: u32) !void {
@@ -576,11 +581,15 @@ fn exportSection(a: Allocator) ![]u8 {
     return section(a, EXPORT_SECTION_ID, body.items);
 }
 
-fn module(a: Allocator, sections: []const []const u8) ![]u8 {
+fn moduleWithHeader(a: Allocator, header: []const u8, sections: []const []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
-    try out.appendSlice(a, &HEADER);
+    try out.appendSlice(a, header);
     for (sections) |s| try out.appendSlice(a, s);
     return out.items;
+}
+
+fn module(a: Allocator, sections: []const []const u8) ![]u8 {
+    return moduleWithHeader(a, &HEADER, sections);
 }
 
 /// Run every synthetic-bytes test with one arena per test (the module
@@ -617,6 +626,19 @@ fn expectFailNaming(a: Allocator, bytes: []const u8, needle: []const u8) !void {
 fn expectMalformed(a: Allocator, bytes: []const u8) !void {
     const report = try checkModule(a, bytes);
     try testing.expect(report.malformed != null);
+}
+
+/// Assert the module is malformed AND the reason names `needle`.
+fn expectMalformedNaming(a: Allocator, bytes: []const u8, needle: []const u8) !void {
+    const report = try checkModule(a, bytes);
+    const why = report.malformed orelse {
+        std.debug.print("expected malformed naming `{s}`, got OK ({d} failures)\n", .{ needle, report.failures.len });
+        return error.TestUnexpectedResult;
+    };
+    if (std.mem.indexOf(u8, why, needle) == null) {
+        std.debug.print("malformed reason does not name `{s}`: {s}\n", .{ needle, why });
+        return error.TestUnexpectedResult;
+    }
 }
 
 test "empty import section passes; frozen exports pass" {
@@ -743,6 +765,20 @@ test "the memory export with the wrong kind is rejected" {
             }
             const m = try module(a, &.{ try typeSection(a), try importSection(a, &.{try frozenImport(a)}), try section(a, EXPORT_SECTION_ID, body.items) });
             try expectFailNaming(a, m, "memory");
+        }
+    }.run);
+}
+
+test "a wrong wasm version is refused by name" {
+    try withArena(struct {
+        fn run(a: Allocator) !void {
+            const wrong_version = MAGIC ++ [_]u8{ 0x02, 0x00, 0x00, 0x00 };
+            const m = try moduleWithHeader(a, &wrong_version, &.{
+                try typeSection(a),
+                try section(a, IMPORT_SECTION_ID, &[_]u8{0x00}),
+                try exportSection(a),
+            });
+            try expectMalformedNaming(a, m, "version");
         }
     }.run);
 }
