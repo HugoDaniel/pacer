@@ -229,6 +229,10 @@ fn parseModule(arena: Allocator, bytes: []const u8, why: *[]const u8) ParseError
                     };
                     try types.append(arena, .{ .params = params, .results = results });
                 }
+                if (sec.pos != body.len) {
+                    why.* = "trailing bytes in type section";
+                    return error.Malformed;
+                }
             },
             IMPORT_SECTION_ID => {
                 const count = sec.uleb() orelse {
@@ -276,6 +280,10 @@ fn parseModule(arena: Allocator, bytes: []const u8, why: *[]const u8) ParseError
                     }
                     try imports.append(arena, .{ .module = mod_name, .field = field, .kind = kind, .typeidx = typeidx });
                 }
+                if (sec.pos != body.len) {
+                    why.* = "trailing bytes in import section";
+                    return error.Malformed;
+                }
             },
             EXPORT_SECTION_ID => {
                 const count = sec.uleb() orelse {
@@ -297,6 +305,10 @@ fn parseModule(arena: Allocator, bytes: []const u8, why: *[]const u8) ParseError
                         return error.Malformed;
                     };
                     try exports.append(arena, .{ .name = nm, .kind = kind });
+                }
+                if (sec.pos != body.len) {
+                    why.* = "trailing bytes in export section";
+                    return error.Malformed;
                 }
             },
             else => continue, // other sections are not the gate's business
@@ -535,15 +547,16 @@ fn section(a: Allocator, id: u8, body: []const u8) ![]u8 {
     return out.items;
 }
 
-/// A type section holding one `(i32, i32) -> i32` entry (index 0), plus a
-/// decoy `(i32) -> i32` at index 1 for the wrong-signature tests.
+/// A type-section body holding one `(i32, i32) -> i32` entry (index 0),
+/// plus a decoy `(i32) -> i32` at index 1 for the wrong-signature tests.
+const TYPE_BODY = [_]u8{
+    0x02, // two types
+    0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, // (i32,i32)->(i32)
+    0x60, 0x01, 0x7f, 0x01, 0x7f, // (i32)->(i32)
+};
+
 fn typeSection(a: Allocator) ![]u8 {
-    const body = [_]u8{
-        0x02, // two types
-        0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, // (i32,i32)->(i32)
-        0x60, 0x01, 0x7f, 0x01, 0x7f, // (i32)->(i32)
-    };
-    return section(a, TYPE_SECTION_ID, &body);
+    return section(a, TYPE_SECTION_ID, &TYPE_BODY);
 }
 
 fn importEntry(a: Allocator, module_: []const u8, field: []const u8, kind: u8, tail: []const u8) ![]u8 {
@@ -569,7 +582,7 @@ fn frozenImport(a: Allocator) ![]u8 {
     return importEntry(a, "env", "sjon_host_invoke_plugin", 0x00, &[_]u8{0x00});
 }
 
-fn exportSection(a: Allocator) ![]u8 {
+fn exportBody(a: Allocator, extra: []const u8) ![]u8 {
     var body: std.ArrayList(u8) = .empty;
     try encUleb(a, &body, @intCast(FROZEN_EXPORTS.len));
     for (FROZEN_EXPORTS) |e| {
@@ -578,7 +591,12 @@ fn exportSection(a: Allocator) ![]u8 {
         try body.append(a, @intFromEnum(e.kind));
         try encUleb(a, &body, 0); // index — irrelevant to the gate
     }
-    return section(a, EXPORT_SECTION_ID, body.items);
+    try body.appendSlice(a, extra);
+    return body.items;
+}
+
+fn exportSection(a: Allocator) ![]u8 {
+    return section(a, EXPORT_SECTION_ID, try exportBody(a, &.{}));
 }
 
 fn moduleWithHeader(a: Allocator, header: []const u8, sections: []const []const u8) ![]u8 {
@@ -765,6 +783,38 @@ test "the memory export with the wrong kind is rejected" {
             }
             const m = try module(a, &.{ try typeSection(a), try importSection(a, &.{try frozenImport(a)}), try section(a, EXPORT_SECTION_ID, body.items) });
             try expectFailNaming(a, m, "memory");
+        }
+    }.run);
+}
+
+test "each interpreted section must be consumed completely" {
+    try withArena(struct {
+        fn run(a: Allocator) !void {
+            // Type section: declared entries parsed, then a stray byte.
+            const type_tail = TYPE_BODY ++ [_]u8{0xaa};
+            const m1 = try module(a, &.{
+                try section(a, TYPE_SECTION_ID, &type_tail),
+                try section(a, IMPORT_SECTION_ID, &[_]u8{0x00}),
+                try exportSection(a),
+            });
+            try expectMalformedNaming(a, m1, "trailing bytes in type section");
+
+            // Import section: a ZERO count followed by a tail byte (the
+            // reviewer's exact shape — "treated as empty" before).
+            const m2 = try module(a, &.{
+                try typeSection(a),
+                try section(a, IMPORT_SECTION_ID, &[_]u8{ 0x00, 0xaa }),
+                try exportSection(a),
+            });
+            try expectMalformedNaming(a, m2, "trailing bytes in import section");
+
+            // Export section: the frozen set parsed, then a stray byte.
+            const m3 = try module(a, &.{
+                try typeSection(a),
+                try section(a, IMPORT_SECTION_ID, &[_]u8{0x00}),
+                try section(a, EXPORT_SECTION_ID, try exportBody(a, &[_]u8{0xaa})),
+            });
+            try expectMalformedNaming(a, m3, "trailing bytes in export section");
         }
     }.run);
 }
