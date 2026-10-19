@@ -496,6 +496,44 @@ export fn prt_exprFailures() u32 {
     return @truncate(ev.expr_failures);
 }
 
+/// Internal-only native harness seam (binary03 T1).
+///
+/// These are aliases of the PRODUCTION exports above, not wrappers: the
+/// separately compiled `native_rt_bridge.zig` takes their addresses so the
+/// real entry is analyzed and linked into the private native object, and
+/// `src/NativeRt.zig` declares the same C signatures for consumers. The
+/// namespace is visible only to that object and to source-owning tests; it
+/// is NOT exported through `root.zig`, adds no wasm export, and exposes no
+/// `RtScore`, evaluator, materializer, schema, allocator or wire type.
+///
+/// `reset` is the object-local ordered teardown: existing `unload()` first
+/// (evaluator before its arena, then the score's one free), then clear the
+/// last refusal word. It is idempotent and never runs implicitly.
+pub const NativeHarness = struct {
+    pub const abiVersion = prt_abiVersion;
+    pub const pacbPtr = prt_pacbPtr;
+    pub const pacbCap = prt_pacbCap;
+    pub const targetsPtr = prt_targetsPtr;
+    pub const targetsCap = prt_targetsCap;
+    pub const load = prt_load;
+    pub const loadError = prt_loadError;
+    pub const metaPtr = prt_metaPtr;
+    pub const metaLen = prt_metaLen;
+    pub const writesPtr = prt_writesPtr;
+    pub const evalSeconds = prt_eval;
+    pub const evalTicks = prt_evalTicks;
+    pub const setControl = prt_setControl;
+    pub const clearControl = prt_clearControl;
+    pub const registerControl = prt_registerControl;
+    pub const setBpm = prt_setBpm;
+    pub const exprFailures = prt_exprFailures;
+
+    pub fn reset() void {
+        unload();
+        load_error = 0;
+    }
+};
+
 fn unload() void {
     if (live) |shell| {
         // Ordered teardown: the evaluator borrows the table, the table

@@ -130,12 +130,15 @@ parser bug found), `docs/binary-score.md` as the format of record plus
 the `CLAUDE.md` `'PACB'` wire row, and the wave-plan corrections
 record (per-source PACM key range, scene/emit/control validation
 completion, full-outcome head resolution, `MAX_TICK_ENTRIES`
-derivation, folded-tick envelope wording, SJON CLI prose). Two items
-ride ABOVE plan 02, both owner decisions already asked: (1) the
+derivation, folded-tick envelope wording, SJON CLI prose). One item
+rides ABOVE plan 02, an owner decision already asked: the
 tree-trailing-comments gap — SJON `RootIter` exhaustion-consume fix vs
 approved narrowing (permission ask timed out; the KNOWN-GAP test pins
-the interim refusal, not a contract); (2) the broad post-wave review
-of 01. Plan 02's **P1 is COMPLETE (2026-10-19)** — the
+the interim refusal, not a contract). The broad post-wave review of 01
+HAS run: all six findings are dispositioned and landed
+(`e1e4c42`/`00de731`/`96165ce`/`848bc8c`/`bb5b8b1`/`4cbc2fa`; record
+`.agent/control/binary01-final-corrections-report.md`), so only the
+owner items remain open. Plan 02's **P1 is COMPLETE (2026-10-19)** — the
 `EvalCore` leaf + `Eval` facade landed with zero respells and zero
 behavior change (status board row B). Plan 02's **P2 is now under
 way: T2.1 landed the `RtSjon` window** — the runtime closure's single

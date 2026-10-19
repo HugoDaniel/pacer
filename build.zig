@@ -259,6 +259,59 @@ pub fn build(b: *std.Build) void {
     verify_step.dependOn(&node_test.step);
     verify_step.dependOn(&cli_golden_check.step);
 
+    // `zig build native-composition` — binary03 T1: prove the real PUBLIC
+    // `pacer` module composes with a SEPARATELY COMPILED playback object.
+    //
+    // The object is rooted at `native_rt_bridge.zig`, which imports the
+    // actual `rt_entry.zig` and takes the address of every internal
+    // production alias so the real `prt_*` exports are analyzed/linked.
+    // The probe is a consumer: it imports only the named `pacer` module
+    // and the std-only `NativeRt` extern facade, never runtime source.
+    // `addObject` links the emitted object; it is never used as an
+    // `addImport`, so the two source graphs stay separate. The object is
+    // built with `addObject`, never `addTest`: rt_entry's existing tests
+    // remain in the source-owning root test binary, which does NOT link
+    // this object (it already defines `prt_*`).
+    const native_rt_mod = b.createModule(.{
+        .root_source_file = b.path("src/native_rt_bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_mod },
+        },
+    });
+    const native_rt_object = b.addObject(.{
+        .name = "pacer-native-rt",
+        .root_module = native_rt_mod,
+    });
+    const probe_mod = b.createModule(.{
+        .root_source_file = b.path("src/native_composition_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "pacer", .module = pacer_mod },
+        },
+    });
+    probe_mod.addObject(native_rt_object);
+    const probe = b.addExecutable(.{
+        .name = "native-composition-probe",
+        .root_module = probe_mod,
+    });
+    const run_probe = b.addRunArtifact(probe);
+    run_probe.has_side_effects = true;
+    // The separate test root runs the SAME assertion function in its own
+    // process; this is the required second composition link mode, not a
+    // root-test substitute.
+    const probe_tests = b.addTest(.{ .root_module = probe_mod });
+    const run_probe_tests = b.addRunArtifact(probe_tests);
+    const composition_step = b.step("native-composition", "Check private native loader composition");
+    composition_step.dependOn(&run_probe.step);
+    composition_step.dependOn(&run_probe_tests.step);
+    test_step.dependOn(&run_probe.step);
+    test_step.dependOn(&run_probe_tests.step);
+    verify_step.dependOn(&run_probe.step);
+    verify_step.dependOn(&run_probe_tests.step);
+
     // `zig build fuzz` — never-panic harnesses over the byte-eating and
     // arbitrary-input entrypoints (compile, decodeTargets, Writes.decode,
     // Easing builders). A SEPARATE target so `verify` stays fast; same

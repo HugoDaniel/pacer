@@ -109,3 +109,29 @@ goldens only under `tools/testdata/pacb/`.
 ## Progress log
 
 _(created 2026-10-18; entries appended per phase)_
+
+- **2026-10-19 — T1 COMPLETE (task only; P1 remains open).** Private
+  native composition preflight, no parser extraction: `src/rt_entry.zig`
+  gains the internal-only `NativeHarness` alias namespace and ordered
+  native `reset`; `src/native_rt_bridge.zig` is the separately compiled
+  `b.addObject` root that takes every alias address and defines only
+  `pacer_native_rt_reset`; `src/NativeRt.zig` is the std-only `prt_*`
+  extern facade with comptime ABI pins; `src/native_composition_probe.zig`
+  is a real public-`pacer` consumer executable plus its separate named
+  test root, attached to `native-composition`, `test`, and `verify`.
+  Both modes compile/link/run the actual object: public schema +
+  stationary Driver → public preflight/encode/PACT → real `prt_load` →
+  seconds/tick frames byte-equal to the public driver → complete
+  PACW/PACM → version-corrupt reload refused status 1/reason 1 with the
+  live score, frames and metadata preserved → idempotent cleanup to zero
+  eval/meta → fresh successful load. Controls, BPM and registration's u32
+  sentinel are exercised; no native pointer passes through `u32`.
+  RED: `error: no step named 'native-composition'`, then a missing
+  `src/native_rt_bridge.zig` FileNotFound. GREEN: `native-composition`
+  8/8 steps (probe exe + 1 test); `test` 525/525 (410 root + 89 CLI + 15
+  tool/audit + 1 probe); `verify` 411/411 Zig, corpus 38/0, node 104/104;
+  `audit-rt-imports` 10/10 with the frozen 17 `prt_*` + memory export
+  set. No public root export, wire/version, wasm export or load/
+  materializer change. P1–P3 acceptance, the parity runner, anchors and
+  loader negatives remain open. Evidence:
+  `.agent/control/binary03-t1-report.md`.
