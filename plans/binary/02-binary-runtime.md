@@ -558,3 +558,60 @@ _(created 2026-10-18; entries appended per phase)_
   plus lazy-linkage/DCE carry the closure claim. NOT in this task (P2
   stays open): the preliminary size trend (T2.5) closes P2; P3
   (T3.1/T3.2) untouched.
+- **2026-10-19 — Phase P2 complete (T2.5, the preliminary size trend;
+  P2 closes QUALIFIED — the closure rests on the ACTUAL two-layer
+  audit, built and run against the real artifact and passing, not on
+  a plan assertion; the layer-1 blind spot and marker-gate truth
+  limits stated in the T2.3/T2.4 entry stand).** Measured on the
+  ACTUAL CURRENT artifacts at base `af74e0e` (both rebuilt/confirmed
+  by the `audit-rt-imports` verb this task; no earlier figure
+  reused), per-file `meridian.size.json` method (per-file encoded
+  sums, not an archive or wire measurement; node v26.10.0 `zlib`,
+  gzip level 9, brotli quality 11 — the SAME method on both files):
+
+  | file | raw | gzip9 | brotli11 |
+  |---|---|---|---|
+  | `pacer-rt.wasm` (playback runtime) | 172,255 | 67,767 | 57,827 |
+  | `pacer.wasm` (full driver, control) | 666,873 | 241,879 | 195,623 |
+
+  Plain ratios on those measurements: the rt artifact is 25.8% of the
+  full driver's raw bytes (28.0% under gzip9, 29.6% under brotli11).
+  **Label (mandated, 02:294-296):** *pattern support absent, pack
+  refuses patterns, capability set incomplete — trend only; the
+  binding measurement is 04's full-capability report and the user's
+  checkpoint.* **Static PACB zone (own row, R-I2):**
+  **`PACB_CAP` = 6,049,576 bytes** — `Pacb.pacbWorstCase(256)`
+  toolchain-printed in T2.2 and runtime-confirmed
+  (`prt_pacbCap=6049576`, T2.2 smoke) — labeled: *static zone = hard
+  input byte cap, a whole-blob length policy, never a per-string
+  rejection; the decoded heap (the score's single arena) is separate
+  and bounded by the format caps.* The zone is a static reservation
+  in the rt artifact's memory layout, NOT artifact byte bloat — it
+  does not appear in the file column above. **`Pacm` reader byte
+  cost (own row, 00 decision 6 — visible, never hidden in the
+  total):** measured by a CONTROLLED same-build-variant ablation, not
+  estimated — an ignored scratch copy of the decode path
+  (git-`info/exclude`'d `src/ablate_*`, deleted after measurement)
+  stubbed ONLY the PACM structural decode + routing cross-check
+  (`Pacm.decode` + `verifyRouting`; the `'TRAN'` fnv fast-reject
+  retained), built with the identical ReleaseSmall wasm32-freestanding
+  recipe and the same resolved SJON module; production
+  `src/Pacb.zig`/`src/rt_entry.zig`/`build.zig` untouched. Ablated
+  artifact: 168,130 raw / 65,708 gzip9 / 56,297 brotli11 ⇒ reader
+  cost **Δ = 4,125 raw / 2,059 gzip9 / 1,530 brotli11 bytes** (~2.4%
+  of the rt artifact raw). What this proves, exactly: the marginal
+  LINKED cost of the `Pacm` reader (decode + routing cross-check +
+  its call glue, DCE cascade included) inside THIS toolchain/build
+  variant — not a standalone module size, and not a figure guaranteed
+  to reproduce identically under future closures or toolchains.
+  **Catastrophe rule restated (02:299-301):** a catastrophically bad
+  trend (no meaningful reduction) stops the wave here; anything else
+  proceeds WITHOUT a verdict — no verdict is taken here. Gates this
+  task (obs, serial): `zig build verify` 15/15 (zig 410/410, corpus
+  38/0, node 94/94, cli-golden + score-docs current), `zig build
+  wasm-rt` green, `zig build audit-rt-imports` 10/10 (layer 1 OK —
+  12 pacer + 16 SJON; layer 2 OK — 172,255-byte artifact, frozen
+  export set exact, 3 markers absent-here/present-in the 666,873-byte
+  control). RED: none constructible (measurement/docs task — the 01
+  T4.3 doctrine); the recorded numbers + green verbs ARE the
+  evidence. P3 (T3.1 shared leaves, then T3.2 `PacerRt`) is next.
