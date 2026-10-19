@@ -615,3 +615,28 @@ _(created 2026-10-18; entries appended per phase)_
   control). RED: none constructible (measurement/docs task — the 01
   T4.3 doctrine); the recorded numbers + green verbs ARE the
   evidence. P3 (T3.1 shared leaves, then T3.2 `PacerRt`) is next.
+- **2026-10-19 — Phase P3 IN PROGRESS (T3.1 shared leaves landed;
+  P3 does NOT close here).** `src/pact.js` (the canonical `'PACT'`
+  `encodeTargets` + its `'PACT'`/`MAX_TARGETS` constants),
+  `src/meta.js` (the `'PACM'` decode half as `decodeMeta(buffer,
+  ptr, len, docBytes, targetName)`), and `test/harness.js`
+  (`parseHarness` + the canonical `renderCase`, now taking the
+  already-loaded driver so the SAME renderer can serve T3.2's
+  playback runtime) are extracted leaves. `index.js` imports
+  `encodeTargets`/`decodeMeta` and `corpus.test.js` imports the
+  harness; the moved bodies are behavior-identical — views are still
+  re-taken per call, JSDoc return shapes unchanged, and all 38 corpus
+  goldens stay byte-identical. No `PacerRt` class exists yet and the
+  exports map is untouched (that is T3.2). Test-count note (precise,
+  not a semantic drift): Node's default discovery also runs the new
+  helper `test/harness.js` as a file-level module case, so the suite
+  reports 95 = the SAME 94 named semantic tests as the pre-extraction
+  verify plus 1 helper module case; the 94 names compare equal set-
+  for-set, and every case passes. Linux gates: biome 14 files clean,
+  `tsc --noEmit` exit 0. Obs gates: `zig build verify` 15/15 (zig
+  410/410, corpus 38/0, node 95/95 — 94 semantic + helper),
+  `node tools/smoke_rt.mjs` PASS. RED observed: duplicate-declaration
+  first (pointing at the leaves before the old bodies were removed),
+  then `ERR_MODULE_NOT_FOUND` (leaves referenced before creation).
+  T3.2 (`PacerRt` + `test/rt.test.js` + append-only package wiring)
+  is next.

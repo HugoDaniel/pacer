@@ -15,8 +15,14 @@
 // objects and their Float32Array values are reused frame to frame, and
 // memory views are re-taken from `exports.memory.buffer` every call
 // (the buffer detaches when WASM memory grows; never cache views).
+//
+// The canonical 'PACT' encoder and the 'PACM' decode half are shared
+// leaves (pact.js / meta.js, 02 T3.1) — the playback runtime's glue
+// imports the same code; behavior here is unchanged.
 
-const PACT_MAGIC = 0x54434150;
+import { decodeMeta } from './meta.js';
+import { encodeTargets } from './pact.js';
+
 const PACD_MAGIC = 0x44434150;
 const PACD_VERSION = 1;
 const PACW_MAGIC = 0x57434150;
@@ -25,54 +31,7 @@ const PACW_HEADER_LEN = 12;
 const PACW_ENTRY_LEN = 20;
 const PACD_HEADER_LEN = 12;
 const PACD_RECORD_LEN = 16;
-const PACM_MAGIC = 0x4d434150;
-const PACM_VERSION = 1;
-const PACM_HEADER_LEN = 40;
-const PACM_TRACK_LEN = 24;
-const PACM_KEY_LEN = 32;
-const PACM_CONTROL_LEN = 64;
-const PACM_NO_TARGET = 0xffff;
-// Post-controls section stream (see Abi.zig): [id u32][len u32][payload].
-const PACM_SECTION_HEADER_LEN = 8;
-const PACM_SCENES_ID = 0x4e454353; // 'SCEN' read little-endian
-const PACM_SCENE_REC_LEN = 24;
-const PACM_EASE_ID = 0x45534145; // 'EASE' read little-endian
-const PACM_EASE_PROGRAM_LEN = 772;
-const PACM_EASE_STAGE_LEN = 96;
-const PACM_EASE_OP_LEN = 20;
-const PACM_TEMPO_ID = 0x4f504d54; // 'TMPO' read little-endian
-const PACM_TEMPO_REC_LEN = 16;
-/** Mirror of `Easing.Op` (array index = wire op code). */
-const EASE_OPS = /** @type {const} */ ([
-  'linear',
-  'hold',
-  'smoothstep',
-  'in_quad',
-  'out_quad',
-  'in_out_quad',
-  'in_cubic',
-  'out_cubic',
-  'in_out_cubic',
-  'in_quart',
-  'out_quart',
-  'in_out_quart',
-  'in_sine',
-  'out_sine',
-  'in_out_sine',
-  'in_expo',
-  'out_expo',
-  'in_out_expo',
-  'steps_end',
-  'steps_start',
-  'cubic_bezier',
-  'spring',
-]);
 const NO_SLOT = 0xffffffff;
-/** Mirror of `Abi.MAX_TARGETS` — the flat registry join's ceiling. */
-const MAX_TARGETS = 1024;
-const CONTROL_TYPES = /** @type {const} */ (['slider', 'xy', 'color']);
-/** Mirror of `MetaTrackRec.source`: keyframes, an expression, a trigger, or a pattern. */
-const TRACK_SOURCES = /** @type {const} */ (['keys', 'expr', 'trigger', 'pattern']);
 
 const LOAD_OK = 0;
 const LOAD_DIAGNOSTICS = 1;
@@ -232,176 +191,16 @@ export class Pacer {
     const e = this.#exports;
     const len = e.drv_metaLen();
     if (len === 0) return null;
-    const dv = new DataView(e.memory.buffer, e.drv_metaPtr(), len);
-    if (dv.getUint32(0, true) !== PACM_MAGIC || dv.getUint32(4, true) !== PACM_VERSION) {
-      throw new Error('pacer: corrupt meta buffer');
-    }
-    const bytes = new Uint8Array(e.memory.buffer, e.drv_metaPtr(), len);
-    const lanes = (/** @type {number} */ base) => {
-      /** @type {number[]} */
-      const a = [];
-      for (let c = 0; c < 4; c++) a.push(dv.getFloat32(base + c * 4, true));
-      return a;
-    };
-
-    const flags = dv.getUint8(26);
-    /** @type {import('./types.js').Transport} */
-    const transport = {
-      bpm: dv.getFloat64(8, true),
-      beatsPerBar: dv.getUint16(24, true),
-      dur: flags & 1 ? dv.getBigInt64(16, true) : null,
-      end: flags & 2 ? 'loop' : 'hold',
-    };
-    const trackCount = dv.getUint32(28, true);
-    const keyCount = dv.getUint32(32, true);
-    const controlCount = dv.getUint32(36, true);
-
-    let off = PACM_HEADER_LEN;
-    /**
-     * @type {Array<{ targetId: number, registry: number, ncomp: number,
-     *   source: 'keys' | 'expr' | 'trigger' | 'pattern', keyStart: number, keyLen: number, span: Span }>}
-     */
-    const rawTracks = [];
-    for (let i = 0; i < trackCount; i++, off += PACM_TRACK_LEN) {
-      rawTracks.push({
-        targetId: dv.getUint16(off, true),
-        registry: dv.getUint8(off + 2),
-        ncomp: dv.getUint8(off + 3),
-        source: TRACK_SOURCES[dv.getUint8(off + 4)] ?? 'keys',
-        keyStart: dv.getUint32(off + 8, true),
-        keyLen: dv.getUint32(off + 12, true),
-        span: { start: dv.getUint32(off + 16, true), end: dv.getUint32(off + 20, true) },
-      });
-    }
-    /** @type {import('./types.js').MetaKey[]} */
-    const keys = [];
-    for (let i = 0; i < keyCount; i++, off += PACM_KEY_LEN) {
-      keys.push({
-        at: dv.getBigInt64(off, true),
-        value: lanes(off + 8),
-        span: { start: dv.getUint32(off + 24, true), end: dv.getUint32(off + 28, true) },
-        // Default linear; the 'EASE' section (when present) overwrites it.
-        easeRef: 0,
-      });
-    }
-    /** @type {import('./types.js').MetaControl[]} */
-    const controls = [];
-    for (let i = 0; i < controlCount; i++) {
-      const targetId = dv.getUint16(off, true);
-      const cflags = dv.getUint8(off + 5);
-      const idLen = dv.getUint16(off + 6, true);
-      controls.push({
-        index: i,
-        id: decoder.decode(bytes.subarray(off + PACM_CONTROL_LEN, off + PACM_CONTROL_LEN + idLen)),
-        targetId: targetId === PACM_NO_TARGET ? null : targetId,
-        name: targetId === PACM_NO_TARGET ? null : this.#target(targetId).name,
-        registry: dv.getUint8(off + 2),
-        ncomp: dv.getUint8(off + 3),
-        type: CONTROL_TYPES[dv.getUint8(off + 4)] ?? 'slider',
-        value: lanes(off + 8),
-        min: cflags & 1 ? lanes(off + 24) : null,
-        max: cflags & 2 ? lanes(off + 40) : null,
-        valueSpan: { start: dv.getUint32(off + 56, true), end: dv.getUint32(off + 60, true) },
-      });
-      off += PACM_CONTROL_LEN + idLen;
-    }
-
-    // Section stream: TLV frames after the last control, walked to the
-    // buffer end. Dispatch known ids, skip unknown ones by length — so a
-    // blob carrying a section this glue predates decodes without a throw.
-    /** @type {import('./types.js').MetaScene[]} */
-    const scenes = [];
-    /** @type {import('./types.js').MetaEaseProgram[]} */
-    const easePrograms = [];
-    /** @type {import('./types.js').MetaTempoSeg[]} */
-    const tempoMap = [];
-    while (off < len) {
-      const id = dv.getUint32(off, true);
-      const plen = dv.getUint32(off + 4, true);
-      const body = off + PACM_SECTION_HEADER_LEN;
-      if (id === PACM_SCENES_ID) {
-        const count = dv.getUint32(body, true);
-        let s = body + 4;
-        for (let i = 0; i < count; i++, s += PACM_SCENE_REC_LEN) {
-          const nameStart = dv.getUint32(s + 16, true);
-          const nameEnd = dv.getUint32(s + 20, true);
-          scenes.push({
-            name: decoder.decode(this.#docBytes.subarray(nameStart, nameEnd)),
-            startTick: dv.getBigInt64(s, true),
-            durTicks: dv.getBigInt64(s + 8, true),
-            nameSpan: { start: nameStart, end: nameEnd },
-          });
-        }
-      } else if (id === PACM_EASE_ID) {
-        // Program records (fixed 772 B, unused stage/op slots zeroed) then a
-        // per-key `ease_ref` array parallel to the key stream.
-        const progCount = dv.getUint32(body, true);
-        let p = body + 4;
-        for (let i = 0; i < progCount; i++, p += PACM_EASE_PROGRAM_LEN) {
-          const stageCount = dv.getUint8(p);
-          /** @type {import('./types.js').MetaEaseStage[]} */
-          const stages = [];
-          for (let s = 0; s < stageCount; s++) {
-            const so = p + 4 + s * PACM_EASE_STAGE_LEN;
-            const opsLen = dv.getUint8(so + 12);
-            /** @type {import('./types.js').MetaEaseOp[]} */
-            const ops = [];
-            for (let o = 0; o < opsLen; o++) {
-              const oo = so + 16 + o * PACM_EASE_OP_LEN;
-              ops.push({
-                code: EASE_OPS[dv.getUint8(oo)] ?? 'linear',
-                params: [
-                  dv.getFloat32(oo + 4, true),
-                  dv.getFloat32(oo + 8, true),
-                  dv.getFloat32(oo + 12, true),
-                  dv.getFloat32(oo + 16, true),
-                ],
-              });
-            }
-            stages.push({
-              tEnd: dv.getFloat32(so, true),
-              vBase: dv.getFloat32(so + 4, true),
-              vSpan: dv.getFloat32(so + 8, true),
-              ops,
-            });
-          }
-          easePrograms.push({ index: i, stages });
-        }
-        // ease_ref per key, in key order — attach to the decoded keys.
-        const refCount = dv.getUint32(p, true);
-        let r = p + 4;
-        for (let i = 0; i < refCount; i++, r += 2) {
-          const k = keys[i];
-          if (k) k.easeRef = dv.getUint16(r, true);
-        }
-      } else if (id === PACM_TEMPO_ID) {
-        // Tempo segments including segment 0 (self-contained — no
-        // transport join); ascending ticks, first is always 0.
-        const count = dv.getUint32(body, true);
-        let s = body + 4;
-        for (let i = 0; i < count; i++, s += PACM_TEMPO_REC_LEN) {
-          tempoMap.push({ tick: dv.getBigInt64(s, true), bpm: dv.getFloat64(s + 8, true) });
-        }
-      }
-      off = body + plen;
-    }
-
-    this.#meta = {
-      transport,
-      tracks: rawTracks.map((t) => ({
-        targetId: t.targetId,
-        name: this.#target(t.targetId).name,
-        registry: t.registry,
-        ncomp: t.ncomp,
-        source: t.source,
-        span: t.span,
-        keys: keys.slice(t.keyStart, t.keyStart + t.keyLen),
-      })),
-      controls,
-      scenes,
-      easePrograms,
-      tempoMap,
-    };
+    // The decode half is the shared leaf (meta.js); it builds its views
+    // from the CURRENT memory buffer on every call — growth detaches
+    // older buffers, so views are never cached across calls.
+    this.#meta = decodeMeta(
+      e.memory.buffer,
+      e.drv_metaPtr(),
+      len,
+      this.#docBytes,
+      (id) => this.#target(id).name,
+    );
     return this.#meta;
   }
 
@@ -622,49 +421,4 @@ export class Pacer {
     }
     return diags;
   }
-}
-
-/**
- * Encode the flattened target list as a 'PACT' blob.
- * @param {ReadonlyArray<import('./types.js').FlatTarget>} flat
- * @returns {Uint8Array}
- */
-function encodeTargets(flat) {
-  if (flat.length > MAX_TARGETS) {
-    throw new Error(`pacer: ${flat.length} targets exceed the ${MAX_TARGETS}-target limit`);
-  }
-  // Pair each target with its UTF-8 name up front so the write loop
-  // never re-correlates two arrays by index.
-  const encoded = flat.map((target) => ({ target, name: encoder.encode(target.name) }));
-  let len = 8;
-  for (const { name } of encoded) len += 4 + name.length;
-  const blob = new Uint8Array(len);
-  const dv = new DataView(blob.buffer);
-  dv.setUint32(0, PACT_MAGIC, true);
-  dv.setUint32(4, flat.length, true);
-  let pos = 8;
-  for (const { target, name } of encoded) {
-    if (target.ncomp < 1 || target.ncomp > 4) {
-      throw new Error(`pacer: target ${target.name} has ncomp ${target.ncomp}`);
-    }
-    // The name length rides a u16 on the wire; keep it in 1..65535 so it
-    // neither wraps the field nor encodes an unnamed target.
-    if (name.length < 1 || name.length > 65535) {
-      throw new Error(
-        `pacer: target ${target.name} name is ${name.length} UTF-8 bytes (need 1..65535)`,
-      );
-    }
-    // The registry index rides a u8; a 257th registry would wrap into
-    // bus 0 and mislabel every write it emits.
-    if (target.registry > 255) {
-      throw new Error(`pacer: target ${target.name} sits in registry ${target.registry} (max 255)`);
-    }
-    blob[pos] = target.ncomp;
-    blob[pos + 1] = target.registry;
-    dv.setUint16(pos + 2, name.length, true);
-    pos += 4;
-    blob.set(name, pos);
-    pos += name.length;
-  }
-  return blob;
 }
