@@ -62,6 +62,9 @@ pub const JoinError = error{
     TooLarge,
     Malformed,
     TooManyTargets,
+    /// A name over the `'PACT'` name_len u16 field — refused here, at
+    /// the adapter boundary, before the codec's host-contract assert.
+    TargetNameTooLong,
 };
 
 /// One reflected WGSL type's lane count — `buildJoin`'s LANES table,
@@ -138,6 +141,10 @@ pub fn joinFromReflection(a: Allocator, value: std.json.Value) JoinError![]pacer
         };
         const lanes = lanesOf(wgsl_type) orelse continue;
         if (join.items.len == pacer.Compile.MAX_TARGETS) return error.TooManyTargets;
+        // The 'PACT' name_len field is u16: a longer key cannot ride
+        // the registry wire, so it is refused here (the same bound
+        // `--target` enforces at argv parse), never asserted later.
+        if (entry.key_ptr.*.len > std.math.maxInt(u16)) return error.TargetNameTooLong;
         try join.append(a, .{ .name = entry.key_ptr.*, .ncomp = lanes, .registry = 0 });
     }
     return join.toOwnedSlice(a) catch return error.OutOfMemory;
@@ -192,6 +199,7 @@ pub fn joinErrorMessage(e: JoinError) []const u8 {
         error.TooLarge => "targets file exceeds the input cap",
         error.Malformed => "not a reflection dump (expected one JSON object of name → {\"type\", \"elemCount\"})",
         error.TooManyTargets => "too many reflected targets (max 1024)",
+        error.TargetNameTooLong => "a reflected target name exceeds the 65535-byte 'PACT' name field",
     };
 }
 
@@ -618,6 +626,31 @@ test "adapter: more reflected targets than MAX_TARGETS refuses, never asserts" {
     try t.expectError(
         error.TooManyTargets,
         joinFromReflection(a, try reflectionOf(a, text.items)),
+    );
+}
+
+// Final-review I2 (binary01-fc): a reflected name is bounded by the
+// 'PACT' name_len u16 field exactly like a --target name — refuse at
+// the adapter (usage, exit 2), before the codec's assert.
+test "adapter: a reflected name over the 'PACT' u16 field refuses — 65535 accepts, 65536 refuses" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cap = std.math.maxInt(u16);
+
+    const at_cap = try a.alloc(u8, cap);
+    @memset(at_cap, 'a');
+    const ok_text = try std.fmt.allocPrint(a, "{{\"{s}\":{{\"type\":\"f32\",\"elemCount\":0}}}}", .{at_cap});
+    const join = try joinFromReflection(a, try reflectionOf(a, ok_text));
+    try t.expectEqual(@as(usize, 1), join.len);
+    try t.expectEqual(cap, join[0].name.len);
+
+    const over = try a.alloc(u8, cap + 1);
+    @memset(over, 'b');
+    const over_text = try std.fmt.allocPrint(a, "{{\"{s}\":{{\"type\":\"f32\",\"elemCount\":0}}}}", .{over});
+    try t.expectError(
+        error.TargetNameTooLong,
+        joinFromReflection(a, try reflectionOf(a, over_text)),
     );
 }
 

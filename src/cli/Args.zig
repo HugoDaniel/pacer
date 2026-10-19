@@ -128,8 +128,13 @@ pub fn parse(a: Allocator, argv: []const [:0]const u8) Action {
         if (eq(arg, "--target")) {
             i += 1;
             if (i >= argv.len) return .{ .usage = "--target requires a value" };
-            const tg = parseTarget(argv[i]) catch
-                return .{ .usage = say(a, "bad --target `{s}` (expected NAME[:ncomp[:registry]], ncomp 1..4)", .{argv[i]}, "bad --target") };
+            const tg = parseTarget(argv[i]) catch |e| return .{ .usage = switch (e) {
+                error.BadTarget => say(a, "bad --target `{s}` (expected NAME[:ncomp[:registry]], ncomp 1..4)", .{argv[i]}, "bad --target"),
+                // The message does not quote the name: at this size it
+                // IS the noise. The cap is the 'PACT' name_len u16
+                // field the registry wire carries.
+                error.NameTooLong => say(a, "a --target name longer than 65535 bytes cannot ride the 'PACT' registry wire", .{}, "--target name too long"),
+            } };
             // `Compile.compile` ASSERTS this bound; refuse before it fires.
             if (targets.items.len == pacer.Compile.MAX_TARGETS)
                 return .{ .usage = say(a, "too many --target flags (max {d})", .{pacer.Compile.MAX_TARGETS}, "too many --target flags") };
@@ -230,10 +235,14 @@ pub fn parse(a: Allocator, argv: []const [:0]const u8) Action {
 
 /// `NAME[:ncomp[:registry]]`. ncomp defaults 1, registry 0 — the same
 /// defaults `schema/pacer-corpus.sjon` gives a harness `(target …)`.
-fn parseTarget(spec: []const u8) error{BadTarget}!pacer.Compile.Target {
+/// A name over the `'PACT'` name_len u16 field (65535 bytes) is a
+/// usage refusal HERE, before the codec's host-contract assert can see
+/// the bytes — the CLI is the one place untrusted names enter.
+fn parseTarget(spec: []const u8) error{ BadTarget, NameTooLong }!pacer.Compile.Target {
     var it = std.mem.splitScalar(u8, spec, ':');
     const name = it.next().?;
     if (name.len == 0) return error.BadTarget;
+    if (name.len > std.math.maxInt(u16)) return error.NameTooLong;
 
     var out: pacer.Compile.Target = .{ .name = name, .ncomp = 1, .registry = 0 };
     if (it.next()) |s| {
@@ -399,6 +408,33 @@ test "parse: --target rejects a bad ncomp, a bad registry and an empty name" {
             return e;
         };
     }
+}
+
+// Final-review I2 (binary01-fc): a --target name is bounded by the
+// 'PACT' name_len u16 field — refuse at PARSE (usage, exit 2), before
+// the codec's assert can see it. The boundary is exact: 65535 accepts,
+// 65536 refuses.
+test "parse: --target name cap is the 'PACT' u16 field — 65535 accepts, 65536 refuses" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cap = std.math.maxInt(u16);
+
+    const at_cap = try a.allocSentinel(u8, cap, 0);
+    @memset(at_cap, 'a');
+    const cmd = try parseOk(a, &.{ "pacer", "check", "a.sjon", "--target", at_cap });
+    try t.expectEqual(@as(usize, 1), cmd.targets.len);
+    try t.expectEqual(cap, cmd.targets[0].name.len);
+    // A name exactly at the cap with an arity suffix still parses: the
+    // NAME is what rides the wire, not the spec.
+    const with_arity = try std.fmt.allocPrintSentinel(a, "{s}:3", .{at_cap}, 0);
+    const cmd2 = try parseOk(a, &.{ "pacer", "check", "a.sjon", "--target", with_arity });
+    try t.expectEqual(@as(u8, 3), cmd2.targets[0].ncomp);
+
+    const over = try a.allocSentinel(u8, cap + 1, 0);
+    @memset(over, 'b');
+    const msg = try usageMessage(a, &.{ "pacer", "check", "a.sjon", "--target", over });
+    try t.expect(std.mem.indexOf(u8, msg, "65535") != null);
 }
 
 test "parse: --at is repeatable and keeps argv order, never sorted" {

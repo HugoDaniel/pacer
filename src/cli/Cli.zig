@@ -513,6 +513,51 @@ test "pack: a malformed targets-json file is a usage error naming the file" {
     try t.expect(std.mem.indexOf(u8, c.err.written(), "reflection") != null);
 }
 
+test "pack: an over-long target name is a usage error, not a codec assert" {
+    // Final-review I2 (binary01-fc): both host-registry inputs a pack
+    // can name — a --target flag and a reflection entry — are bounded
+    // by the 'PACT' name_len u16 field, refused as usage (exit 2)
+    // BEFORE the codec's assert can see the bytes.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cap = std.math.maxInt(u16);
+
+    const path = try repoPath(t.allocator, "corpus/target-declared/doc.sjon");
+    defer t.allocator.free(path);
+    const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/o.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(out);
+
+    // argv --target: the long name is plain ASCII, exactly one byte over.
+    const over = try t.allocator.allocSentinel(u8, cap + 1, 0);
+    defer t.allocator.free(over);
+    @memset(over, 'x');
+    var c = try invoke(&.{ "pacer", "pack", path, "--target", over, "--out", out });
+    defer c.deinit();
+    try t.expectEqual(Exit.usage, c.code);
+    try t.expectEqualStrings("", c.out.written());
+    try t.expect(std.mem.indexOf(u8, c.err.written(), "65535") != null);
+
+    // reflection file: same boundary, the adapter's own refusal.
+    const reflect_json = blk: {
+        const at_cap = try t.allocator.alloc(u8, cap);
+        defer t.allocator.free(at_cap);
+        @memset(at_cap, 'y');
+        const over2 = try t.allocator.alloc(u8, cap + 1);
+        defer t.allocator.free(over2);
+        @memset(over2, 'z');
+        break :blk try std.fmt.allocPrint(t.allocator, "{{\"{s}\":{{\"type\":\"f32\",\"elemCount\":0}},\"{s}\":{{\"type\":\"f32\",\"elemCount\":0}}}}", .{ at_cap, over2 });
+    };
+    defer t.allocator.free(reflect_json);
+    const reflect = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/r.json", .{tmp.sub_path}, 0);
+    defer t.allocator.free(reflect);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "r.json", .data = reflect_json });
+    var c2 = try invoke(&.{ "pacer", "pack", path, "--targets-json", reflect, "--out", out });
+    defer c2.deinit();
+    try t.expectEqual(Exit.usage, c2.code);
+    try t.expectEqualStrings("", c2.out.written());
+    try t.expect(std.mem.indexOf(u8, c2.err.written(), "r.json") != null);
+}
+
 test "pack: a :pattern track is refused by preflight, never silently packed" {
     // The same registry `cli_golden.sh` pins for starter (its STARTER
     // argv), so this refusal and the starter golden move together.
