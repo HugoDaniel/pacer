@@ -734,9 +734,22 @@ const Builder = struct {
                 try self.emit(.tempo_map_invalid, tree.spanOf(idx), "(tempo …) requires :at and :bpm", .{});
                 continue;
             }
+            // Defense-in-depth behind the validator (same discipline as
+            // `posToTickLocal`): a bare or foreign-unit `:at` refuses
+            // here as an ordinary spanned diagnostic instead of
+            // misreading `numberWithUnitOf` (or silently treating a
+            // foreign unit as bars, as the old fall-through did).
+            if (tree.tagOf(at_node.?) != .number_with_unit) {
+                try self.emit(.tempo_map_invalid, tree.spanOf(at_node.?), ":at must carry a time unit (b or bar)", .{});
+                continue;
+            }
             const nu = tree.numberWithUnitOf(at_node.?);
             if (std.mem.eql(u8, nu.unit, "s")) {
                 try self.emit(.tempo_map_invalid, tree.spanOf(at_node.?), ":at cannot be in seconds — the tempo map defines the seconds axis; use b or bar", .{});
+                continue;
+            }
+            if (!std.mem.eql(u8, nu.unit, "b") and !std.mem.eql(u8, nu.unit, "bar")) {
+                try self.emit(.tempo_map_invalid, tree.spanOf(at_node.?), ":at unit must be b or bar (got `{s}`)", .{nu.unit});
                 continue;
             }
             const converted = if (std.mem.eql(u8, nu.unit, "b"))
@@ -1301,20 +1314,34 @@ const Builder = struct {
     /// break the bit-stability pin; the two agree in exact math.
     /// Returns null after emitting on overflow (non-finite literals
     /// cannot reach here — the lexer owns number syntax).
+    ///
+    /// The tag/unit checks below are DEFENSE-IN-DEPTH, not the
+    /// user-facing gate: the schema types every time-pos slot with a
+    /// required [b bar s] unit (scalar AND vector elements — pinned by
+    /// tests), and `compile` never walks a table the validator refused.
+    /// They exist so a validator regression surfaces as this ordinary
+    /// spanned diagnostic instead of the `numberWithUnitOf` tag assert
+    /// (or, in ReleaseFast, silent extra_data garbage).
     fn posToTickLocal(self: *Builder, map: *const TimeMap, node: NodeIndex, anchor: TrackTable.Tick) Error!?TrackTable.Tick {
+        if (self.tree.tagOf(node) != .number_with_unit) {
+            try self.emit(.tick_overflow, self.tree.spanOf(node), "a time position must carry a unit (b, bar, or s)", .{});
+            return null;
+        }
         const nu = self.tree.numberWithUnitOf(node);
         const converted = if (std.mem.eql(u8, nu.unit, "b"))
             map.tickFromBeats(nu.value)
         else if (std.mem.eql(u8, nu.unit, "bar"))
             map.tickFromBars(nu.value)
-        else blk: {
-            std.debug.assert(std.mem.eql(u8, nu.unit, "s"));
+        else if (std.mem.eql(u8, nu.unit, "s")) blk: {
             if (map.segments.len <= 1 or anchor == 0)
                 break :blk map.tickFromSeconds(nu.value);
             break :blk if (map.tickFromSeconds(map.secondsFromTick(anchor) + nu.value)) |abs|
                 abs - anchor
             else |err|
                 err;
+        } else {
+            try self.emit(.tick_overflow, self.tree.spanOf(node), "a time position's unit must be b, bar, or s (got `{s}`)", .{nu.unit});
+            return null;
         };
         return converted catch {
             try self.emit(.tick_overflow, self.tree.spanOf(node), "position overflows the tick grid", .{});
@@ -1752,6 +1779,62 @@ test "wrong unit on a position slot is rejected" {
     );
     defer v.deinit();
     try t.expect(v.hasErrors());
+}
+
+// Final-review I1 pins (binary01-fc): malformed time positions in EVERY
+// reader slot — trigger `:at` vector elements included — are validation
+// errors with spans, and `compile` never walks a refused table, so the
+// builder's raw `numberWithUnitOf` reads cannot see them. These pins
+// exist so a validator regression on any slot turns into a named test
+// failure here (and, behind it, the `posToTickLocal`/tempo-reader
+// defense-in-depth diagnostics) instead of a builder assert.
+test "malformed time positions are validation errors in every reader slot — no builder panic" {
+    const cases = [_][:0]const u8{
+        "(transport :bpm 120 :meter [4 4])\n(trigger :target x :at [1 2 3])",
+        "(transport :bpm 120 :meter [4 4])\n(trigger :target x :at [1b 2ms])",
+        "(transport :bpm 120 :meter [4 4] :dur 4)",
+        "(transport :bpm 120 :meter [4 4])\n(scene :name s :at 4 :dur 1b\n  (track :target x (key :at 0b :value 0)))",
+        "(transport :bpm 120 :meter [4 4])\n(tempo :at 4 :bpm 150)",
+        "(transport :bpm 120 :meter [4 4])\n(tempo :at 4ms :bpm 150)",
+        "(transport :bpm 120 :meter [4 4])\n(trigger :target x :every 4)",
+        "(transport :bpm 120 :meter [4 4])\n(trigger :target x :every 1b :offset 2)",
+    };
+    for (cases) |src| {
+        var r = try compile(t.allocator, test_support.schema(), src, &.{.{ .name = "x", .ncomp = 1 }});
+        defer r.deinit();
+        try t.expect(!r.ok());
+        try t.expect(r.table == null);
+        try t.expect(r.validated.hasErrors());
+    }
+    // The T3.2-recorded crash class specifically: a bare integer inside
+    // a trigger `:at` vector is caught AT THE ELEMENT, with a span.
+    var v = try validate(t.allocator, test_support.schema(),
+        \\(transport :bpm 120 :meter [4 4])
+        \\(trigger :target x :at [1 2 3])
+    );
+    defer v.deinit();
+    try t.expect(v.hasErrors());
+    try t.expect(v.findDiag(.unit_required) != null);
+}
+
+// The guard changes nothing for valid units: every spelling the
+// validator accepts still compiles through the same readers.
+test "valid time positions in every reader slot still compile clean" {
+    const src: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(tempo :at 2bar :bpm 150)
+        \\(scene :name s :at 1bar :dur 2bar
+        \\  (track :target x (key :at 0b :value 0))
+        \\  (trigger :target x :every 1b :offset 0.5b))
+        \\(trigger :target x :at [1b 2b 3b])
+    ;
+    var r = try compile(t.allocator, test_support.schema(), src, &.{.{ .name = "x", .ncomp = 1 }});
+    defer r.deinit();
+    for (r.diagnostics) |d| {
+        std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    }
+    try t.expect(r.ok());
+    try t.expect(r.table != null);
 }
 
 test "unknown easing name is rejected" {

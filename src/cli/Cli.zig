@@ -534,7 +534,12 @@ test "pack: a :pattern track is refused by preflight, never silently packed" {
     });
     defer c.deinit();
     try t.expectEqual(Exit.errors, c.code);
-    // The refusal rides the envelope as an ordinary pacer diagnostic.
+    // The refusal rides the envelope as an ordinary pacer diagnostic —
+    // and the documented contract holds exactly: the COMPILE succeeded,
+    // so `ok` stays true even while pack refuses (docs/cli.md). The
+    // wire spelling has no space after the colon (the doc's `"ok": true`
+    // is prose); this pin is exact on purpose.
+    try t.expect(std.mem.indexOf(u8, c.out.written(), "\"ok\":true") != null);
     try t.expect(std.mem.indexOf(u8, c.out.written(), "pack_patterns_unsupported") != null);
     try t.expect(std.mem.indexOf(u8, c.out.written(), "\"pack\":null") != null);
     // The human rendering names the score's own words, on stderr.
@@ -542,6 +547,34 @@ test "pack: a :pattern track is refused by preflight, never silently packed" {
     // A refused pack lands nothing — no blob, no temp left behind.
     try t.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "starter.pacb", .{}));
     try t.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "starter.pacb.tmp", .{}));
+}
+
+test "pack: a malformed time position is an ordinary exit-1 diagnostic, never a crash" {
+    // Final-review I1 pin (binary01-fc): the validator owns the
+    // user-facing error (bare `:at` integers caught at the element,
+    // with a span); pack renders it as data — exit 1, complete
+    // envelope, `ok:false` (the compile itself failed), nothing
+    // written. The builder's defense-in-depth guards sit behind this.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "score.sjon",
+        .data = "(transport :bpm 120 :meter [4 4])\n(trigger :target radius :at [1 2 3])\n",
+    });
+    const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/out.pacb", .{tmp.sub_path}, 0);
+    defer t.allocator.free(out);
+    const path = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/score.sjon", .{tmp.sub_path}, 0);
+    defer t.allocator.free(path);
+    var c = try invoke(&.{ "pacer", "pack", path, "--out", out });
+    defer c.deinit();
+    try t.expectEqual(Exit.errors, c.code);
+    try t.expect(std.mem.indexOf(u8, c.out.written(), "\"pack\":null") != null);
+    try t.expect(std.mem.indexOf(u8, c.out.written(), "\"ok\":false") != null);
+    // The diagnostic is the validator's own words, rendered as data.
+    try t.expect(std.mem.indexOf(u8, c.out.written(), "without unit") != null);
+    // Nothing landed, no temp left.
+    try t.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "out.pacb", .{}));
+    try t.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "out.pacb.tmp", .{}));
 }
 
 test "pack: a clean compose-mode score lands a decodable .pacb" {

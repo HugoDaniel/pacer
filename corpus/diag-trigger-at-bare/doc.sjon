@@ -1,0 +1,9 @@
+; One bare integer inside a trigger :at vector: the manifest types :at
+; as time-pos-list, so the element itself fails validation with a span —
+; the compile never walks the table, and the builder's position readers
+; (numberWithUnitOf) never see a bare number. Final-review I1 corpus
+; pin (binary01-fc): the language-visible error is the validator's own
+; words, on the offending element.
+(transport :bpm 120 :meter [4 4])
+
+(trigger :target radius :at [4b 1 8b])

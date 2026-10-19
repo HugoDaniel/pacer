@@ -1,0 +1,4 @@
+; load fails on SJON validation (the bare :at element) — times are
+; never evaluated.
+(target radius :registry 0)
+(times "0000000000000000")
