@@ -2,7 +2,10 @@
 //! `:expr` node at a tick", shared by `Compile` (the load-time dry-run
 //! at t = 0) and `Eval` (the frame path). One code path means the two
 //! cannot drift: whatever the dry-run accepted, the frame evaluates
-//! identically.
+//! identically. `evalAtBinary` is the binary twin of `evalAt`: the same
+//! env, the same result contract, `Expr.evalBinary` over a
+//! decode-validated compact single-root payload in place of the tree
+//! walk — the runtime's leaf (02), bit-equal to the tree arm by test pin.
 //!
 //! ## Time environment
 //!
@@ -180,6 +183,38 @@ pub fn evalAt(
     var storage: EnvStorage = undefined;
     const env = buildEnv(&storage, transport, controls, tick, scene);
     var result = try Expr.eval(gpa, tree, node, env, schema);
+    defer result.deinit();
+    return coerce(result.value, ncomp) orelse error.ResultShape;
+}
+
+/// Evaluate a compact single-root binary-IR payload at a tick — the
+/// binary twin of `evalAt` (02:71-74): the SAME `buildEnv` environment,
+/// `Expr.evalBinary` over `payload` in place of the tree walk, then the
+/// SAME `coerce`, so the two arms cannot drift. The payload is a
+/// decode-validated single-root compact subtree (01's structural walk is
+/// the preceding proof; the pack head walk keeps it core-only), and
+/// `schema` is the same aggregate the tree arm validates under. The
+/// callee stays total over everything downstream of that validation:
+/// `Expr.BinaryError`'s cursor classes and `MultipleRoots` cannot reach
+/// it through a decode-validated payload, but on any input they
+/// propagate rather than trap. `Expr.evalBinary` deep-copies its result
+/// into its own arena, so `payload` need not outlive the call; the
+/// per-frame re-decode is deterministic and budgeted by the caller's
+/// allocator (the frame path fronts it exactly as it fronts `evalAt`).
+pub fn evalAtBinary(
+    gpa: std.mem.Allocator,
+    payload: []const u8,
+    schema: sjon.Schema.Schema,
+    transport: *const TrackTable.Transport,
+    controls: []const ControlBinding,
+    tick: Tick,
+    scene: ?TrackTable.Scene,
+    ncomp: u8,
+) (Expr.BinaryError || error{ResultShape})![4]f32 {
+    std.debug.assert(ncomp >= 1 and ncomp <= 4);
+    var storage: EnvStorage = undefined;
+    const env = buildEnv(&storage, transport, controls, tick, scene);
+    var result = try Expr.evalBinary(gpa, payload, env, schema);
     defer result.deinit();
     return coerce(result.value, ncomp) orelse error.ResultShape;
 }
@@ -457,5 +492,228 @@ test "evalAt: an unbound control name is still UnknownBinding" {
     try t_.expectError(
         error.UnknownBinding,
         evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, null, 1),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Binary-leaf tests (02 T1.1). Every payload comes from the frozen
+// producer's exact spell — `TreeBuilder.cloneNode` into a fresh one-root
+// tree, then `Binary.toBinary(.forMode(.compact))` (what
+// `PacbEncode.encodePayload` encodes, A29) — never hand-mocked bytes. The
+// write-side SJON this needs is test-only, so it keeps an INDENTED import
+// per the closure split (02:200-202). It is spelled `sjon_w`, not `sjon`,
+// only because the file-scope production `sjon` still exists here and Zig
+// forbids a local shadowing it — T2.1's RtSjon reroute renames the
+// production import and this alias becomes plain `sjon`. The tree arm's
+// `evalAt` on the SAME env is the equivalence oracle throughout.
+// ---------------------------------------------------------------------------
+
+/// Compact single-root payload for one validated expr node of `doc`,
+/// built exactly as the pack path builds it: clone the subtree, finalize
+/// the one-root tree against "" (compact drops spans; strings re-intern),
+/// encode compact. Caller owns the returned bytes.
+fn compactPayload(a: std.mem.Allocator, doc: *const TestDoc, node: usize) ![]u8 {
+    const sjon_w = @import("sjon");
+    var tree_arena = std.heap.ArenaAllocator.init(a);
+    defer tree_arena.deinit(); // no-op once finalize snapshots the arena
+    var builder = sjon_w.Ast.TreeBuilder{ .a = tree_arena.allocator() };
+    const root = try builder.cloneNode(&doc.result.tree, doc.node(node));
+    var one_root = try builder.finalize(&tree_arena, "", &.{root});
+    defer one_root.deinit();
+    const bin = try sjon_w.Binary.toBinary(a, one_root, sjon_w.Binary.ToBinaryOptions.forMode(.compact));
+    defer bin.deinit();
+    return a.dupe(u8, bin.data);
+}
+
+test "evalAtBinary: constant scalar equivalence — bit-equal [4]f32 vs the tree arm" {
+    var doc = try TestDoc.init("(+ 1 2)");
+    defer doc.deinit();
+    const payload = try compactPayload(t_.allocator, &doc, 0);
+    defer t_.allocator.free(payload);
+    const want = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, null, 1);
+    const got = try evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &.{}, 0, null, 1);
+    try t_.expectEqual(want, got);
+    try t_.expectEqual([4]f32{ 3, 0, 0, 0 }, got);
+}
+
+test "evalAtBinary: time bindings at 6.5 beats — bit-equal to the tree arm" {
+    var doc = try TestDoc.init(
+        \\(+ beat 0) (+ bar 0) (+ cycle 0) (+ phase 0) (+ t 0) (+ bpm 0) (+ tick 0)
+    );
+    defer doc.deinit();
+    // 6.5 beats at 120 bpm 4/4: 1171170 ticks; every projection dyadic.
+    const tick: Tick = 6 * 180180 + 90090;
+    const golden = [_]f32{ 6.5, 1.625, 1.625, 0.625, 3.25, 120, 1171170 };
+    for (golden, 0..) |want, i| {
+        const payload = try compactPayload(t_.allocator, &doc, i);
+        defer t_.allocator.free(payload);
+        const tree_v = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(i), tick, null, 1);
+        const bin_v = try evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &.{}, tick, null, 1);
+        try t_.expectEqual(tree_v, bin_v);
+        try t_.expectEqual(want, bin_v[0]);
+    }
+}
+
+test "evalAtBinary: phase stays in [0,1) at negative ticks — bit-equal both arms" {
+    var doc = try TestDoc.init("(+ phase 0)");
+    defer doc.deinit();
+    const payload = try compactPayload(t_.allocator, &doc, 0);
+    defer t_.allocator.free(payload);
+    const tick: Tick = -@divExact(sjon.Pattern.PPC, 4);
+    const want = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), tick, null, 1);
+    const got = try evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &.{}, tick, null, 1);
+    try t_.expectEqual(want, got);
+    try t_.expectEqual(@as(f32, 0.75), got[0]);
+}
+
+test "evalAtBinary: control bindings — scalar, vector, mixed with time, bit-equal both arms" {
+    // Mirrors the evalAt control test: `pick` alone resolves to the
+    // vector binding; arithmetic stays scalar; controls mix with time.
+    var doc = try TestDoc.init("(* knob 2) pick (* knob beat)");
+    defer doc.deinit();
+    const controls = [_]ControlBinding{
+        .{ .name = "knob", .value = .{ 0.25, 0, 0, 0 }, .ncomp = 1 },
+        .{ .name = "pick", .value = .{ 1, 0.5, 0, 0 }, .ncomp = 3 },
+    };
+    const tick: Tick = 2 * 180180;
+
+    // Scalar control arithmetic (ncomp 1, tick 0).
+    {
+        const payload = try compactPayload(t_.allocator, &doc, 0);
+        defer t_.allocator.free(payload);
+        const want = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &controls, doc.node(0), 0, null, 1);
+        const got = try evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &controls, 0, null, 1);
+        try t_.expectEqual(want, got);
+        try t_.expectEqual(@as(f32, 0.5), got[0]);
+    }
+    // Vector control passes through whole (ncomp 3).
+    {
+        const payload = try compactPayload(t_.allocator, &doc, 1);
+        defer t_.allocator.free(payload);
+        const want = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &controls, doc.node(1), 0, null, 3);
+        const got = try evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &controls, 0, null, 3);
+        try t_.expectEqual(want, got);
+        try t_.expectEqual([4]f32{ 1, 0.5, 0, 0 }, got);
+    }
+    // Control · time at 2 beats.
+    {
+        const payload = try compactPayload(t_.allocator, &doc, 2);
+        defer t_.allocator.free(payload);
+        const want = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &controls, doc.node(2), tick, null, 1);
+        const got = try evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &controls, tick, null, 1);
+        try t_.expectEqual(want, got);
+        try t_.expectEqual(@as(f32, 0.5), got[0]);
+    }
+}
+
+test "evalAtBinary: scene env — start tick (the C5 dry env) and interior, bit-equal both arms" {
+    var doc = try TestDoc.init("(+ scene-beat 0) (+ scene-phase 0)");
+    defer doc.deinit();
+    // Window [4b, 12b): dur 8 beats — same window as the evalAt scene test.
+    const scene: TrackTable.Scene = .{ .name_span = .{ .start = 0, .end = 0 }, .start_tick = 4 * 180180, .dur_ticks = 8 * 180180 };
+    // C5: the load dry-run's env — tick == scene.start_tick, so both
+    // scene names read 0 (a scened `(sqrt scene-beat)` is sound here and
+    // non-finite at flat 0 — the divergence that forced the correction).
+    {
+        const payload = try compactPayload(t_.allocator, &doc, 0);
+        defer t_.allocator.free(payload);
+        const want = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), scene.start_tick, scene, 1);
+        const got = try evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &.{}, scene.start_tick, scene, 1);
+        try t_.expectEqual(want, got);
+        try t_.expectEqual(@as(f32, 0), got[0]);
+    }
+    // Interior, absolute 6b → local 2b: the scene env is NOT assumed
+    // flat-0 — scene-beat 2, scene-phase 0.25 through the real binding.
+    {
+        const tick: Tick = 6 * 180180;
+        const beat_payload = try compactPayload(t_.allocator, &doc, 0);
+        defer t_.allocator.free(beat_payload);
+        const want_beat = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), tick, scene, 1);
+        const got_beat = try evalAtBinary(t_.allocator, beat_payload, core_schema, &test_transport, &.{}, tick, scene, 1);
+        try t_.expectEqual(want_beat, got_beat);
+        try t_.expectEqual(@as(f32, 2), got_beat[0]);
+
+        const phase_payload = try compactPayload(t_.allocator, &doc, 1);
+        defer t_.allocator.free(phase_payload);
+        const want_phase = try evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(1), tick, scene, 1);
+        const got_phase = try evalAtBinary(t_.allocator, phase_payload, core_schema, &test_transport, &.{}, tick, scene, 1);
+        try t_.expectEqual(want_phase, got_phase);
+        try t_.expectEqual(@as(f32, 0.25), got_phase[0]);
+    }
+}
+
+test "evalAtBinary: bpm under a tempo map — bit-equal both arms at the segment boundary" {
+    var doc = try TestDoc.init("(+ bpm 0)");
+    defer doc.deinit();
+    var buf: [2]TimeMap.Segment = .{
+        .{ .start_tick = 0, .bpm = 120, .start_sec = undefined, .tps = undefined },
+        .{ .start_tick = 720720, .bpm = 240, .start_sec = undefined, .tps = undefined },
+    };
+    var mapped = test_transport;
+    mapped.map = TimeMap.init(120, 4).withSegments(&buf);
+    const payload = try compactPayload(t_.allocator, &doc, 0);
+    defer t_.allocator.free(payload);
+    // The step function of the wrapped tick: 120 one tick before the
+    // boundary, 240 exactly at it — identical on both arms.
+    for ([_]struct { tick: Tick, bpm: f32 }{
+        .{ .tick = 720719, .bpm = 120 },
+        .{ .tick = 720720, .bpm = 240 },
+    }) |case| {
+        const want = try evalAt(t_.allocator, &doc.result.tree, core_schema, &mapped, &.{}, doc.node(0), case.tick, null, 1);
+        const got = try evalAtBinary(t_.allocator, payload, core_schema, &mapped, &.{}, case.tick, null, 1);
+        try t_.expectEqual(want, got);
+        try t_.expectEqual(case.bpm, got[0]);
+    }
+}
+
+test "evalAtBinary: expr failures pass through — division by zero at beat 0, both arms" {
+    var doc = try TestDoc.init("(/ 1 beat)");
+    defer doc.deinit();
+    const payload = try compactPayload(t_.allocator, &doc, 0);
+    defer t_.allocator.free(payload);
+    try t_.expectError(
+        error.DivisionByZero,
+        evalAt(t_.allocator, &doc.result.tree, core_schema, &test_transport, &.{}, doc.node(0), 0, null, 1),
+    );
+    try t_.expectError(
+        error.DivisionByZero,
+        evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &.{}, 0, null, 1),
+    );
+}
+
+test "evalAtBinary: result-shape rejections match the tree arm — boolean, arity, non-finite" {
+    var doc = try TestDoc.init("(> 1 0) (+ 1 2) (pow 10 400)");
+    defer doc.deinit();
+    const tree = &doc.result.tree;
+    const schema = core_schema;
+    const cases = [_]struct { node: usize, ncomp: u8 }{
+        .{ .node = 0, .ncomp = 1 }, // Boolean result.
+        .{ .node = 1, .ncomp = 3 }, // Scalar where a vec3 target expects 3.
+        .{ .node = 2, .ncomp = 1 }, // Overflow to +inf: finiteness gate.
+    };
+    for (cases) |case| {
+        const payload = try compactPayload(t_.allocator, &doc, case.node);
+        defer t_.allocator.free(payload);
+        try t_.expectError(error.ResultShape, evalAt(t_.allocator, tree, schema, &test_transport, &.{}, doc.node(case.node), 0, null, case.ncomp));
+        try t_.expectError(error.ResultShape, evalAtBinary(t_.allocator, payload, schema, &test_transport, &.{}, 0, null, case.ncomp));
+    }
+}
+
+test "evalAtBinary: malformed and non-single-root payloads are errors, never traps" {
+    const sjon_w = @import("sjon");
+    // A valid compact encoding of a zero-root document: not single-root.
+    var tree = try sjon_w.parse(t_.allocator, "");
+    defer tree.deinit();
+    const bin = try sjon_w.Binary.toBinary(t_.allocator, tree, sjon_w.Binary.ToBinaryOptions.forMode(.compact));
+    defer bin.deinit();
+    try t_.expectError(
+        error.MultipleRoots,
+        evalAtBinary(t_.allocator, bin.data, core_schema, &test_transport, &.{}, 0, null, 1),
+    );
+    // Not a binary IR at all: refused at the magic check, before any read.
+    const junk = [_]u8{0} ** 16;
+    try t_.expectError(
+        error.InvalidMagic,
+        evalAtBinary(t_.allocator, &junk, core_schema, &test_transport, &.{}, 0, null, 1),
     );
 }
