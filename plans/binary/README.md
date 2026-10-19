@@ -16,11 +16,14 @@ the mismatched-directory defense for the early stage reads) landed
 before it; Phase 3 PARTIAL (T3.1, the `src/PacbEncode.zig` encoder
 core — canonical assembly, verbatim `'PACM'`-pass `'EASE'`/`'TMPO'`
 slices, `cloneNode`+compact payloads, compiled-fixture round-trips —
-landed 2026-10-19); the
+landed 2026-10-19; T3.2, the pack refusals — the head-walk position
+classifier, the full-outcome core-vs-eval-schema head compare, the
+interim `:pattern` refusal, and the three measured caps on
+`Compile.Code` 31–33 — landed 2026-10-19); the
 tree-trailing-comments acceptance gap stays an explicitly deferred
 owner decision (SJON cross-repo edit vs approved narrowing), pinned by
 a KNOWN-GAP test. Plan 01 as a whole is NOT done: the rest of phases
-3–4 (pack refusals, the `pacer pack` verb, codes/fuzz/docs) remain
+3–4 (the `pacer pack` verb, codes/fuzz/docs) remain
 open, as do plans
 02–04. The wave was
 independently reviewed twice the same day; this revision

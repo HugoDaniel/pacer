@@ -935,3 +935,69 @@ clean, `zig build verify` **15/15 steps, 368/368 tests, corpus
 corpus/CLI/docs/npm. The decoder's independently assembled test
 fixtures are untouched (only `strsEntryLess` visibility); no T3.2
 classifier/preflight codes, no CLI/runtime/npm/sibling change.
+
+### Phase 3 — T3.2 (pack refusals, landed 2026-10-19)
+
+**T3.2 `src/PacbEncode.zig` — head-walk position classifier + pack
+refusal codes + the caps preflight.** `collectCallHeads(gpa, tree,
+node)` is the position classifier over the validated AST: every eval
+position (root, vector elements, `if`/`cond`/`and`/`or` branches,
+`let` binding values + body, binder `xs`/`init`/`body`, call
+arguments, kvpair VALUES) contributes its head in source order; name
+positions (let binding names, binder vectors, kvpair keys) never do.
+The walk mirrors `scheduleForm`/`scheduleFormBinary` exactly,
+including the scheduler's own abort order: a special form whose shape
+would raise at schedule time (arity, binder shape, kvpair slots)
+contributes NOTHING — the subtree is dead on both paths — and later
+`cond`/`and`/`or` slots cut at the first kvpair (the error raises
+when the lazy walker reaches it, killing everything after; `let`
+needs no cut: kvpairs cannot appear inside vectors, the parser's
+rule, so a binding value is never one). Iterative (a worklist, like
+the evaluator's own frame machine), never-pruning, spans attached at
+every head. `preflight(gpa, result, diags)` — precondition
+`result.ok()`, `encode`'s twin — classifies every expr track's heads
+and refuses through the FULL-outcome compare (I1/G11): each distinct
+(namespace, head) resolves through BOTH `result.eval_schema` AND the
+frozen comptime core-only binary schema; pack-clean iff found-in-core
+with identical (plugin, func) identity — func-pointer equality over
+the shared static declaration — with `.ambiguous` through
+`eval_schema` refusing even when binary-found (a user plugin
+redeclaring `sin` in an untaken branch), `.found` in a user plugin
+refusing, and not-found-in-both the legal form-as-data literal.
+Pattern tracks refuse loudly (`pack_patterns_unsupported`, interim
+until 02 P4) while `encode` keeps serializing underneath. Caps are
+MEASURED, never assumed (risk E2): per-payload bytes against
+`MAX_PAYLOAD_BYTES` (the exact bytes `encode` would emit — compact IR
+can exceed source text), the `'PAYL'` total against `MAX_PAYL_BYTES`,
+and the global explicit-tick count against `MAX_TICK_ENTRIES` (the
+131073-entry native-band score compiles clean on the deliberately
+uncapped text path and refuses with the measured count; the exact-
+boundary 131072 score packs AND decodes — the decoder's `>` is the
+same comparison over the same total). Three `Compile.Code` variants
+appended (`pack_user_expr_unsupported` 31, `pack_patterns_unsupported`
+32, `pack_cap_exceeded` 33) with the comptime tail pin — ordinals
+0..30 untouched, corpus/CLI goldens byte-identical. Tests (5 vertical
+RED→GREEN behaviors, 11 new tests): the missing-export compile errors
+(classifier; preflight+code) then semantic REDs (`expected 1, found
+0`) for pattern/payload/total/tick; refusals cover the time-guarded
+result branch, short-circuit tail, untaken `if` branch, vector
+element, untaken `cond` value, empty-fold body, let-binding value,
+namespace-qualified user head, and the ambiguous `sin` redeclaration;
+the acceptance set pins vector elements, let names colliding with
+`sin`/`u`, binder vectors `[u]`/`[u acc]`, kvpair keys, form-as-data,
+and qualified `core/let` (found-both, identical — the core plugin's
+impl-null special-form markers). RED evidence: `.agent/control/
+binary01-t32-red{1..5}.log`, GREEN: `-green{1..5}.log`; gates:
+`zig build test` **440/440 (379 root + 61 CLI)**, `audit-diagnostics`
+**34/34** (each pack code asserted by name in a real refusal test),
+`zig build verify` **15/15 steps, corpus 37/0 failed, node parity
+current, cli-golden + score-docs current**, `zig build cli-golden`
+**4/4** with `git diff --exit-code` empty over `corpus`/
+`src/cli/testdata` and zero drift vs `90dc758` over
+corpus/CLI/docs/npm. Out-of-scope finding reported (not fixed here):
+a bare unitless number in a `time-pos` slot (`:at [1 2]`, `:dur 4`)
+passes schema validation and then PANICS in `posToTickLocal`'s
+`std.debug.assert(unit == "s")` — a user-input assert, violating the
+house diagnostics rule; the tick fixture therefore uses the honest
+`1b 2b …` grammar. No CLI/runtime/npm/sibling change; the CLI
+preflight wiring is T3.3's.

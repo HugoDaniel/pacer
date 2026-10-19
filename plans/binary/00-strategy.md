@@ -104,7 +104,7 @@ decided by gates, not by size.
 | Wave | Item | Status |
 |---|---|---|
 | A | SJON prerequisite handoff drafted (pacer-local, unfiled) | ☐ |
-| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 COMPLETE (T2.1–T2.8: header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader, and T2.8's whole-blob `decode`/`DecodedScore` + `verifyRouting` PACM coherence cross-check + ownership — landed 2026-10-19 with the interim-review correction before it; tree-trailing acceptance still deferred to the owner, KNOWN-GAP-pinned) + Phase 3 PARTIAL (T3.1 `src/PacbEncode.zig` encoder core landed 2026-10-19: canonical assembly of all 14 sections, `'DECL'` = the merged join's declared tail, `'EASE'`/`'TMPO'` sliced verbatim out of the single embedded `'PACM'` pass, per-track payloads via `cloneNode` + compact `toBinary`, ≥5 compiled-fixture round-trips incl. `Expr.evalBinary` t=0 parity and pack-twice byte-equality; T3.2/T3.3 still open); phases 3–4 open — pack refusals + the CLI verb are next |
+| A | 01 pacb-format · all phases | ◐ Phase 1 (T1.1 `'PACT'` leaf) + Phase 2 COMPLETE (T2.1–T2.8: header/directory/caps, transport, registry identity, records, ease/control, payload walk, std-only PACM reader, and T2.8's whole-blob `decode`/`DecodedScore` + `verifyRouting` PACM coherence cross-check + ownership — landed 2026-10-19 with the interim-review correction before it; tree-trailing acceptance still deferred to the owner, KNOWN-GAP-pinned) + Phase 3 PARTIAL (T3.1 `src/PacbEncode.zig` encoder core landed 2026-10-19: canonical assembly of all 14 sections, `'DECL'` = the merged join's declared tail, `'EASE'`/`'TMPO'` sliced verbatim out of the single embedded `'PACM'` pass, per-track payloads via `cloneNode` + compact `toBinary`, ≥5 compiled-fixture round-trips incl. `Expr.evalBinary` t=0 parity and pack-twice byte-equality; T3.2 landed 2026-10-19: `collectCallHeads` position classifier mirroring the scheduler's shapes/abort order, `preflight` with the full-outcome I1/G11 head compare, the interim `pack_patterns_unsupported` refusal, and the three measured caps — per-payload/`'PAYL'`-total/`MAX_TICK_ENTRIES` — riding three appended `Compile.Code` variants 31–33, audit-diagnostics 34/34; T3.3 still open); phases 3–4 open — the `pacer pack` verb is next |
 | B | 02 binary-runtime · P1 Eval layering (`EvalCore` leaf + facade) | ☐ |
 | B | 02 binary-runtime · P2 artifact + closure gate + preliminary size trend (non-binding) | ☐ |
 | B | 02 binary-runtime · P3 `pacer/rt` glue | ☐ |
@@ -116,9 +116,16 @@ decided by gates, not by size.
 
 ## What's next
 
-→ Plan 01 Phase 3 remainder (T3.2 pack refusals — the head-walk
-position classifier + the caps preflight; then T3.3 the `pacer pack`
-verb). T3.1 (`src/PacbEncode.zig`, the encoder core) landed
+→ Plan 01 Phase 3 remainder (T3.3 the `pacer pack` verb — it wires
+`PacbEncode.preflight` ahead of `encode` so refusals surface as
+ordinary diagnostics, then adapter/goldens/fixtures). T3.2 (pack
+refusals) landed 2026-10-19: the `collectCallHeads` position
+classifier (mirroring `scheduleForm`/`scheduleFormBinary` shapes and
+the scheduler's abort order), `preflight`'s full-outcome I1/G11 head
+compare against the frozen core-only binary schema, the interim
+`:pattern` refusal, and the three MEASURED caps (per-payload,
+`'PAYL'` total, `MAX_TICK_ENTRIES` = 131072 with the boundary
+round-trip pinned). T3.1 (`src/PacbEncode.zig`, the encoder core) landed
 2026-10-19: canonical assembly of all 14 sections with the frozen
 presence/omit/zero rules, `'DECL'` as the merged join's declared tail,
 `'EASE'`/`'TMPO'` sliced verbatim out of the one embedded `'PACM'`

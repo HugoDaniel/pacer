@@ -203,6 +203,20 @@ pub const Code = enum(u16) {
     /// A malformed `(tempo …)` form (missing `:at`/`:bpm`, non-positive
     /// / seconds-unit / non-ascending `:at`, segment cap).
     tempo_map_invalid,
+    /// Pack preflight: an expr head resolves through the document's
+    /// user plugins — or ambiguously against a core name — so the
+    /// core-only binary schema cannot evaluate it identically (plan 01
+    /// T3.2; the head and its span ride the diagnostic).
+    pack_user_expr_unsupported,
+    /// Pack preflight: a `:pattern` track cannot be packed in v1 —
+    /// the pattern query env is pending the SJON owner's decision
+    /// (interim refusal, lifted by plan 02 P4; never silently packed).
+    pack_patterns_unsupported,
+    /// Pack preflight: a v1 binary resource cap exceeded — per-payload
+    /// bytes, total `'PAYL'` bytes, or the global explicit-trigger
+    /// entry count. The measured amount rides the message; packing
+    /// refuses loudly, never emits a truncated subset.
+    pack_cap_exceeded,
 };
 
 comptime {
@@ -210,6 +224,11 @@ comptime {
     // accidental insertion breaks the build, not the goldens.
     std.debug.assert(@intFromEnum(Code.unknown_target) == 0);
     std.debug.assert(@intFromEnum(Code.tempo_map_invalid) == 30);
+    // The three pack codes are appended AFTER the frozen 0..30 span
+    // (T3.2) — the tail pin holds the count at exactly 34 variants.
+    std.debug.assert(@intFromEnum(Code.pack_user_expr_unsupported) == 31);
+    std.debug.assert(@intFromEnum(Code.pack_patterns_unsupported) == 32);
+    std.debug.assert(@intFromEnum(Code.pack_cap_exceeded) == 33);
 }
 
 /// One pacer load diagnostic. `span` indexes the score source — the same

@@ -32,12 +32,17 @@
 //!   * `required_features` bit0 iff a `:pattern` track exists.
 //!
 //! Error set is `error{OutOfMemory}` alone (the frozen interface):
-//! `result.ok()` is a PRECONDITION (`Abi.encodeMeta` asserts the same),
-//! and the v1 resource caps (per-payload, total `'PAYL'`, global
-//! explicit ticks) are T3.2's pack preflight — loud refusals with
-//! diagnostics belong there, not here.
+//! `result.ok()` is a PRECONDITION (`Abi.encodeMeta` asserts the same).
+//! The v1 resource gates live in `preflight` below — `encode` produces
+//! whatever the table spells. DIRECT-API callers who skip `preflight`
+//! accept its documented preconditions: the caps (per-payload,
+//! total `'PAYL'`, global explicit ticks) hold, so every section fits
+//! its u32 directory fields; a pathological ≤ 256 MiB source that
+//! grows one past 4 GiB is preflight territory, never a silent wrap
+//! (T3.1's flag, recorded here).
 //!
-//! Imports `Compile`, `Abi`, `Pacb`, `PactCodec` (the plan-frozen set —
+//! Imports `Compile`, `Abi`, `Pacb`, `Pacm`, `PactCodec`, `TrackTable`
+//! (the plan-frozen set plus the two T3.1-recorded std/shared leaves —
 //! the compiler side is legal here; the DECODER side stays compiler-
 //! free). Test bodies additionally import `test_support`/`ExprTrack`,
 //! exactly as `Pacb.zig`'s compiler-oracle tests do.
@@ -90,9 +95,12 @@ fn canonicalRegs(
 const PayloadSpan = struct { off: usize, len: usize };
 
 /// Encode one successfully compiled score + its host target join into a
-/// canonical `'PACB'` buffer. PRECONDITION `result.ok()`; `host_targets`
-/// is the same host registry list the score was compiled against (the
-/// merged join's prefix, `CompileResult.targets`).
+/// canonical `'PACB'` buffer. PRECONDITIONS: `result.ok()`, and (for a
+/// v1-legal pack) `preflight` reported no refusals — `encode` emits the
+/// caps-unchecked spelling of whatever the table holds (see the module
+/// header's direct-API note); `host_targets` is the same host registry
+/// list the score was compiled against (the merged join's prefix,
+/// `CompileResult.targets`).
 pub fn encode(
     gpa: std.mem.Allocator,
     result: *const Compile.CompileResult,
@@ -540,6 +548,501 @@ fn writeTran(
 }
 
 // ---------------------------------------------------------------------------
+// Pack preflight (T3.2) — head-walk position classifier + caps
+// ---------------------------------------------------------------------------
+
+/// The frozen core-only schema every decoded `'PACB'` evaluates
+/// against: exactly the `core` plugin (A35 — the same comptime
+/// precedent as `ExprTrack`'s core schema; `init` runs the form-key cap
+/// asserts once at load).
+const binary_core_plugins = [_]sjon.Plugin.Plugin{sjon.plugins.core.plugin};
+const binary_core_schema: sjon.Schema.Schema =
+    sjon.Schema.Schema.init(&binary_core_plugins);
+
+comptime {
+    // A33 membership pin: the classifier's special-form catalog IS
+    // `isCoreSpecialForm`'s ten. If SJON's catalog moves, this pin
+    // breaks the build here (the classifier's name dispatch below must
+    // be re-reviewed) instead of silently diverging — risk E1's guard.
+    const ten = [_][]const u8{ "let", "if", "cond", "and", "or", "map", "filter", "any", "all", "fold" };
+    for (ten) |h| std.debug.assert(sjon.Expr.isCoreSpecialForm(h, null));
+    // Qualified heads are never special forms (the scheduler's own
+    // rule — a namespace disqualifies), and the binary schema resolves
+    // core's impl-null special-form markers exactly like the text path.
+    std.debug.assert(!sjon.Expr.isCoreSpecialForm("let", "core"));
+}
+
+/// One eval-position call head: the classifier's output. `head` /
+/// `namespace` borrow the tree's string pool; `span` is the head
+/// symbol's own span in score coordinates (the diagnostic anchor).
+pub const HeadRef = struct {
+    head: []const u8,
+    namespace: ?[]const u8,
+    span: sjon.Ast.Span,
+};
+
+/// Collect every CALL head in `node`'s eval positions: each form the
+/// SJON evaluator would visit — root, vector elements, special-form
+/// value positions, call arguments, kvpair VALUES (never keys) —
+/// contributes its head, in source order. Name positions (let binding
+/// names, binder vectors, kvpair keys) are never collected, and a
+/// special form whose shape the scheduler would reject at schedule
+/// time contributes nothing at all (the scheduler aborts before any
+/// child is scheduled — the subtree is dead on both paths). Mirrors
+/// `scheduleForm`/`scheduleFormBinary` shapes A31/A32; iterative, so
+/// walk depth is heap-bound like the evaluator's own frame machine.
+pub fn collectCallHeads(
+    gpa: std.mem.Allocator,
+    tree: *const sjon.Ast.Tree,
+    node: sjon.Ast.NodeIndex,
+) Error![]HeadRef {
+    var heads: std.ArrayList(HeadRef) = .empty;
+    errdefer heads.deinit(gpa);
+    var work: std.ArrayList(sjon.Ast.NodeIndex) = .empty;
+    defer work.deinit(gpa);
+    try work.append(gpa, node);
+    while (work.pop()) |idx| {
+        switch (tree.tagOf(idx)) {
+            .form => try walkForm(gpa, tree, idx, &heads, &work),
+            .vector => {
+                const elems = tree.vectorElements(idx);
+                var i = elems.len;
+                while (i > 0) {
+                    i -= 1;
+                    try work.append(gpa, elems[i]);
+                }
+            },
+            // Every other tag is a leaf. A `.kvpair` never reaches the
+            // stack as a value: each push site skips kvpair slots
+            // (eval of a kvpair raises before anything inside it runs
+            // — a dead slot, mirrored from the scheduler).
+            else => {},
+        }
+    }
+    return heads.toOwnedSlice(gpa);
+}
+
+fn walkForm(
+    gpa: std.mem.Allocator,
+    tree: *const sjon.Ast.Tree,
+    idx: sjon.Ast.NodeIndex,
+    heads: *std.ArrayList(HeadRef),
+    work: *std.ArrayList(sjon.Ast.NodeIndex),
+) Error!void {
+    const hdr = tree.formHeader(idx);
+    if (hdr.namespace == null and sjon.Expr.isCoreSpecialForm(hdr.head, null)) {
+        try pushSpecialFormPositions(gpa, tree, hdr, work);
+        return;
+    }
+    // Call (or form-as-data) position: the head IS the classified
+    // thing. Head-shape pin: on a validated tree every form head is
+    // symbolic text — number/string/keyword heads are parse
+    // diagnostics and `true`/`false`/`nil` literal heads survive as
+    // text that resolves not_found in both schemas (form-as-data,
+    // packs clean). The classifier never re-checks head kinds (G13).
+    try heads.append(gpa, .{
+        .head = hdr.head,
+        .namespace = hdr.namespace,
+        .span = hdr.head_span,
+    });
+    // Argument positions: positional children and kvpair VALUES, in
+    // source order — exactly what `scheduleForm`'s child walks (the
+    // resolved-arg path and `scheduleFormCollect`'s form-as-data path
+    // share) would evaluate.
+    var i = hdr.children.len;
+    while (i > 0) {
+        i -= 1;
+        const child = hdr.children[i];
+        if (tree.tagOf(child) == .kvpair) {
+            try work.append(gpa, tree.kvpairHeader(child).value);
+        } else {
+            try work.append(gpa, child);
+        }
+    }
+}
+
+/// Push the eval-position children of one special form (source order —
+/// the LIFO work stack pops what was pushed last, so children are
+/// pushed reversed). Returns having pushed NOTHING when the form's
+/// shape is one the scheduler rejects at schedule time: those checks
+/// precede all child scheduling, so the subtree is dead on both paths
+/// and contributes neither heads nor positions.
+fn pushSpecialFormPositions(
+    gpa: std.mem.Allocator,
+    tree: *const sjon.Ast.Tree,
+    hdr: sjon.Ast.FormHeader,
+    work: *std.ArrayList(sjon.Ast.NodeIndex),
+) Error!void {
+    const kids = hdr.children;
+    if (std.mem.eql(u8, hdr.head, "let")) {
+        if (kids.len != 2) return; // ArityMismatch
+        if (tree.tagOf(kids[0]) != .vector) return; // InvalidLetBinding
+        const binds = tree.vectorElements(kids[0]);
+        if (binds.len % 2 != 0) return; // InvalidLetBinding
+        if (tree.tagOf(kids[1]) == .kvpair) return; // InvalidLetBinding
+        // Name slots are symbols — checked for EVERY pair at schedule
+        // time, before any value evaluates (the schedule loop runs to
+        // completion or aborts the whole form).
+        for (0..binds.len / 2) |p| {
+            if (tree.tagOf(binds[2 * p]) != .symbol) return;
+        }
+        // Binding values: all walked, then the body. No kvpair cut is
+        // needed here — kvpairs exist only as FORM children, never
+        // inside a vector (the parser's rule), so a binding value can
+        // never be one; a keyword value (`:k`) evaluates to itself.
+        try work.append(gpa, kids[1]); // body pops last
+        var p = binds.len / 2;
+        while (p > 0) {
+            p -= 1;
+            try work.append(gpa, binds[2 * p + 1]);
+        }
+        return;
+    }
+    if (std.mem.eql(u8, hdr.head, "if")) {
+        if (kids.len < 2 or kids.len > 3) return; // ArityMismatch
+        for (kids) |child| {
+            if (tree.tagOf(child) == .kvpair) return; // KeywordInExpressionArgs
+        }
+        var i = kids.len;
+        while (i > 0) {
+            i -= 1;
+            try work.append(gpa, kids[i]);
+        }
+        return;
+    }
+    if (std.mem.eql(u8, hdr.head, "cond")) {
+        if (kids.len % 2 != 0) return; // InvalidCondClause
+        if (kids.len == 0) return; // literal nil — nothing scheduled
+        // The scheduler checks the FIRST clause's two slots up front.
+        if (tree.tagOf(kids[0]) == .kvpair) return;
+        if (tree.tagOf(kids[1]) == .kvpair) return;
+        // Later clauses are validated lazily as `cond_select` reaches
+        // them, BOTH slots at once: a kvpair in either slot errors
+        // before the clause's test evaluates, killing every later
+        // clause too. Walk clauses until the first such cut.
+        var live = kids.len;
+        var c: usize = 1;
+        while (c < kids.len / 2) : (c += 1) {
+            if (tree.tagOf(kids[2 * c]) == .kvpair or
+                tree.tagOf(kids[2 * c + 1]) == .kvpair)
+            {
+                live = 2 * c;
+                break;
+            }
+        }
+        var i = live;
+        while (i > 0) {
+            i -= 1;
+            try work.append(gpa, kids[i]);
+        }
+        return;
+    }
+    if (std.mem.eql(u8, hdr.head, "and") or std.mem.eql(u8, hdr.head, "or")) {
+        if (kids.len == 0) return; // literal true/false — nothing scheduled
+        if (tree.tagOf(kids[0]) == .kvpair) return; // checked at schedule
+        // The tail is validated lazily one element at a time: the first
+        // kvpair reached errors before it evaluates, killing every
+        // element after it. Walk until that cut.
+        var live = kids.len;
+        for (1..kids.len) |i| {
+            if (tree.tagOf(kids[i]) == .kvpair) {
+                live = i;
+                break;
+            }
+        }
+        var i = live;
+        while (i > 0) {
+            i -= 1;
+            try work.append(gpa, kids[i]);
+        }
+        return;
+    }
+    if (std.mem.eql(u8, hdr.head, "map") or std.mem.eql(u8, hdr.head, "filter") or
+        std.mem.eql(u8, hdr.head, "any") or std.mem.eql(u8, hdr.head, "all"))
+    {
+        if (kids.len != 3) return; // ArityMismatch
+        // Binder vector: a syntactic, never-evaluated one-symbol vector.
+        if (tree.tagOf(kids[0]) != .vector) return; // InvalidBinderShape
+        const binder = tree.vectorElements(kids[0]);
+        if (binder.len != 1) return;
+        if (tree.tagOf(binder[0]) != .symbol) return;
+        if (tree.tagOf(kids[1]) == .kvpair) return; // xs slot
+        if (tree.tagOf(kids[2]) == .kvpair) return; // body slot
+        try work.append(gpa, kids[2]); // body pops last
+        try work.append(gpa, kids[1]);
+        return;
+    }
+    if (std.mem.eql(u8, hdr.head, "fold")) {
+        if (kids.len != 4) return; // ArityMismatch
+        if (tree.tagOf(kids[0]) != .vector) return; // InvalidBinderShape
+        const binder = tree.vectorElements(kids[0]);
+        if (binder.len != 2) return;
+        if (tree.tagOf(binder[0]) != .symbol) return;
+        if (tree.tagOf(binder[1]) != .symbol) return;
+        if (std.mem.eql(u8, tree.stringSlice(@enumFromInt(tree.dataOf(binder[0]).single)), tree.stringSlice(@enumFromInt(tree.dataOf(binder[1]).single)))) return; // [acc acc]
+        for (kids[1..]) |child| {
+            if (tree.tagOf(child) == .kvpair) return;
+        }
+        try work.append(gpa, kids[3]); // body
+        try work.append(gpa, kids[2]); // xs
+        try work.append(gpa, kids[1]); // init pops first
+        return;
+    }
+    // An `isCoreSpecialForm` member outside the ten-name dispatch: the
+    // catalog grew upstream (the comptime pin above held when this was
+    // written). Its head is not a call; its positions are unknown —
+    // walk every child as a value (kvpair values, never keys), the
+    // conservative over-walk: over-collecting can only refuse louder,
+    // never emit a payload the binary path evaluates differently.
+    var i = kids.len;
+    while (i > 0) {
+        i -= 1;
+        const child = kids[i];
+        if (tree.tagOf(child) == .kvpair) {
+            try work.append(gpa, tree.kvpairHeader(child).value);
+        } else {
+            try work.append(gpa, child);
+        }
+    }
+}
+
+/// One pack-refusal reason for a collected head — the full-outcome
+/// compare between the eval schema and the core-only binary schema
+/// (I1/G11: pack-clean iff BOTH schemas resolve the head to the SAME
+/// (plugin, func) identity; anything else refuses).
+const HeadVerdict = union(enum) {
+    /// Identical resolution (or form-as-data: not-found in both).
+    clean,
+    /// `.found` through `eval_schema` in a plugin the binary schema
+    /// does not carry (or under a different identity) — carries the
+    /// eval-side plugin name for the message.
+    user_plugin: []const u8,
+    /// `.ambiguous` through `eval_schema` — a user plugin redeclaring
+    /// a core name makes the bare head error on BOTH text paths, so
+    /// binary-found does not make the outcomes identical.
+    ambiguous,
+    /// Resolves on the binary path but NOT on the eval path — the two
+    /// schemas disagree in the other direction (structurally
+    /// unreachable today: the binary schema's single core plugin is
+    /// `eval_schema`'s head; kept so the compare stays full-outcome).
+    binary_only,
+};
+
+/// Resolve one collected head through both schemas and compare the
+/// FULL outcomes. Plugin identity is (name, func-pointer): the core
+/// plugin rides both schemas as copies of the same declaration, so its
+/// `expr_funcs` entries share one static array — equal pointers ARE
+/// the same function.
+fn classifyHead(eval_schema: sjon.Schema.Schema, h: HeadRef) HeadVerdict {
+    const ev = eval_schema.lookupExprFunc(h.head, h.namespace);
+    const bin = binary_core_schema.lookupExprFunc(h.head, h.namespace);
+    switch (ev) {
+        .not_found => switch (bin) {
+            .not_found => return .clean, // form-as-data literal (A37)
+            else => return .binary_only,
+        },
+        .ambiguous => return .ambiguous,
+        .found => |eh| switch (bin) {
+            // The binary schema holds exactly one plugin, so its bare
+            // lookup cannot collide; the arm exists for exhaustiveness
+            // and refuses conservatively if that ever changes.
+            .ambiguous => return .{ .user_plugin = eh.plugin.name },
+            .not_found => return .{ .user_plugin = eh.plugin.name },
+            .found => |bh| {
+                if (bh.func == eh.func and
+                    std.mem.eql(u8, bh.plugin.name, eh.plugin.name))
+                {
+                    return .clean;
+                }
+                return .{ .user_plugin = eh.plugin.name };
+            },
+        },
+    }
+}
+
+/// Append one diagnostic to `diags` with a `gpa`-owned message — the
+/// caller owns the list and every message in it (arena-friendly).
+fn addDiag(
+    gpa: std.mem.Allocator,
+    diags: *std.ArrayList(Compile.Diagnostic),
+    code: Compile.Code,
+    span: sjon.Ast.Span,
+    comptime fmt: []const u8,
+    args: anytype,
+) Error!void {
+    const message = std.fmt.allocPrint(gpa, fmt, args) catch return error.OutOfMemory;
+    diags.append(gpa, .{ .code = code, .span = span, .message = message }) catch
+        return error.OutOfMemory;
+}
+
+/// Pack preflight — the v1 gate between a clean compile and `encode`.
+/// Classifies every expr track's call heads (the position classifier
+/// never prunes: untaken branches, short-circuit tails and never-run
+/// binder bodies are all compared), and refuses any head the core-only
+/// binary schema cannot resolve identically. Diagnostics are ordinary
+/// `Compile.Diagnostic`s in score coordinates, appended to `diags`
+/// (collection over abort); an empty list means the score packs.
+/// PRECONDITION `result.ok()` — `encode`'s twin; a dirty compile is
+/// reported through its own diagnostics and never reaches pack.
+/// Allocations: diagnostics + messages from `gpa` (caller-owned);
+/// everything transient from an internal scratch arena.
+pub fn preflight(
+    gpa: std.mem.Allocator,
+    result: *const Compile.CompileResult,
+    diags: *std.ArrayList(Compile.Diagnostic),
+) Error!void {
+    std.debug.assert(result.ok());
+    const table = &result.table.?;
+    const tree = &result.validated.result.tree;
+
+    var scratch = std.heap.ArenaAllocator.init(gpa);
+    defer scratch.deinit();
+    const a = scratch.allocator();
+
+    // One refusal per distinct (namespace, head), at its FIRST
+    // occurrence's span — later duplicates add no information.
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer seen.deinit(a);
+
+    for (table.tracks, 0..) |track, track_index| switch (track.source) {
+        .expr => |node| {
+            const heads = try collectCallHeads(a, tree, node);
+            for (heads) |h| {
+                const key = std.fmt.allocPrint(a, "{s}\x00{s}", .{
+                    h.namespace orelse "", h.head,
+                }) catch return error.OutOfMemory;
+                if (seen.contains(key)) continue;
+                seen.put(a, key, {}) catch return error.OutOfMemory;
+                switch (classifyHead(result.eval_schema, h)) {
+                    .clean => {},
+                    .user_plugin => |plugin| try addDiag(
+                        gpa,
+                        diags,
+                        .pack_user_expr_unsupported,
+                        h.span,
+                        "pack: expr head '{s}' is provided by plugin '{s}' — v1 packs resolve the core plugin only",
+                        .{ spelled(a, h), plugin },
+                    ),
+                    .ambiguous => try addDiag(
+                        gpa,
+                        diags,
+                        .pack_user_expr_unsupported,
+                        h.span,
+                        "pack: expr head '{s}' is ambiguous in this score (a user plugin redeclares a core name) — the binary schema resolves core only",
+                        .{spelled(a, h)},
+                    ),
+                    .binary_only => try addDiag(
+                        gpa,
+                        diags,
+                        .pack_user_expr_unsupported,
+                        h.span,
+                        "pack: expr head '{s}' resolves on the binary path but not on the eval path — schemas disagree",
+                        .{spelled(a, h)},
+                    ),
+                }
+            }
+        },
+        .keys, .trigger => {},
+        // Interim v1 refusal (02 P4 lifts it when the SJON owner
+        // decides the pattern query env): a `:pattern` track is never
+        // silently packed — loud, spanned, at the track form itself.
+        // `encode` still serializes the payload underneath (T3.1's
+        // uniform path); this gate is what keeps it out of v1 packs.
+        .pattern => {
+            const span = table.track_spans[track_index];
+            try addDiag(
+                gpa,
+                diags,
+                .pack_patterns_unsupported,
+                span,
+                "pack: :pattern tracks are not packable in v1 (pattern query env pending the SJON owner decision) — the track is refused, never silently packed",
+                .{},
+            );
+        },
+    };
+
+    // Payload caps, MEASURED on the very bytes `encode` would emit —
+    // a subtree's compact IR can exceed its source text (risk E2), so
+    // nothing is assumed. Per-payload first (track order), then the
+    // `'PAYL'` total: the decoder refuses exactly these shapes
+    // (`span.len > MAX_PAYLOAD_BYTES`, region `> MAX_PAYL_BYTES`), so
+    // a preflight-clean pack can never emit what decode would refuse.
+    // Loud measured refusals only — never a truncated subset.
+    var payload_total: usize = 0;
+    var total_over_span: ?sjon.Ast.Span = null;
+    for (table.tracks) |track| switch (track.source) {
+        .expr, .pattern => |node| {
+            const bytes = try encodePayload(a, tree, node);
+            if (bytes.len > Pacb.MAX_PAYLOAD_BYTES) {
+                try addDiag(
+                    gpa,
+                    diags,
+                    .pack_cap_exceeded,
+                    tree.spanOf(node),
+                    "pack: expr payload is {d} bytes, over the {d}-byte v1 per-payload cap",
+                    .{ bytes.len, Pacb.MAX_PAYLOAD_BYTES },
+                );
+            }
+            payload_total += bytes.len;
+            if (total_over_span == null and payload_total > Pacb.MAX_PAYL_BYTES) {
+                total_over_span = tree.spanOf(node);
+            }
+        },
+        .keys, .trigger => {},
+    };
+    if (payload_total > Pacb.MAX_PAYL_BYTES) {
+        try addDiag(
+            gpa,
+            diags,
+            .pack_cap_exceeded,
+            total_over_span.?,
+            "pack: total payload bytes {d} exceed the {d}-byte v1 'PAYL' cap",
+            .{ payload_total, Pacb.MAX_PAYL_BYTES },
+        );
+    }
+
+    // The global explicit-tick cap (I2/G6): the measured sum of `:at`
+    // entries across ALL tracks against `MAX_TICK_ENTRIES`. The text
+    // path is deliberately uncapped — a native-band source (> 256 KiB)
+    // or a direct-API compile can legally compile past the cap, and
+    // pack refuses loudly with the measured count, never a truncated
+    // schedule. One refusal, at the track whose entries complete the
+    // overage (the decoder's own `count > MAX_TICK_ENTRIES` is the
+    // same comparison over the same total).
+    var tick_total: usize = 0;
+    var tick_over_span: ?sjon.Ast.Span = null;
+    for (table.tracks, 0..) |track, track_index| switch (track.source) {
+        .trigger => |trig| switch (trig) {
+            .at => |ats| {
+                tick_total += ats.len;
+                if (tick_over_span == null and tick_total > Pacb.MAX_TICK_ENTRIES) {
+                    tick_over_span = table.track_spans[track_index];
+                }
+            },
+            .periodic => {},
+        },
+        .keys, .expr, .pattern => {},
+    };
+    if (tick_total > Pacb.MAX_TICK_ENTRIES) {
+        try addDiag(
+            gpa,
+            diags,
+            .pack_cap_exceeded,
+            tick_over_span.?,
+            "pack: {d} explicit trigger entries exceed the global v1 cap of {d} (measured across all tracks)",
+            .{ tick_total, Pacb.MAX_TICK_ENTRIES },
+        );
+    }
+}
+
+/// The message spelling of one head — `ns/head` when qualified.
+/// Composed in the caller's scratch arena (message-time only).
+fn spelled(a: std.mem.Allocator, h: HeadRef) []const u8 {
+    const ns = h.namespace orelse return h.head;
+    return std.fmt.allocPrint(a, "{s}/{s}", .{ ns, h.head }) catch h.head;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -559,6 +1062,426 @@ fn compileForTest(
         return error.FixtureCompileFailed;
     }
     return r;
+}
+
+/// One expected classifier outcome: a head text plus its namespace
+/// (null = bare). Order is the walk's source order.
+const ExpectedHead = struct { head: []const u8, ns: ?[]const u8 = null };
+
+/// Parse `src`, run `collectCallHeads` over its single root, and assert
+/// the exact head/namespace sequence — the classifier's position
+/// contract pinned left to right.
+fn expectHeads(src: [:0]const u8, expected: []const ExpectedHead) !void {
+    var tree = try sjon.Parser.parse(t.allocator, src);
+    defer tree.deinit();
+    const heads = try collectCallHeads(t.allocator, &tree, tree.root[0]);
+    defer t.allocator.free(heads);
+    if (heads.len != expected.len) {
+        std.debug.print("src: {s}\nheads: {d} collected, {d} expected\n", .{ src, heads.len, expected.len });
+        for (heads) |h| std.debug.print("  {s}/{s}\n", .{ h.namespace orelse "", h.head });
+        return error.HeadCountMismatch;
+    }
+    for (heads, expected) |got, want| {
+        try t.expectEqualStrings(want.head, got.head);
+        if (want.ns) |ns| {
+            try t.expect(got.namespace != null);
+            try t.expectEqualStrings(ns, got.namespace.?);
+        } else {
+            try t.expect(got.namespace == null);
+        }
+    }
+}
+
+test "PacbEncode: collectCallHeads classifies eval positions in source order" {
+    // `if` walks test + both branches; a vector in eval position walks
+    // its elements. Heads arrive in source order, spans attached.
+    try expectHeads("(if (> t 1) (u 1) [(w 2) 3])", &.{
+        .{ .head = ">" },
+        .{ .head = "u" },
+        .{ .head = "w" },
+    });
+    // `and`/`or`/`cond` never prune: every branch position is walked.
+    try expectHeads("(or 1 (u 2) (v 3))", &.{ .{ .head = "u" }, .{ .head = "v" } });
+    try expectHeads("(and (a 1) (b 2) (c 3))", &.{
+        .{ .head = "a" }, .{ .head = "b" }, .{ .head = "c" },
+    });
+    try expectHeads("(cond false (u 1) true (v 2))", &.{ .{ .head = "u" }, .{ .head = "v" } });
+    // Zero-arg `and`/`or`/`cond` are literals — nothing to walk.
+    try expectHeads("(and)", &.{});
+    try expectHeads("(or)", &.{});
+    try expectHeads("(cond)", &.{});
+    // `let` walks binding values + body, never the binding names.
+    try expectHeads("(let [u 5 sin 2] (+ u (sin u)))", &.{ .{ .head = "+" }, .{ .head = "sin" } });
+    // Binders walk xs/init/body, never the binder vector's name slots.
+    try expectHeads("(map [u] (f xs) (g u))", &.{ .{ .head = "f" }, .{ .head = "g" } });
+    try expectHeads("(fold [u acc] (i 0) (xs 1) (h u acc))", &.{
+        .{ .head = "i" }, .{ .head = "xs" }, .{ .head = "h" },
+    });
+    // Ordinary calls walk positional children AND kvpair values, never
+    // kvpair keys; the head itself is collected with its namespace.
+    try expectHeads("(nothing 1 (h 2) :u (k 3))", &.{
+        .{ .head = "nothing" }, .{ .head = "h" }, .{ .head = "k" },
+    });
+    try expectHeads("(core/let [x (a 1)] (b 2))", &.{
+        .{ .head = "let", .ns = "core" }, .{ .head = "a" }, .{ .head = "b" },
+    });
+}
+
+test "PacbEncode: special-form shape violations kill the subtree (scheduler abort order)" {
+    // The scheduler checks each special form's shape BEFORE scheduling
+    // any child — an arity/binder/kvpair violation raises at schedule
+    // time, so nothing inside is ever evaluated. The classifier mirrors
+    // that exactly: a malformed special form contributes no heads and
+    // is not descended into.
+    try expectHeads("(if (u 1))", &.{}); // arity 1
+    try expectHeads("(if (u 1) (v 2) (w 3) (z 4))", &.{}); // arity 4
+    try expectHeads("(if :k (u 1) 2)", &.{}); // kvpair test slot
+    try expectHeads("(if false :k 2)", &.{}); // kvpair then slot
+    try expectHeads("(let [x] (u 1))", &.{}); // odd binding vector
+    try expectHeads("(let [x 1] :k)", &.{}); // kvpair body
+    try expectHeads("(let [(u 1) 2] 3)", &.{}); // non-symbol binding name
+    try expectHeads("(map [x] (u xs))", &.{}); // arity 2
+    try expectHeads("(map [x 1] xs (u x))", &.{}); // non-symbol binder
+    try expectHeads("(map [(u 1)] xs body)", &.{}); // 2-slot binder vector
+    try expectHeads("(fold [acc x] (u 0) xs)", &.{}); // arity 3
+    try expectHeads("(fold [acc acc] (u 0) xs body)", &.{}); // duplicate binder names
+    try expectHeads("(cond (u 1))", &.{}); // odd clause count
+    try expectHeads("(and :k (u 1))", &.{}); // kvpair in first slot
+    // Later cond/and/or slots holding a kvpair are a CUT: the error
+    // raises when the walk reaches them, so that slot and everything
+    // after it is dead (mirroring `cond_select`/`and_check`/`or_check`).
+    // (`:k 3` parses as ONE kvpair child — prefix-colon syntax — so the
+    // clause counts below are the real child counts.)
+    try expectHeads("(cond (a 1) (u 1) 2 :k 3)", &.{ .{ .head = "a" }, .{ .head = "u" } });
+    try expectHeads("(or (u 1) :k 2)", &.{.{ .head = "u" }});
+    try expectHeads("(or 1 :k 2 (v 3))", &.{});
+}
+
+test "PacbEncode: collectCallHeads spans are head spans in score coordinates" {
+    var tree = try sjon.Parser.parse(t.allocator, "(if (> t 1) (myuser 2) 3)");
+    defer tree.deinit();
+    const heads = try collectCallHeads(t.allocator, &tree, tree.root[0]);
+    defer t.allocator.free(heads);
+    try t.expectEqual(@as(usize, 2), heads.len);
+    // `myuser` starts at offset 13 (the lparen of its form is at 12).
+    try t.expectEqual(@as(u32, 13), heads[1].span.start);
+    try t.expect(heads[1].span.end > heads[1].span.start);
+}
+
+// ---- pack preflight (T3.2) -------------------------------------------------
+
+const up_plugin = "(plugin :name up (expr-func :name u :params [number] :result number))\n";
+const up_sin_plugin = "(plugin :name up (expr-func :name sin :params [number] :result number))\n";
+const transport_line = "(transport :bpm 120 :meter [4 4])\n";
+
+/// Compile a one-`:expr`-track score against target `x` and preflight
+/// it into an arena; returns the diagnostics (empty when pack-clean).
+fn preflightExpr(
+    arena: std.mem.Allocator,
+    extra_head: []const u8,
+    expr_src: []const u8,
+) ![]Compile.Diagnostic {
+    const src = try std.fmt.allocPrintSentinel(arena, "{s}{s}(track :target x :expr {s})", .{
+        transport_line, extra_head, expr_src,
+    }, 0);
+    const tg = [_]Compile.Target{.{ .name = "x", .ncomp = 1 }};
+    var r = try compileForTest(arena, src, &tg);
+    defer r.deinit();
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(arena, &r, &diags);
+    return diags.items;
+}
+
+/// Assert `src`'s `:expr` refuses packing with `code` and a message
+/// containing `needle`, and return the first matching diagnostic (for
+/// span assertions).
+fn expectRefused(
+    arena: std.mem.Allocator,
+    plugin_head: []const u8,
+    expr_src: []const u8,
+    code: Compile.Code,
+    needle: []const u8,
+) !Compile.Diagnostic {
+    const diags = try preflightExpr(arena, plugin_head, expr_src);
+    for (diags) |d| {
+        if (d.code == code and std.mem.indexOf(u8, d.message, needle) != null) return d;
+    }
+    std.debug.print("want {s} mentioning '{s}', got {d} diag(s):\n", .{ @tagName(code), needle, diags.len });
+    for (diags) |d| std.debug.print("  {s}: {s}\n", .{ @tagName(d.code), d.message });
+    return error.ExpectedRefusalMissing;
+}
+
+fn expectPacksClean(arena: std.mem.Allocator, plugin_head: []const u8, expr_src: []const u8) !void {
+    const diags = try preflightExpr(arena, plugin_head, expr_src);
+    if (diags.len != 0) {
+        std.debug.print("expected pack-clean, got:\n", .{});
+        for (diags) |d| std.debug.print("  {s}: {s}\n", .{ @tagName(d.code), d.message });
+        return error.ExpectedCleanPack;
+    }
+}
+
+test "PacbEncode: preflight refuses user-plugin heads the dry-run cannot see" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A user head in a RESULT branch guarded by a time test: the t=0
+    // dry-run takes the else arm and never calls it; any t > 1s would.
+    _ = try expectRefused(a, up_plugin, "(if (> t 1) (u 1) 2)", .pack_user_expr_unsupported, "'u'");
+    // Short-circuit tail — one `or_check` step from evaluation.
+    _ = try expectRefused(a, up_plugin, "(or 1 (u 2))", .pack_user_expr_unsupported, "'u'");
+    // Hidden in an untaken `if` branch: only the never-pruning walk
+    // catches it (the dry-run evaluates neither branch).
+    const d = try expectRefused(a, up_plugin, "(if false (u 1) 2)", .pack_user_expr_unsupported, "'u'");
+    // The span is the HEAD's span in score coordinates.
+    const src_probe = transport_line ++ up_plugin ++ "(track :target x :expr (if false (u 1) 2))";
+    const at = std.mem.indexOf(u8, src_probe, "(u 1)").?;
+    try t.expectEqual(@as(u32, @intCast(at + 1)), d.span.start);
+    // The same hiding works through every eval-position grammar shape.
+    _ = try expectRefused(a, up_plugin, "(if false [(u 1)] 2)", .pack_user_expr_unsupported, "'u'");
+    _ = try expectRefused(a, up_plugin, "(cond false (u 1) true 2)", .pack_user_expr_unsupported, "'u'");
+    _ = try expectRefused(a, up_plugin, "(fold [a b] 0 [] (u a))", .pack_user_expr_unsupported, "'u'");
+    _ = try expectRefused(a, up_plugin, "(let [a (if false (u 1) 2)] (+ a 1))", .pack_user_expr_unsupported, "'u'");
+    // Namespace-qualified user head: found through the eval schema's
+    // user plugin, absent from the core-only binary schema.
+    _ = try expectRefused(a, up_plugin, "(if false (up/u 1) 2)", .pack_user_expr_unsupported, "'up/u'");
+}
+
+test "PacbEncode: preflight refuses ambiguous core redeclaration even when binary-found (I1/G11)" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A user plugin redeclaring `sin`, called ONLY in an untaken
+    // branch: `eval_schema` (core ⊕ user) is .ambiguous on the bare
+    // head — error.AmbiguousFunction on BOTH schedule paths — while
+    // the core-only binary schema finds core's sin. Found-in-binary
+    // does NOT make the outcomes identical: refused.
+    const d = try expectRefused(a, up_sin_plugin, "(if false (sin 1) 2)", .pack_user_expr_unsupported, "'sin'");
+    try t.expect(std.mem.indexOf(u8, d.message, "ambiguous") != null);
+}
+
+test "PacbEncode: preflight dedupes one refusal per distinct head at its first span" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // `u` twice (first span wins), `w` once — both declared by the
+    // plugin, so exactly two refusals.
+    const two_head_plugin = "(plugin :name up" ++
+        " (expr-func :name u :params [number] :result number)" ++
+        " (expr-func :name w :params [number] :result number))\n";
+    const src = try std.fmt.allocPrintSentinel(a, "{s}{s}(track :target x :expr (if false [(u 1) (u 2) (w 3)] 2))", .{
+        transport_line, two_head_plugin,
+    }, 0);
+    const tg = [_]Compile.Target{.{ .name = "x", .ncomp = 1 }};
+    var r = try compileForTest(a, src, &tg);
+    defer r.deinit();
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r, &diags);
+    try t.expectEqual(@as(usize, 2), diags.items.len);
+    try t.expect(diags.items[0].code == .pack_user_expr_unsupported);
+    try t.expect(diags.items[1].code == .pack_user_expr_unsupported);
+    const u_at = std.mem.indexOf(u8, src, "(u 1)").?;
+    try t.expectEqual(@as(u32, @intCast(u_at + 1)), diags.items[0].span.start);
+}
+
+test "PacbEncode: preflight refuses :pattern tracks loudly (interim, spanned)" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const tg = [_]Compile.Target{.{ .name = "x", .ncomp = 1 }};
+    var r = try compileForTest(
+        a,
+        transport_line ++ "(track :target x :pattern (fast 2 [0.2 (pure (+ 0.1 0.2))]))",
+        &tg,
+    );
+    defer r.deinit();
+
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r, &diags);
+    try t.expectEqual(@as(usize, 1), diags.items.len);
+    const d = diags.items[0];
+    try t.expect(d.code == .pack_patterns_unsupported);
+    try t.expect(std.mem.indexOf(u8, d.message, ":pattern") != null);
+    // The span is the track form's own span (score coordinates).
+    const track_span = r.table.?.track_spans[0];
+    try t.expectEqual(track_span.start, d.span.start);
+    try t.expectEqual(track_span.end, d.span.end);
+
+    // T3.1's serialize-only state is unchanged underneath the refusal:
+    // `encode` still emits the payload and the decoder still accepts
+    // it — the interim KNOWN design (02 P4 lifts the refusal).
+    const bytes = try encode(a, &r, &.{});
+    defer a.free(bytes);
+    var decoded = try Pacb.decode(a, bytes, null);
+    defer decoded.deinit();
+    try t.expect(decoded.required_features & Pacb.FEATURE_PATTERN_TRACKS != 0);
+}
+
+test "PacbEncode: preflight refuses an oversized payload with the measured size" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // One expr track whose payload (the compact IR of the whole
+    // `:expr` subtree) exceeds the per-payload cap: a large literal
+    // vector hidden in an untaken branch compiles clean (the dry-run
+    // never evaluates it) yet packs to > 256 KiB.
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(a);
+    try buf.appendSlice(a, transport_line);
+    try buf.appendSlice(a, "(track :target x :expr (if false [");
+    for (0..32768) |_| try buf.appendSlice(a, "1 ");
+    try buf.appendSlice(a, "] 2))");
+    const src = try buf.toOwnedSliceSentinel(a, 0);
+
+    const tg = [_]Compile.Target{.{ .name = "x", .ncomp = 1 }};
+    var r = try compileForTest(a, src, &tg);
+    defer r.deinit();
+
+    // The oracle: the very bytes `encode` would emit.
+    const node = r.table.?.tracks[0].source.expr;
+    const payload = try encodePayload(a, &r.validated.result.tree, node);
+    try t.expect(payload.len > Pacb.MAX_PAYLOAD_BYTES); // fixture honest
+
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r, &diags);
+    try t.expectEqual(@as(usize, 1), diags.items.len);
+    const d = diags.items[0];
+    try t.expect(d.code == .pack_cap_exceeded);
+    const measured = try std.fmt.allocPrint(a, "{d}", .{payload.len});
+    try t.expect(std.mem.indexOf(u8, d.message, measured) != null);
+    // The span is the payload subtree's own span (score coordinates).
+    const want_span = r.validated.result.tree.spanOf(node);
+    try t.expectEqual(want_span.start, d.span.start);
+}
+
+test "PacbEncode: preflight refuses total 'PAYL' overage across tracks, never per-payload" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Seventeen expr tracks, each payload just UNDER the per-payload
+    // cap (so no per-payload refusal fires) but summing past the
+    // 4 MiB total: exactly one measured-total refusal.
+    var targets: std.ArrayList(Compile.Target) = .empty;
+    defer targets.deinit(a);
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(a);
+    try buf.appendSlice(a, transport_line);
+    var expected_total: usize = 0;
+    for (0..17) |i| {
+        const name = try std.fmt.allocPrint(a, "tgt{d}", .{i});
+        try targets.append(a, .{ .name = name, .ncomp = 1 });
+        try buf.appendSlice(a, try std.fmt.allocPrint(a, "(track :target {s} :expr (if false [", .{name}));
+        for (0..28000) |_| try buf.appendSlice(a, "1 ");
+        try buf.appendSlice(a, "] 2))\n");
+    }
+    const src = try buf.toOwnedSliceSentinel(a, 0);
+
+    var r = try compileForTest(a, src, targets.items);
+    defer r.deinit();
+    for (r.table.?.tracks) |track| {
+        const bytes = try encodePayload(a, &r.validated.result.tree, track.source.expr);
+        try t.expect(bytes.len <= Pacb.MAX_PAYLOAD_BYTES); // per-payload honest
+        expected_total += bytes.len;
+    }
+    try t.expect(expected_total > Pacb.MAX_PAYL_BYTES); // fixture honest
+
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r, &diags);
+    try t.expectEqual(@as(usize, 1), diags.items.len);
+    const d = diags.items[0];
+    try t.expect(d.code == .pack_cap_exceeded);
+    const measured = try std.fmt.allocPrint(a, "{d}", .{expected_total});
+    try t.expect(std.mem.indexOf(u8, d.message, measured) != null);
+    try t.expect(std.mem.indexOf(u8, d.message, "total") != null);
+}
+
+/// Build a one-trigger score with `n` explicit `:at` positions
+/// (`1b 2b … nb` — the grammar's honest ascending integer spelling;
+/// bare integers are not valid time-pos values).
+fn bigTickSource(a: std.mem.Allocator, n: usize) ![:0]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(a);
+    try buf.appendSlice(a, transport_line);
+    try buf.appendSlice(a, "(trigger :target x :at [");
+    for (1..n + 1) |i| {
+        var num: [16]u8 = undefined;
+        const s = std.fmt.bufPrint(&num, "{d}b ", .{i}) catch unreachable;
+        try buf.appendSlice(a, s);
+    }
+    try buf.appendSlice(a, "])");
+    return buf.toOwnedSliceSentinel(a, 0);
+}
+
+test "PacbEncode: preflight refuses the tick-count overage with the measured count" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const tg = [_]Compile.Target{.{ .name = "x", .ncomp = 1 }};
+
+    // 131073 explicit entries (~0.9 MB of source, within the native
+    // 1 MiB band): the TEXT path is uncapped by design — the compile
+    // is clean — and pack refuses loudly with the measured count.
+    const src = try bigTickSource(a, 131073);
+    var r = try compileForTest(a, src, &tg);
+    defer r.deinit();
+    try t.expectEqual(@as(usize, 131073), r.table.?.tracks[0].source.trigger.at.len);
+
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r, &diags);
+    try t.expectEqual(@as(usize, 1), diags.items.len);
+    const d = diags.items[0];
+    try t.expect(d.code == .pack_cap_exceeded);
+    try t.expect(std.mem.indexOf(u8, d.message, "131073") != null);
+    // The span is the overage-completing track's own span.
+    const want_span = r.table.?.track_spans[0];
+    try t.expectEqual(want_span.start, d.span.start);
+
+    // The boundary packs: exactly MAX_TICK_ENTRIES entries preflight
+    // clean AND round-trip through decode (the decoder's own cap is
+    // the same `>`, never `>=`) — the ~1 MiB 'TICK' section is legal.
+    const src_ok = try bigTickSource(a, Pacb.MAX_TICK_ENTRIES);
+    var r2 = try compileForTest(a, src_ok, &tg);
+    defer r2.deinit();
+    var diags2: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r2, &diags2);
+    try t.expectEqual(@as(usize, 0), diags2.items.len);
+    const bytes = try encode(a, &r2, &.{});
+    defer a.free(bytes);
+    var decoded = try Pacb.decode(a, bytes, null);
+    defer decoded.deinit();
+    try t.expectEqual(Pacb.MAX_TICK_ENTRIES, decoded.tracks[0].source.trigger.at.len);
+}
+
+test "PacbEncode: preflight acceptance set — grammar name slots and form-as-data pack clean" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Plain core-only score: clean.
+    try expectPacksClean(a, "", "(+ t 1)");
+    // Vector elements in eval position, core heads: clean.
+    try expectPacksClean(a, "", "(if false [(sin 1) (+ 2 3)] 2)");
+    // `let` binding NAMES never classify — even when they collide with
+    // a core head (`sin`) or a user func name (`u`).
+    try expectPacksClean(a, up_plugin, "(let [u 5 sin 2] (+ u (sin u)))");
+    // Binder vectors are name slots (`[u]`, `[u acc]`); bodies/args walk.
+    // (The map body's vector result must match the target's ncomp 1.)
+    try expectPacksClean(a, up_plugin, "(map [u] [1] (+ u 1))");
+    try expectPacksClean(a, up_plugin, "(fold [u acc] 0 [1 2] (+ u acc))");
+    // kvpair KEYS never classify (the VALUE is walked — a literal).
+    try expectPacksClean(a, up_plugin, "(if false (nothing :u 1) 2)");
+    // A head resolving in NEITHER schema is a form-as-data literal.
+    try expectPacksClean(a, "", "(if false (nope-not-anywhere 1 2) 3)");
+    // Qualified core heads resolve through core on BOTH paths (the
+    // core plugin's impl-null special-form markers are found-both,
+    // identical) — pack-clean; it would fail to CALL on both equally.
+    try expectPacksClean(a, "", "(if false (core/let [a 1] (+ a a)) 2)");
 }
 
 test "PacbEncode: a transport-only score round-trips through Pacb.decode" {
