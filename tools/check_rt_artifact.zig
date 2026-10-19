@@ -369,6 +369,18 @@ pub fn checkModule(arena: Allocator, bytes: []const u8) Allocator.Error!Report {
         error.OutOfMemory => return error.OutOfMemory,
     };
 
+    // Surface names are unique by definition: a duplicate export is a
+    // malformed surface, never a second expected row (the old membership
+    // check saw each frozen NAME and passed the duplicate).
+    var seen_exports: std.StringHashMapUnmanaged(void) = .empty;
+    for (mod.exports) |got| {
+        if (seen_exports.contains(got.name)) {
+            try failures.append(arena, try std.fmt.allocPrint(arena, "duplicate export `{s}` — a surface name may appear only once", .{got.name}));
+        } else {
+            try seen_exports.put(arena, got.name, {});
+        }
+    }
+
     // (a) imports: empty, or exactly the one frozen function import with
     // the frozen signature RESOLVED through the type section.
     if (mod.imports.len == 1) {
@@ -631,7 +643,10 @@ fn expectOk(a: Allocator, bytes: []const u8) !void {
 /// Assert the module fails, and some failure names `needle`.
 fn expectFailNaming(a: Allocator, bytes: []const u8, needle: []const u8) !void {
     const report = try checkModule(a, bytes);
-    try testing.expect(!report.ok());
+    if (report.ok()) {
+        std.debug.print("expected failure naming `{s}`, got OK\n", .{needle});
+        return error.TestUnexpectedResult;
+    }
     try testing.expect(report.malformed == null);
     for (report.failures) |f| {
         if (std.mem.indexOf(u8, f, needle) != null) return;
@@ -783,6 +798,36 @@ test "the memory export with the wrong kind is rejected" {
             }
             const m = try module(a, &.{ try typeSection(a), try importSection(a, &.{try frozenImport(a)}), try section(a, EXPORT_SECTION_ID, body.items) });
             try expectFailNaming(a, m, "memory");
+        }
+    }.run);
+}
+
+test "a duplicate export name is rejected by name" {
+    try withArena(struct {
+        fn run(a: Allocator) !void {
+            var body: std.ArrayList(u8) = .empty;
+            try encUleb(a, &body, @intCast(FROZEN_EXPORTS.len + 1));
+            for (FROZEN_EXPORTS) |e| {
+                try encUleb(a, &body, @intCast(e.name.len));
+                try body.appendSlice(a, e.name);
+                try body.append(a, @intFromEnum(e.kind));
+                try encUleb(a, &body, 0);
+            }
+            // `prt_eval` again at a different index: every frozen NAME is
+            // present exactly once by name, so the old membership check
+            // passed this duplicate surface.
+            const dup = "prt_eval";
+            try encUleb(a, &body, @intCast(dup.len));
+            try body.appendSlice(a, dup);
+            try body.append(a, 0x00);
+            try encUleb(a, &body, 1);
+
+            const m = try module(a, &.{
+                try typeSection(a),
+                try section(a, IMPORT_SECTION_ID, &[_]u8{0x00}),
+                try section(a, EXPORT_SECTION_ID, body.items),
+            });
+            try expectFailNaming(a, m, "duplicate export `prt_eval`");
         }
     }.run);
 }
