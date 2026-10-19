@@ -290,8 +290,8 @@ _(created 2026-10-18; entries appended per phase)_
   `.agent/control/binary03-t5a-report.md`.
 - **2026-10-19 — T5b COMPLETE; P2 CLOSED (task/gate only; P3 open).**
   Commits `c1d5bfe` (shared lifecycle grammar + actual text/binary replay
-  adapters) and `48ed070` (the final two text-first anchors), plus this
-  progress record. The harness schema and both parsers now close the flat
+  adapters), `48ed070` (the final two text-first anchors), `b0b2c4d` (the
+  classifier no-silent-skip guard), plus this progress record. The harness schema and both parsers now close the flat
   `(reload :kind bad-call|diagnostics|bad-version|current)` and
   `(registry-mismatch :mode structural|name-swap)` forms: a missing, extra
   or unknown key/value is refused by the native schema (span diagnostic)
@@ -317,10 +317,11 @@ _(created 2026-10-18; entries appended per phase)_
   all 41 pre-existing `expected.sjon` hashes are identical before/after.
   An independent authored-semantics oracle (tool-derived bits 0.3/0.6/0.5/
   1.0, ticks 90090/180180/216216, f32 lanes, registry flags, repeat frames
-  and the exact echo sequences) passes. Post-commit gates: `test` 23/23
-  with **541/541**; `corpus` 43/0; `parity` 43 = **24 clean non-pattern
+  and the exact echo sequences) passes. Post-commit gates (plus the classifier guard test that later reload/
+  registry records are known, never classifications): `test` 23/23 with
+  **542/542**; `corpus` 43/0; `parity` 43 = **24 clean non-pattern
   replayed (+2), 4 skipped-pending-SJON, 15 load-failing, 0 failed**;
-  `verify` 30/30 with **427/427 Zig, corpus 43/0, node 113/113**;
+  `verify` 30/30 with **428/428 Zig, corpus 43/0, node 113/113**;
   `native-composition` 10/10 + 1/1; `audit-rt-imports` 10/10 with the
   frozen 17 `prt_*` + memory. npm Biome 2.5.0 `src test` lint and the
   library-only `tsc --noEmit` are green (tests execute under verify; no
