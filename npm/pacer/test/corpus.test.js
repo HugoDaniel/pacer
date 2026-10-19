@@ -26,6 +26,12 @@ const corpusDir = fileURLToPath(new URL('../../../corpus/', import.meta.url));
 const wasmPath = fileURLToPath(new URL('../../../zig-out/bin/pacer.wasm', import.meta.url));
 const wasmModule = new WebAssembly.Module(readFileSync(wasmPath));
 
+// The same inert import `Pacer.load` supplies. The corpus test
+// instantiates the full artifact EXPLICITLY so a lifecycle case can pass
+// a test-only raw-load callback into `renderCase` without adding a public
+// JS API. No Pacer internals are read.
+const IMPORTS = { env: { sjon_host_invoke_plugin: () => 0 } };
+
 const cases = readdirSync(corpusDir, { withFileTypes: true })
   .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
   .map((e) => e.name)
@@ -37,8 +43,15 @@ for (const name of cases) {
     const read = (file) => readFileSync(`${corpusDir}${name}/${file}`, 'utf8');
     const harness = parseHarness(read('times.sjon'));
     const doc = read('doc.sjon');
-    const driver = await Pacer.load(wasmModule, doc, { registries: harness.registries });
-    const actual = await renderCase(doc, harness, driver);
+    const instance = await WebAssembly.instantiate(wasmModule, IMPORTS);
+    const driver = new Pacer(instance, harness.registries);
+    driver.reload(doc);
+    // Test-only: the over-cap length is rejected before any teardown, so
+    // the wrapper's live state and the zones stay exactly as they were.
+    const context = {
+      rawLoad: () => instance.exports.drv_load(instance.exports.drv_docCap() + 1, 0),
+    };
+    const actual = await renderCase(doc, harness, driver, context);
     assert.equal(actual, read('expected.sjon'));
   });
 }

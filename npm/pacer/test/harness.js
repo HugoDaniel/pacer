@@ -14,6 +14,11 @@ const GENERATED_HEADER =
 const PACW_HEADER_LEN = 12;
 const PACW_ENTRY_LEN = 20;
 
+// The one fixed test-harness-only diagnostic source (binary03 T5b). It is
+// shared semantically with the native corpus renderer and is never packed
+// or serialized as a score.
+const DIAGNOSTIC_SOURCE = '(transport :bpm 0)\n';
+
 /**
  * Parse the constrained harness format (times.sjon): flat
  * `(target NAME :registry R :ncomp N)` forms — flat order IS the
@@ -69,6 +74,23 @@ export function parseHarness(src) {
         registry: harnessInt(body, 'registry'),
         ncomp: harnessInt(body, 'ncomp'),
       });
+    } else if (head === 'reload') {
+      sawScript = true;
+      steps.push({
+        kind: 'reload',
+        reloadKind: harnessClosed(body, 'kind', [
+          'bad-call',
+          'diagnostics',
+          'bad-version',
+          'current',
+        ]),
+      });
+    } else if (head === 'registry-mismatch') {
+      sawScript = true;
+      steps.push({
+        kind: 'registry-mismatch',
+        mode: harnessClosed(body, 'mode', ['structural', 'name-swap']),
+      });
     } else {
       throw new Error(`harness: unknown form (${head} …)`);
     }
@@ -101,6 +123,19 @@ function harnessLanes(body) {
   const lanes = [...body.matchAll(/"([0-9A-Fa-f]{8})"/g)].map((x) => Number.parseInt(x[1], 16));
   if (lanes.length !== 4) throw new Error('harness: :value needs four 8-hex lanes');
   return lanes;
+}
+
+/**
+ * A lifecycle form body is EXACTLY one closed `:key value` pair. A
+ * missing key, a second/extra key, or an unknown value throws — the
+ * native schema owns the same closure (no default kind or mode).
+ */
+function harnessClosed(body, key, allowed) {
+  const m = body.trim().match(/^:([a-z-]+)\s+([a-z-]+)$/);
+  if (!m) throw new Error(`harness: (… ) expects exactly :${key} <value>`);
+  if (m[1] !== key) throw new Error(`harness: unknown key :${m[1]}`);
+  if (!allowed.includes(m[2])) throw new Error(`harness: unknown :${key} ${m[2]}`);
+  return m[2];
 }
 
 /**
@@ -254,12 +289,20 @@ function renderMeta(meta, names) {
  * — the corpus walk's text-path driver and, at T3.2, the playback
  * runtime's.
  *
+ * The optional fourth argument is a TEST-ONLY context. Only the
+ * `(reload :kind bad-call)` step needs it: `rawLoad()` must call the
+ * real `drv_load` with an over-cap document length and return its
+ * status, without touching the wrapper's live state. Every other step
+ * uses the normal `Pacer` surface. Old three-argument callers remain
+ * valid because lifecycle cases are the only ones that read it.
+ *
  * @param {string} doc - the score source (also the declared-names join).
  * @param {ReturnType<typeof parseHarness>} harness
  * @param {import('../src/index.js').Pacer} driver
+ * @param {{ rawLoad?: () => number }} [context]
  * @returns {Promise<string>} the canonical golden text
  */
-export async function renderCase(doc, harness, driver) {
+export async function renderCase(doc, harness, driver, context = {}) {
   let out = GENERATED_HEADER;
   out += `(load :ok ${driver.ok})\n`;
   for (const d of driver.diagnostics) {
@@ -280,10 +323,16 @@ export async function renderCase(doc, harness, driver) {
     if (step.kind === 'eval') {
       const head = `(eval :t "${hex(step.bits, 16)}"`;
       const bytes = driver.evalBytes(f64FromBits(step.bits));
-      out +=
-        bytes === null
-          ? `${head} :out-of-range true)\n`
-          : `${head}${renderWrites(bytes, names)})\n`;
+      if (bytes !== null) {
+        out += `${head}${renderWrites(bytes, names)})\n`;
+      } else if (driver.ok) {
+        out += `${head} :out-of-range true)\n`;
+      } else {
+        // A diagnostic reload unloads the text session: drv_eval answers
+        // zero and the golden states the unloaded reason, not a clock
+        // range claim.
+        out += `${head} :unloaded true)\n`;
+      }
     } else if (step.kind === 'set-control') {
       const ok = driver.setControl(step.index, step.bits.map(f32FromBits));
       const value = step.bits.map((b) => `"${hex(b, 8)}"`).join(' ');
@@ -297,6 +346,38 @@ export async function renderCase(doc, harness, driver) {
       const slot = driver.registerControl(harness.flat[step.targetId].name);
       out += `(register-control :target-id ${step.targetId} :registry ${step.registry}`;
       out += ` :ncomp ${step.ncomp} :slot ${slot === null ? 'none' : slot})\n`;
+    } else if (step.kind === 'reload') {
+      const kind = step.reloadKind;
+      if (kind === 'bad-call') {
+        if (typeof context.rawLoad !== 'function') {
+          throw new Error('harness: (reload :kind bad-call) needs the test-only raw-load context');
+        }
+        const wasOk = driver.ok;
+        const status = context.rawLoad();
+        if (status !== 2)
+          throw new Error(`harness: bad-call raw load returned ${status}, expected 2`);
+        if (driver.ok !== wasOk)
+          throw new Error('harness: bad-call raw load changed the wrapper state');
+        out += `(reload :kind bad-call :status ${status} :loaded ${driver.ok})\n`;
+      } else if (kind === 'diagnostics') {
+        const result = driver.reload(DIAGNOSTIC_SOURCE);
+        if (result.ok) throw new Error('harness: diagnostic source compiled clean');
+        out += '(reload :kind diagnostics :status 1 :loaded false)\n';
+      } else if (kind === 'bad-version') {
+        // Binary-only: text has no PACB container to corrupt and must not
+        // invent one. No text call is made.
+        out += '(reload :kind bad-version :skipped binary-only)\n';
+      } else if (kind === 'current') {
+        const result = driver.reload(doc);
+        if (!result.ok) throw new Error('harness: the original document did not reload clean');
+        out += '(reload :kind current :status 0 :loaded true)\n';
+      } else {
+        throw new Error(`harness: unknown reload kind ${kind}`);
+      }
+    } else if (step.kind === 'registry-mismatch') {
+      // Text has no PACT-vs-PACB registry gate; the binary leg owns this
+      // probe and the golden states the explicit skip.
+      out += `(registry-mismatch :mode ${step.mode} :skipped binary-only)\n`;
     }
   }
   return out;

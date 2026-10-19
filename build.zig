@@ -142,6 +142,32 @@ pub fn build(b: *std.Build) void {
     const wasm_rt_step = b.step("wasm-rt", "Build pacer-rt.wasm (playback runtime artifact)");
     wasm_rt_step.dependOn(&install_wasm_rt.step);
 
+    // The text object is a SECOND separate compilation, rooted at
+    // `native_text_bridge.zig` → actual `wasm_entry.zig`. It owns the real
+    // `drv_*` definitions and the anonymous score manifest; it imports no
+    // public `pacer` and no corpus manifest, and defines no plugin stub.
+    // `page_allocator` is the only production portability correction, so
+    // the shipped wasm artifact remains byte-identical on wasm32.
+    //
+    // Declared before its consumers below: the corpus runner links it so a
+    // lifecycle script can execute the ACTUAL text entry, and the parity
+    // executable/test root link both private objects.
+    const native_text_mod = b.createModule(.{
+        .root_source_file = b.path("src/native_text_bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_mod },
+        },
+    });
+    native_text_mod.addAnonymousImport("pacer_schema", .{
+        .root_source_file = b.path("schema/pacer.sjon"),
+    });
+    const native_text_object = b.addObject(.{
+        .name = "pacer-native-text",
+        .root_module = native_text_mod,
+    });
+
     // `zig build corpus` — the native half of the determinism gate:
     // walk corpus/<case>/, compile + eval each score, compare the
     // canonical rendering byte-equal against expected.sjon. Pass
@@ -160,6 +186,7 @@ pub fn build(b: *std.Build) void {
     corpus_mod.addAnonymousImport("pacer_schema", .{
         .root_source_file = b.path("schema/pacer.sjon"),
     });
+    corpus_mod.addObject(native_text_object);
     const corpus_runner = b.addExecutable(.{
         .name = "corpus-runner",
         .root_module = corpus_mod,
@@ -320,27 +347,6 @@ pub fn build(b: *std.Build) void {
         .name = "pacer-native-rt",
         .root_module = native_rt_mod,
     });
-    // The text object is a SECOND separate compilation, rooted at
-    // `native_text_bridge.zig` → actual `wasm_entry.zig`. It owns the real
-    // `drv_*` definitions and the anonymous score manifest; it imports no
-    // public `pacer` and no corpus manifest, and defines no plugin stub.
-    // `page_allocator` is the only production portability correction, so
-    // the shipped wasm artifact remains byte-identical on wasm32.
-    const native_text_mod = b.createModule(.{
-        .root_source_file = b.path("src/native_text_bridge.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "sjon", .module = sjon_mod },
-        },
-    });
-    native_text_mod.addAnonymousImport("pacer_schema", .{
-        .root_source_file = b.path("schema/pacer.sjon"),
-    });
-    const native_text_object = b.addObject(.{
-        .name = "pacer-native-text",
-        .root_module = native_text_mod,
-    });
     const probe_mod = b.createModule(.{
         .root_source_file = b.path("src/native_composition_probe.zig"),
         .target = target,
@@ -392,6 +398,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     parity_mod.addObject(native_rt_object);
+    parity_mod.addObject(native_text_object);
     const parity_exe = b.addExecutable(.{
         .name = "parity-runner",
         .root_module = parity_mod,
@@ -430,6 +437,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     parity_test_mod.addObject(native_rt_object);
+    parity_test_mod.addObject(native_text_object);
     const parity_tests = b.addTest(.{ .root_module = parity_test_mod });
     const run_parity_tests = b.addRunArtifact(parity_tests);
     test_step.dependOn(&run_parity_tests.step);

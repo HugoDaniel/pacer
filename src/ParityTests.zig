@@ -15,6 +15,7 @@ const std = @import("std");
 const pacer = @import("pacer");
 const runner = @import("parity_runner.zig");
 const NativeRt = @import("NativeRt.zig");
+const NativeText = @import("NativeText.zig");
 
 const t = std.testing;
 
@@ -246,4 +247,277 @@ test "byte comparison: a mutated production frame names its first byte; restore 
     // Restore the copy: the same comparator is green again.
     got[pacer.Writes.HEADER_LEN] ^= 0x01;
     try runner.expectSameBytes(&sink.writer, "mutation-check", 0, "writes", want, got);
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle per-path table — actual drv_load vs actual prt_load
+// ---------------------------------------------------------------------------
+
+const LIFECYCLE_TARGETS = [_]pacer.Compile.Target{
+    .{ .name = "alpha", .ncomp = 1, .registry = 0 },
+    .{ .name = "bravo", .ncomp = 1, .registry = 0 },
+    .{ .name = "lift", .ncomp = 1, .registry = 0 },
+};
+
+const LIFECYCLE_SOURCE: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4])
+    \\(control :id depth :target alpha :value 0.25)
+    \\(track :target alpha (key :at 0b :value 0.2) (key :at 4b :value 0.8))
+    \\(track :target bravo :expr (/ 1 (- beat 1)))
+;
+
+const LIFECYCLE_DIAGNOSTIC: []const u8 = "(transport :bpm 0)\n";
+const REASON_VERSION: u32 = 1;
+const REASON_REGISTRY_MISMATCH: u32 = 9;
+const NO_SLOT: u32 = 0xffff_ffff;
+
+fn lifecyclePact(a: std.mem.Allocator) ![]const u8 {
+    const buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(&LIFECYCLE_TARGETS));
+    return pacer.PactCodec.encodeTargets(&LIFECYCLE_TARGETS, buf);
+}
+
+fn lifecyclePack(a: std.mem.Allocator, result: *const pacer.Compile.CompileResult) ![]const u8 {
+    var diags: std.ArrayList(pacer.Compile.Diagnostic) = .empty;
+    try pacer.PacbEncode.preflight(a, result, &diags);
+    try t.expectEqual(@as(usize, 0), diags.items.len);
+    return pacer.PacbEncode.encode(a, result, &LIFECYCLE_TARGETS);
+}
+
+fn loadBoth(doc: []const u8, pacb: []const u8, pact: []const u8) !void {
+    try t.expect(pacb.len <= @as(usize, NativeRt.pacbCap()));
+    try t.expect(pact.len <= @as(usize, NativeRt.targetsCap()));
+    try t.expect(doc.len <= @as(usize, NativeText.docCap()));
+    @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
+    @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(@as(u32, 0), NativeRt.load(@intCast(pacb.len), @intCast(pact.len)));
+    @memcpy(NativeText.docPtr()[0..doc.len], doc);
+    @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(@as(u32, 0), NativeText.load(@intCast(doc.len), @intCast(pact.len)));
+}
+
+fn captureTextFrame(a: std.mem.Allocator, seconds: f64) ![]const u8 {
+    const len = NativeText.evalSeconds(seconds);
+    try t.expect(len > 0);
+    return a.dupe(u8, NativeText.writesPtr()[0..len]);
+}
+
+fn captureRtFrame(a: std.mem.Allocator, seconds: f64) ![]const u8 {
+    const len = NativeRt.evalSeconds(seconds);
+    try t.expect(len > 0);
+    return a.dupe(u8, NativeRt.writesPtr()[0..len]);
+}
+
+fn captureTextMeta(a: std.mem.Allocator) ![]const u8 {
+    return a.dupe(u8, NativeText.metaPtr()[0..NativeText.metaLen()]);
+}
+
+fn captureRtMeta(a: std.mem.Allocator) ![]const u8 {
+    return a.dupe(u8, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+}
+
+fn expectSameSlice(want: []const u8, got: []const u8) !void {
+    try t.expectEqualSlices(u8, want, got);
+}
+
+test "lifecycle: text bad-call preserves, diagnostics unloads, current resets" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var schema = try pacer.Schema.load(a);
+    defer schema.deinit();
+    var driver: pacer.Driver = undefined;
+    try driver.init(a, &schema, LIFECYCLE_SOURCE, &LIFECYCLE_TARGETS);
+    defer driver.deinit();
+    try t.expect(driver.result.ok());
+
+    const pacb = try lifecyclePack(a, &driver.result);
+    const pact = try lifecyclePact(a);
+
+    defer NativeRt.reset();
+    defer NativeText.reset();
+    NativeRt.reset();
+    NativeText.reset();
+    try loadBoth(LIFECYCLE_SOURCE, pacb, pact);
+
+    const text_frame = try captureTextFrame(a, 0.3);
+    const rt_frame = try captureRtFrame(a, 0.3);
+    try expectSameSlice(text_frame, rt_frame);
+    const text_meta = try captureTextMeta(a);
+    const rt_meta = try captureRtMeta(a);
+    try expectSameSlice(text_meta, rt_meta);
+
+    // bad-call: both status 2; everything preserved, including the
+    // binary reason word.
+    const reason_before = NativeRt.loadError();
+    try t.expectEqual(@as(u32, 2), NativeText.load(NativeText.docCap() + 1, 0));
+    try t.expectEqual(@as(u32, 2), NativeRt.load(NativeRt.pacbCap() + 1, 0));
+    try t.expectEqual(reason_before, NativeRt.loadError());
+    try expectSameSlice(text_frame, try captureTextFrame(a, 0.3));
+    try expectSameSlice(rt_frame, try captureRtFrame(a, 0.3));
+    try expectSameSlice(text_meta, try captureTextMeta(a));
+    try expectSameSlice(rt_meta, try captureRtMeta(a));
+    try t.expectEqual(@as(u32, 0), NativeText.exprFailures());
+    try t.expectEqual(@as(u32, 0), NativeRt.exprFailures());
+    try t.expect(NativeText.metaLen() > 0);
+
+    // diagnostics: text status 1, unloaded (meta 0, eval 0), real PACD.
+    // The binary arm is not packed or loaded here; its live score remains.
+    @memcpy(NativeText.docPtr()[0..LIFECYCLE_DIAGNOSTIC.len], LIFECYCLE_DIAGNOSTIC);
+    @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(
+        @as(u32, 1),
+        NativeText.load(@intCast(LIFECYCLE_DIAGNOSTIC.len), @intCast(pact.len)),
+    );
+    try t.expectEqual(@as(u32, 0), NativeText.metaLen());
+    try t.expectEqual(@as(u32, 0), NativeText.evalSeconds(0.3));
+    try t.expect(NativeText.diagLen() > pacer.Abi.DIAGS_HEADER_LEN);
+    const diag = pacer.Abi.decodeDiags(NativeText.diagPtr()[0..NativeText.diagLen()]) orelse
+        return error.TestUnexpectedResult;
+    try t.expect(diag.count > 0);
+    try expectSameSlice(rt_frame, try captureRtFrame(a, 0.3));
+    try expectSameSlice(rt_meta, try captureRtMeta(a));
+
+    // current: both reload valid A; state/counters reset.
+    @memcpy(NativeText.docPtr()[0..LIFECYCLE_SOURCE.len], LIFECYCLE_SOURCE);
+    @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(
+        @as(u32, 0),
+        NativeText.load(@intCast(LIFECYCLE_SOURCE.len), @intCast(pact.len)),
+    );
+    @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
+    @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(@as(u32, 0), NativeRt.load(@intCast(pacb.len), @intCast(pact.len)));
+    try t.expectEqual(@as(u32, 0), NativeText.exprFailures());
+    try t.expectEqual(@as(u32, 0), NativeRt.exprFailures());
+    try expectSameSlice(text_frame, try captureTextFrame(a, 0.3));
+    try expectSameSlice(rt_frame, try captureRtFrame(a, 0.3));
+    try expectSameSlice(text_meta, try captureTextMeta(a));
+    try expectSameSlice(rt_meta, try captureRtMeta(a));
+}
+
+test "lifecycle: refusals preserve held state/counters; registry mismatches are valid PACT" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var schema = try pacer.Schema.load(a);
+    defer schema.deinit();
+    var driver: pacer.Driver = undefined;
+    try driver.init(a, &schema, LIFECYCLE_SOURCE, &LIFECYCLE_TARGETS);
+    defer driver.deinit();
+    try t.expect(driver.result.ok());
+
+    const pacb = try lifecyclePack(a, &driver.result);
+    const pact = try lifecyclePact(a);
+
+    defer NativeRt.reset();
+    defer NativeText.reset();
+    NativeRt.reset();
+    NativeText.reset();
+    try loadBoth(LIFECYCLE_SOURCE, pacb, pact);
+
+    const initial_text_meta = try captureTextMeta(a);
+    const initial_rt_meta = try captureRtMeta(a);
+    // 0.6 s at 120 bpm is beat 1.2: no omission, counter stays 0.
+    const reset_text_frame = try captureTextFrame(a, 0.6);
+    const reset_rt_frame = try captureRtFrame(a, 0.6);
+    // 0.5 s is beat 1: the expr omits bravo and increments the counter.
+    const fail_text_frame = try captureTextFrame(a, 0.5);
+    const fail_rt_frame = try captureRtFrame(a, 0.5);
+    try expectSameSlice(fail_text_frame, fail_rt_frame);
+    try t.expectEqual(@as(u32, 1), NativeText.exprFailures());
+    try t.expectEqual(@as(u32, 1), NativeRt.exprFailures());
+
+    // Held document control + dynamic slot + BPM nudge.
+    const text_slot = NativeText.registerControl(2, 0, 1);
+    const rt_slot = NativeRt.registerControl(2, 0, 1);
+    try t.expect(text_slot != NO_SLOT);
+    try t.expectEqual(text_slot, rt_slot);
+    try t.expectEqual(@as(u32, 0), NativeText.setControl(text_slot, 1, 0, 0, 0));
+    try t.expectEqual(@as(u32, 0), NativeRt.setControl(rt_slot, 1, 0, 0, 0));
+    try t.expectEqual(@as(u32, 0), NativeText.setBpm(100));
+    try t.expectEqual(@as(u32, 0), NativeRt.setBpm(100));
+
+    // 0.6 s at 100 bpm is exactly beat 1: omit + counter increment. This
+    // witness shows held control, dynamic slot and the BPM effect.
+    const witness_text = try captureTextFrame(a, 0.6);
+    const witness_rt = try captureRtFrame(a, 0.6);
+    try expectSameSlice(witness_text, witness_rt);
+    try t.expectEqual(@as(u32, 2), NativeText.exprFailures());
+    try t.expectEqual(@as(u32, 2), NativeRt.exprFailures());
+    const held_rt_meta = try captureRtMeta(a);
+
+    // bad-version: binary status 1/reason 1, A live, state preserved;
+    // text is an explicit binary-only skip.
+    const corrupt = try a.dupe(u8, pacb);
+    std.mem.writeInt(u32, corrupt[4..8], 99, .little);
+    @memcpy(NativeRt.pacbPtr()[0..corrupt.len], corrupt);
+    try t.expectEqual(@as(u32, 1), NativeRt.load(@intCast(corrupt.len), @intCast(pact.len)));
+    try t.expectEqual(REASON_VERSION, NativeRt.loadError());
+    try t.expectEqual(@as(u32, 2), NativeRt.exprFailures());
+    try expectSameSlice(witness_rt, try captureRtFrame(a, 0.6));
+    try t.expectEqual(@as(u32, 3), NativeRt.exprFailures());
+    try expectSameSlice(held_rt_meta, try captureRtMeta(a));
+    @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
+    try expectSameSlice(witness_text, try captureTextFrame(a, 0.6));
+
+    // Structural mismatch: a valid ncomp change, status 1/reason 9.
+    var structural = try a.dupe(pacer.Compile.Target, &LIFECYCLE_TARGETS);
+    structural[0].ncomp = 2;
+    const structural_buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(structural));
+    const structural_pact = try pacer.PactCodec.encodeTargets(structural, structural_buf);
+    @memcpy(NativeRt.targetsPtr()[0..structural_pact.len], structural_pact);
+    const count_before_structural = NativeRt.exprFailures();
+    try t.expectEqual(
+        @as(u32, 1),
+        NativeRt.load(@intCast(pacb.len), @intCast(structural_pact.len)),
+    );
+    try t.expectEqual(REASON_REGISTRY_MISMATCH, NativeRt.loadError());
+    try t.expectEqual(count_before_structural, NativeRt.exprFailures());
+    try expectSameSlice(witness_rt, try captureRtFrame(a, 0.6));
+    try expectSameSlice(held_rt_meta, try captureRtMeta(a));
+    @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
+
+    // Name swap: only ordered names change; same lengths, shapes,
+    // registries and count — still a VALID canonical PACT, reason 9.
+    var swapped = try a.dupe(pacer.Compile.Target, &LIFECYCLE_TARGETS);
+    try t.expect(!std.mem.eql(u8, swapped[0].name, swapped[1].name));
+    try t.expectEqual(swapped[0].name.len, swapped[1].name.len);
+    try t.expectEqual(swapped[0].ncomp, swapped[1].ncomp);
+    try t.expectEqual(swapped[0].registry, swapped[1].registry);
+    std.mem.swap([]const u8, &swapped[0].name, &swapped[1].name);
+    const swapped_buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(swapped));
+    const swapped_pact = try pacer.PactCodec.encodeTargets(swapped, swapped_buf);
+    try t.expectEqual(structural_pact.len, swapped_pact.len);
+    @memcpy(NativeRt.targetsPtr()[0..swapped_pact.len], swapped_pact);
+    const count_before_swap = NativeRt.exprFailures();
+    try t.expectEqual(
+        @as(u32, 1),
+        NativeRt.load(@intCast(pacb.len), @intCast(swapped_pact.len)),
+    );
+    try t.expectEqual(REASON_REGISTRY_MISMATCH, NativeRt.loadError());
+    try t.expectEqual(count_before_swap, NativeRt.exprFailures());
+    try expectSameSlice(witness_rt, try captureRtFrame(a, 0.6));
+    try expectSameSlice(held_rt_meta, try captureRtMeta(a));
+    @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
+    try expectSameSlice(witness_text, try captureTextFrame(a, 0.6));
+
+    // current: both reset; the original document reproduces its initial
+    // frame/meta and counters are zero again.
+    @memcpy(NativeText.docPtr()[0..LIFECYCLE_SOURCE.len], LIFECYCLE_SOURCE);
+    @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(
+        @as(u32, 0),
+        NativeText.load(@intCast(LIFECYCLE_SOURCE.len), @intCast(pact.len)),
+    );
+    @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
+    @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(@as(u32, 0), NativeRt.load(@intCast(pacb.len), @intCast(pact.len)));
+    try t.expectEqual(@as(u32, 0), NativeText.exprFailures());
+    try t.expectEqual(@as(u32, 0), NativeRt.exprFailures());
+    try expectSameSlice(reset_text_frame, try captureTextFrame(a, 0.6));
+    try expectSameSlice(reset_rt_frame, try captureRtFrame(a, 0.6));
+    try expectSameSlice(initial_text_meta, try captureTextMeta(a));
+    try expectSameSlice(initial_rt_meta, try captureRtMeta(a));
 }

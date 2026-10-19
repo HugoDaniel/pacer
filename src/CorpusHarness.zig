@@ -17,6 +17,13 @@
 //! `Target` is intentionally neutral: `targetsAs` copies its three fields
 //! into each consumer's own target type (`Compile.Target` natively, the
 //! public `pacer.Compile.Target` in the parity executable).
+//!
+//! Lifecycle forms (binary03 T5b) are flat and schema-closed:
+//! `(reload :kind bad-call|diagnostics|bad-version|current)` and
+//! `(registry-mismatch :mode structural|name-swap)`. A missing, extra or
+//! unknown key/value is an SJON diagnostic with a span — no default kind
+//! or mode exists. A script containing either form executes its WHOLE
+//! step list through the actual production `drv_*` entry.
 
 const std = @import("std");
 const sjon = @import("sjon");
@@ -59,6 +66,44 @@ pub const Step = union(enum) {
     set_bpm: u64,
     /// Lift a dynamic slot for an unpinned target.
     register_control: struct { target_id: u16, registry: u8, ncomp: u8 },
+    /// Second-load lifecycle step. `kind` is schema-closed; the corpus
+    /// renderer and parity runner execute the per-path contract.
+    reload: ReloadKind,
+    /// Binary-only registry-identity probe; text records an explicit skip.
+    registry_mismatch: RegistryMismatchMode,
+};
+
+/// The four closed reload kinds. The schema's `reload-kind` member set is
+/// the only authority; this enum is the consumer's typed projection.
+pub const ReloadKind = enum {
+    bad_call,
+    diagnostics,
+    bad_version,
+    current,
+
+    pub fn spelling(self: ReloadKind) []const u8 {
+        return switch (self) {
+            .bad_call => "bad-call",
+            .diagnostics => "diagnostics",
+            .bad_version => "bad-version",
+            .current => "current",
+        };
+    }
+};
+
+/// The two closed registry-mismatch modes; both build a VALID canonical
+/// PACT and reach the registry-identity gate (status 1/reason 9), never a
+/// malformed-PACT status 2.
+pub const RegistryMismatchMode = enum {
+    structural,
+    name_swap,
+
+    pub fn spelling(self: RegistryMismatchMode) []const u8 {
+        return switch (self) {
+            .structural => "structural",
+            .name_swap => "name-swap",
+        };
+    }
 };
 
 pub const Harness = struct {
@@ -188,9 +233,33 @@ pub fn parse(
                 return null;
             };
             try steps.append(a, .{ .set_bpm = bits });
+        } else if (std.mem.eql(u8, hdr.head, "reload")) {
+            seen_script = true;
+            const kind_text = kvSymbol(tree, hdr.children, "kind").?;
+            const kind: ReloadKind = if (std.mem.eql(u8, kind_text, "bad-call"))
+                .bad_call
+            else if (std.mem.eql(u8, kind_text, "diagnostics"))
+                .diagnostics
+            else if (std.mem.eql(u8, kind_text, "bad-version"))
+                .bad_version
+            else if (std.mem.eql(u8, kind_text, "current"))
+                .current
+            else
+                unreachable; // the schema's closed member set refused it
+            try steps.append(a, .{ .reload = kind });
+        } else if (std.mem.eql(u8, hdr.head, "registry-mismatch")) {
+            seen_script = true;
+            const mode_text = kvSymbol(tree, hdr.children, "mode").?;
+            const mode: RegistryMismatchMode = if (std.mem.eql(u8, mode_text, "structural"))
+                .structural
+            else if (std.mem.eql(u8, mode_text, "name-swap"))
+                .name_swap
+            else
+                unreachable; // the schema's closed member set refused it
+            try steps.append(a, .{ .registry_mismatch = mode });
         } else {
             // `unknown_form` is an error, and an erroring document never
-            // reaches here — so the head is one of the six declared.
+            // reaches here — so the head is one of the eight declared.
             std.debug.assert(std.mem.eql(u8, hdr.head, "register-control"));
             seen_script = true;
             try steps.append(a, .{ .register_control = .{
@@ -278,6 +347,15 @@ fn kvNode(tree: *const Ast.Tree, children: []const NodeIndex, key: []const u8) ?
         if (std.mem.eql(u8, kv.key, key)) return kv.value;
     }
     return null;
+}
+
+/// The authored symbol text for a required `:key`. The schema pinned the
+/// key's presence and the value's symbol underlying; null is unreachable
+/// after validation.
+fn kvSymbol(tree: *const Ast.Tree, children: []const NodeIndex, key: []const u8) ?[]const u8 {
+    const node = kvNode(tree, children, key) orelse return null;
+    if (tree.tagOf(node) != .symbol) return null;
+    return tree.symbolText(node);
 }
 
 /// Exactly 16 hex digits (either case) → the raw u64 bit pattern.
@@ -410,6 +488,57 @@ test "corpus harness: the target ceiling accepts the cap and refuses one over" {
     const refused = try testParse(a, over_cap_src);
     try t_.expect(refused.harness == null);
     try t_.expect(std.mem.indexOf(u8, refused.report, "at most 1024 targets") != null);
+}
+
+test "corpus harness: lifecycle forms parse their closed kinds and modes" {
+    var arena = std.heap.ArenaAllocator.init(t_.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const h = (try testParse(a,
+        \\(target alpha :registry 0 :ncomp 1)
+        \\(target bravo :registry 0 :ncomp 1)
+        \\(times "0000000000000000")
+        \\(reload :kind bad-call)
+        \\(reload :kind diagnostics)
+        \\(reload :kind bad-version)
+        \\(reload :kind current)
+        \\(registry-mismatch :mode structural)
+        \\(registry-mismatch :mode name-swap)
+    )).harness.?;
+
+    try t_.expectEqual(@as(usize, 7), h.steps.len);
+    try t_.expectEqual(ReloadKind.bad_call, h.steps[1].reload);
+    try t_.expectEqual(ReloadKind.diagnostics, h.steps[2].reload);
+    try t_.expectEqual(ReloadKind.bad_version, h.steps[3].reload);
+    try t_.expectEqual(ReloadKind.current, h.steps[4].reload);
+    try t_.expectEqual(RegistryMismatchMode.structural, h.steps[5].registry_mismatch);
+    try t_.expectEqual(RegistryMismatchMode.name_swap, h.steps[6].registry_mismatch);
+}
+
+test "corpus harness: lifecycle kinds and modes are schema-closed" {
+    var arena = std.heap.ArenaAllocator.init(t_.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The schema owns missing/extra/unknown values, with spans; the parser
+    // never defaults or guesses one. Each source reaches the schema (which
+    // must first know the four `reload` / two `registry-mismatch` forms).
+    const cases = [_]struct { src: [:0]const u8, code: []const u8 }{
+        .{ .src = "(reload :kind nope)", .code = "not_member" },
+        .{ .src = "(reload)", .code = "missing_required_key" },
+        .{ .src = "(reload :kind current :extra 1)", .code = "unknown_key" },
+        .{ .src = "(registry-mismatch :mode nope)", .code = "not_member" },
+        .{ .src = "(registry-mismatch)", .code = "missing_required_key" },
+        .{ .src = "(registry-mismatch :mode structural :extra 1)", .code = "unknown_key" },
+    };
+    for (cases) |c| {
+        const full = try a.dupeZ(u8, try std.fmt.allocPrint(a, "(times \"0000000000000000\")\n{s}\n", .{c.src}));
+        const probe = try testParse(a, full);
+        try t_.expect(probe.harness == null);
+        try t_.expect(std.mem.indexOf(u8, probe.report, SCHEMA_REFUSED) != null);
+        try t_.expect(std.mem.indexOf(u8, probe.report, c.code) != null);
+    }
 }
 
 test "corpus harness: the schema refuses what the runner used to hand-check" {

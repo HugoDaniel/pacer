@@ -63,6 +63,22 @@
     :numeric (numeric-bounds :min 0 :max 65535 :integer true)
     :unit (unit-shape :reject true))
 
+  (value-kind :name reload-kind
+    :description "Lifecycle reload step kind. Closed: unknown, missing or extra keys and unknown values are harness errors, never defaults."
+    :underlying symbol
+    :members (member-set
+      (member :name bad-call :description "Over-cap document length through the actual text loader; the prior state must survive.")
+      (member :name diagnostics :description "The fixed harness-only diagnostic source; text unloads, binary is not packed.")
+      (member :name bad-version :description "Binary-only: a version-corrupted PACB copy is refused; the live score survives.")
+      (member :name current :description "Reload the original clean document/score, resetting runtime state.")))
+
+  (value-kind :name registry-mismatch-mode
+    :description "Registry-identity mismatch shape for the binary-only anchor. Both modes produce a valid canonical PACT."
+    :underlying symbol
+    :members (member-set
+      (member :name structural :description "A valid registry/arity/count relationship change.")
+      (member :name name-swap :description "Ordered names swapped, preserving lengths, shapes, registries and count.")))
+
   ; ---- the flat target join ----
   ; These come FIRST in a harness file; flat order is the target_id space
   ; and registry indices must be non-decreasing (the runner enforces both —
@@ -95,4 +111,16 @@
     :description "Lift a dynamic control slot for a target the score does not pin."
     (key :name target-id :type target-id-value)
     (key :name registry :type registry-index :optional true :default 0)
-    (key :name ncomp :type comp-count :optional true :default 1)))
+    (key :name ncomp :type comp-count :optional true :default 1))
+
+  ; ---- lifecycle script forms (binary03 T5b) ----
+  ; Flat, one key each, closed by the value kinds above. The native schema
+  ; and the JS harness reject a missing, extra or unknown key/value; no
+  ; default kind or mode exists.
+  (form :name reload
+    :description "A second-load lifecycle step. Text executes the actual drv_load; binary executes the corresponding prt_load or reports a binary-only skip."
+    (key :name kind :type reload-kind))
+
+  (form :name registry-mismatch
+    :description "Binary-only registry-identity probe against a valid canonical PACT. Text records an explicit binary-only skip."
+    (key :name mode :type registry-mismatch-mode)))

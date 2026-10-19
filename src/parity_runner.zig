@@ -76,6 +76,7 @@ const pacer = @import("pacer");
 const CorpusHarness = @import("corpus_harness");
 const sjon = @import("sjon");
 const NativeRt = @import("NativeRt.zig");
+const NativeText = @import("NativeText.zig");
 
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -92,6 +93,15 @@ pub const GENERATED_HEADER =
 
 /// The frozen production registration failure sentinel (`rt_entry.NO_SLOT`).
 const NO_SLOT: u32 = 0xffff_ffff;
+
+/// Frozen status-1 refusal reasons asserted by the lifecycle anchors.
+const REASON_VERSION: u32 = 1;
+const REASON_REGISTRY_MISMATCH: u32 = 9;
+
+/// The one fixed TEST-HARNESS-ONLY diagnostic source (binary03 T5b),
+/// semantically shared with `src/corpus_runner.zig` and
+/// `npm/pacer/test/harness.js`. Never packed or serialized.
+const DIAGNOSTIC_SOURCE: []const u8 = "(transport :bpm 0)\n";
 
 /// The production writes-zone capacity, derived from the evaluator's own
 /// frame-entry ceiling (the same constant `rt_entry` sizes its zone with).
@@ -332,7 +342,7 @@ fn runCase(
         .clean_non_pattern => {
             switch (try packCase(a, &driver.result, host_targets)) {
                 .encoded => |pacb| {
-                    try replayCase(a, out, name, &driver, harness, host_targets, pacb);
+                    try replayCase(a, out, name, &driver, harness, host_targets, doc, pacb);
                 },
                 .compile_refused => return error.CompileRefusedAfterOk,
                 .preflight_refused => |diags| {
@@ -382,8 +392,36 @@ pub fn packCase(
     return .{ .encoded = bytes };
 }
 
-/// Replay one clean non-pattern case through the actual production loader.
+/// Dispatch: ordinary scripts keep the original full cross-path replay;
+/// a lifecycle script follows the per-path contract with explicit
+/// divergence intervals and state oracles.
 fn replayCase(
+    a: Allocator,
+    out: *Io.Writer,
+    name: []const u8,
+    driver: *pacer.Driver,
+    harness: Harness,
+    host_targets: []const pacer.Compile.Target,
+    doc: []const u8,
+    pacb: []const u8,
+) !void {
+    if (hasLifecycle(harness.steps)) {
+        return replayLifecycleCase(a, out, name, driver, harness, host_targets, doc, pacb);
+    }
+    return replayOrdinaryCase(a, out, name, driver, harness, host_targets, pacb);
+}
+
+fn hasLifecycle(steps: []const Step) bool {
+    for (steps) |step| switch (step) {
+        .reload, .registry_mismatch => return true,
+        else => {},
+    };
+    return false;
+}
+
+/// Replay one clean non-pattern ordinary case through the actual
+/// production loader.
+fn replayOrdinaryCase(
     a: Allocator,
     out: *Io.Writer,
     name: []const u8,
@@ -515,12 +553,474 @@ fn replayCase(
             const got = NativeRt.registerControl(rc.target_id, rc.registry, rc.ncomp);
             try expectScalar(out, name, index, "register-control", want, got);
         },
+        // The dispatcher sends lifecycle scripts to `replayLifecycleCase`;
+        // an ordinary script can never carry these forms.
+        .reload, .registry_mismatch => unreachable,
     };
 
     // 6. Failure counters after the SAME sequence.
     const want_failures: u32 = @truncate(evaluator.expr_failures);
     const got_failures = NativeRt.exprFailures();
     try expectScalar(out, name, harness.steps.len, "expr-failures", want_failures, got_failures);
+}
+
+/// Per-path lifecycle replay (caller: `replayCase`). Both sessions start
+/// from the same valid A (text `drv_load`, binary `prt_load`), execute the
+/// whole script through the real entries, and follow the frozen table:
+///
+///   bad-call      text 2 + preserved;         binary 2 + preserved
+///   diagnostics   text 1 + unloaded/zero;     binary explicitly not packed
+///   bad-version   text binary-only skip;      binary 1/reason 1, A live
+///   current       both load A, state resets
+///   registry      text binary-only skip;      binary 1/reason 9, A live
+///
+/// Frames are compared across paths only while both are live and their
+/// authored state is equivalent. During the diagnostic divergence the
+/// text eval must be zero; the binary frame is compared to its own
+/// pre-divergence history. Every refusal snapshots counters/meta first,
+/// so preservation is asserted without a probe increment; after a
+/// bad-version refusal the next eval captures the counter immediately
+/// before the probe and asserts the probe itself increments it by one.
+fn replayLifecycleCase(
+    a: Allocator,
+    out: *Io.Writer,
+    name: []const u8,
+    driver: *pacer.Driver,
+    harness: Harness,
+    host_targets: []const pacer.Compile.Target,
+    doc: []const u8,
+    pacb: []const u8,
+) !void {
+    // The text session is a process singleton; tear it down on every exit.
+    defer NativeText.reset();
+    NativeText.reset();
+
+    // 1. Canonical 'PACT' of the ORIGINAL host join.
+    const pact_buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(host_targets));
+    const pact = try pacer.PactCodec.encodeTargets(host_targets, pact_buf);
+
+    // 2. Caps BEFORE copy/narrow.
+    const pacb_cap: usize = NativeRt.pacbCap();
+    const targets_cap: usize = NativeRt.targetsCap();
+    if (pacb.len > pacb_cap) {
+        try out.print("parity: {s}: PACB length {d} exceeds runtime cap {d}\n", .{ name, pacb.len, pacb_cap });
+        return error.PacbOverCap;
+    }
+    if (pact.len > targets_cap) {
+        try out.print("parity: {s}: PACT length {d} exceeds runtime cap {d}\n", .{ name, pact.len, targets_cap });
+        return error.PactOverCap;
+    }
+    if (doc.len > NativeText.docCap()) {
+        try out.print("parity: {s}: document length {d} exceeds text cap {d}\n", .{ name, doc.len, NativeText.docCap() });
+        return error.DocOverCap;
+    }
+
+    // 3. Both actual loads of valid A.
+    @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
+    @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
+    const bstatus = NativeRt.load(@intCast(pacb.len), @intCast(pact.len));
+    if (bstatus != 0) {
+        try out.print("parity: {s}: production load status {d} (reason {d}); expected 0\n", .{
+            name, bstatus, NativeRt.loadError(),
+        });
+        return error.ProductionLoadRefused;
+    }
+    @memcpy(NativeText.docPtr()[0..doc.len], doc);
+    @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+    const tstatus = NativeText.load(@intCast(doc.len), @intCast(pact.len));
+    if (tstatus != 0) {
+        try out.print("parity: {s}: text load status {d}; expected 0\n", .{ name, tstatus });
+        return error.TextLoadRefused;
+    }
+    var text_loaded = true;
+
+    // 4. Initial PACM: fresh text encode == embedded == runtime == text.
+    const fresh_buf = try a.alloc(u8, pacer.Abi.metaEncodedLen(&driver.result));
+    const fresh = try pacer.Abi.encodeMeta(&driver.result, fresh_buf);
+    const directory = pacer.Pacb.parseDirectory(pacb, null) catch |err| {
+        try out.print("parity: {s}: cannot parse own PACB directory: {s}\n", .{ name, @errorName(err) });
+        return error.PacbDirectoryInvalid;
+    };
+    const pacm_section = directory.find(.pacm) orelse {
+        try out.print("parity: {s}: encoded PACB has no PACM section\n", .{name});
+        return error.MissingPacm;
+    };
+    const embedded = pacb[@as(usize, pacm_section.off)..][0..@as(usize, pacm_section.len)];
+    try expectSameBytes(out, name, null, "meta fresh-vs-embedded", fresh, embedded);
+    const runtime_meta = try a.dupe(u8, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+    try expectSameBytes(out, name, null, "meta embedded-vs-runtime", embedded, runtime_meta);
+    const text_meta = try a.dupe(u8, NativeText.metaPtr()[0..NativeText.metaLen()]);
+    try expectSameBytes(out, name, null, "meta text-vs-runtime", runtime_meta, text_meta);
+
+    // Frames recorded since the last authored state change; a repeated
+    // clock must reproduce each path's own bytes (an explicit state
+    // oracle, not only cross-path equality).
+    const FrameRecord = struct { bits: u64, text: []const u8, binary: []const u8 };
+    var history: std.ArrayList(FrameRecord) = .empty;
+
+    // Set by bad-version: the NEXT eval captures counters before the
+    // probe and asserts the probe increments each by exactly one.
+    var probe_after_refusal = false;
+
+    for (harness.steps, 0..) |step, index| switch (step) {
+        .eval => |bits| {
+            const probe_t_before = if (probe_after_refusal) NativeText.exprFailures() else 0;
+            const probe_b_before = if (probe_after_refusal) NativeRt.exprFailures() else 0;
+
+            const t_len = NativeText.evalSeconds(@bitCast(bits));
+            const t_bytes: []const u8 = if (t_len == 0)
+                &.{}
+            else
+                try a.dupe(u8, NativeText.writesPtr()[0..t_len]);
+
+            const b_len = NativeRt.evalSeconds(@bitCast(bits));
+            if (b_len > MAX_WRITES) {
+                try out.print(
+                    "parity: {s}: step {d}: writes MISMATCH: actual {d} byte(s) exceeds writes capacity {d}\n",
+                    .{ name, index, b_len, MAX_WRITES },
+                );
+                return error.ParityMismatch;
+            }
+            const b_bytes: []const u8 = if (b_len == 0)
+                &.{}
+            else
+                try a.dupe(u8, NativeRt.writesPtr()[0..b_len]);
+
+            if (!text_loaded) {
+                // Intentional divergence: text is unloaded after the
+                // diagnostic reload. Its eval must be exactly zero; the
+                // binary is still live (it was never serialized).
+                if (t_len != 0) {
+                    try out.print(
+                        "parity: {s}: step {d}: text eval returned {d} byte(s) while unloaded\n",
+                        .{ name, index, t_len },
+                    );
+                    return error.ParityMismatch;
+                }
+                if (b_len == 0) {
+                    try out.print(
+                        "parity: {s}: step {d}: binary lost its live frame during text divergence\n",
+                        .{ name, index },
+                    );
+                    return error.ParityMismatch;
+                }
+            } else {
+                if ((t_len == 0) != (b_len == 0)) {
+                    try out.print(
+                        "parity: {s}: step {d}: writes presence mismatch: text {d} byte(s), binary {d} byte(s)\n",
+                        .{ name, index, t_len, b_len },
+                    );
+                    return error.ParityMismatch;
+                }
+                if (t_len != 0) {
+                    try expectSameBytes(out, name, index, "writes", t_bytes, b_bytes);
+                }
+            }
+
+            // Repeated-clock state oracle, per path (the path that is
+            // live): frames within one authored state must be identical.
+            var matched = false;
+            for (history.items) |record| {
+                if (record.bits != bits) continue;
+                if (text_loaded) {
+                    try expectSameBytes(out, name, index, "text repeat", record.text, t_bytes);
+                }
+                try expectSameBytes(out, name, index, "binary repeat", record.binary, b_bytes);
+                matched = true;
+                break;
+            }
+            if (!matched) {
+                try history.append(a, .{ .bits = bits, .text = t_bytes, .binary = b_bytes });
+            }
+
+            if (probe_after_refusal) {
+                const t_after = NativeText.exprFailures();
+                const b_after = NativeRt.exprFailures();
+                if (t_after != probe_t_before + 1 or b_after != probe_b_before + 1) {
+                    try out.print(
+                        "parity: {s}: step {d}: probe counters: text {d}->{d}, binary {d}->{d}; each expected +1 from its captured pre-probe value\n",
+                        .{ name, index, probe_t_before, t_after, probe_b_before, b_after },
+                    );
+                    return error.ParityMismatch;
+                }
+                probe_after_refusal = false;
+            }
+        },
+        .set_control => |sc| {
+            const value: [4]f32 = .{
+                @bitCast(sc.bits[0]), @bitCast(sc.bits[1]), @bitCast(sc.bits[2]), @bitCast(sc.bits[3]),
+            };
+            const t_ok = NativeText.setControl(sc.index, value[0], value[1], value[2], value[3]) == 0;
+            const b_ok = NativeRt.setControl(sc.index, value[0], value[1], value[2], value[3]);
+            if (text_loaded) {
+                try expectScalar(out, name, index, "set-control", if (t_ok) 0 else 1, b_ok);
+            } else if (t_ok) {
+                try out.print("parity: {s}: step {d}: unloaded text accepted set-control\n", .{ name, index });
+                return error.ParityMismatch;
+            }
+            history.clearRetainingCapacity();
+        },
+        .clear_control => |control_index| {
+            const t_ok = NativeText.clearControl(control_index) == 0;
+            const b_ok = NativeRt.clearControl(control_index);
+            if (text_loaded) {
+                try expectScalar(out, name, index, "clear-control", if (t_ok) 0 else 1, b_ok);
+            } else if (t_ok) {
+                try out.print("parity: {s}: step {d}: unloaded text accepted clear-control\n", .{ name, index });
+                return error.ParityMismatch;
+            }
+            history.clearRetainingCapacity();
+        },
+        .set_bpm => |bits| {
+            const t_ok = NativeText.setBpm(@bitCast(bits)) == 0;
+            const b_ok = NativeRt.setBpm(@bitCast(bits));
+            if (text_loaded) {
+                try expectScalar(out, name, index, "set-bpm", if (t_ok) 0 else 1, b_ok);
+            } else if (t_ok) {
+                try out.print("parity: {s}: step {d}: unloaded text accepted set-bpm\n", .{ name, index });
+                return error.ParityMismatch;
+            }
+            history.clearRetainingCapacity();
+        },
+        .register_control => |rc| {
+            const t_slot = NativeText.registerControl(rc.target_id, rc.registry, rc.ncomp);
+            const b_slot = NativeRt.registerControl(rc.target_id, rc.registry, rc.ncomp);
+            if (text_loaded) {
+                try expectScalar(out, name, index, "register-control", t_slot, b_slot);
+            } else if (t_slot != NO_SLOT) {
+                try out.print("parity: {s}: step {d}: unloaded text registered a slot\n", .{ name, index });
+                return error.ParityMismatch;
+            }
+            history.clearRetainingCapacity();
+        },
+        .reload => |kind| switch (kind) {
+            .bad_call => {
+                // Both paths: an over-cap length is validated BEFORE any
+                // teardown. Status 2, outputs/state/reason preserved.
+                const t_meta_before: []const u8 = if (text_loaded)
+                    try a.dupe(u8, NativeText.metaPtr()[0..NativeText.metaLen()])
+                else
+                    &.{};
+                const b_meta_before = try a.dupe(u8, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+                const t_counter_before = NativeText.exprFailures();
+                const b_counter_before = NativeRt.exprFailures();
+                const reason_before = NativeRt.loadError();
+
+                const ts = NativeText.load(NativeText.docCap() + 1, 0);
+                const bs = NativeRt.load(NativeRt.pacbCap() + 1, 0);
+                if (ts != 2 or bs != 2) {
+                    try out.print(
+                        "parity: {s}: step {d}: bad-call statuses text {d}, binary {d}; expected 2/2\n",
+                        .{ name, index, ts, bs },
+                    );
+                    return error.ParityMismatch;
+                }
+                if (NativeRt.loadError() != reason_before) {
+                    try out.print(
+                        "parity: {s}: step {d}: bad-call changed the load-error word {d}->{d}\n",
+                        .{ name, index, reason_before, NativeRt.loadError() },
+                    );
+                    return error.ParityMismatch;
+                }
+                if (NativeText.exprFailures() != t_counter_before or
+                    NativeRt.exprFailures() != b_counter_before)
+                {
+                    try out.print("parity: {s}: step {d}: bad-call changed an expr-failure counter\n", .{ name, index });
+                    return error.ParityMismatch;
+                }
+                if (text_loaded) {
+                    try expectSameBytes(out, name, index, "text meta after bad-call", t_meta_before, NativeText.metaPtr()[0..NativeText.metaLen()]);
+                }
+                try expectSameBytes(out, name, index, "binary meta after bad-call", b_meta_before, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+            },
+            .diagnostics => {
+                // Text executes the fixed diagnostic source: status 1,
+                // previous score unloaded, meta 0, subsequent eval 0. The
+                // binary arm is EXPLICITLY not packed — no preflight, no
+                // encode, no PACB is invented or loaded.
+                const b_meta_before = try a.dupe(u8, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+                const b_counter_before = NativeRt.exprFailures();
+                if (DIAGNOSTIC_SOURCE.len > NativeText.docCap()) {
+                    try out.print("parity: {s}: step {d}: diagnostic source exceeds the text cap\n", .{ name, index });
+                    return error.ParityMismatch;
+                }
+                @memcpy(NativeText.docPtr()[0..DIAGNOSTIC_SOURCE.len], DIAGNOSTIC_SOURCE);
+                @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+                const ts = NativeText.load(
+                    @intCast(DIAGNOSTIC_SOURCE.len),
+                    @intCast(pact.len),
+                );
+                if (ts != 1) {
+                    try out.print("parity: {s}: step {d}: diagnostic text load status {d}; expected 1\n", .{ name, index, ts });
+                    return error.ParityMismatch;
+                }
+                if (NativeText.metaLen() != 0) {
+                    try out.print("parity: {s}: step {d}: diagnostic text load left meta {d} byte(s)\n", .{ name, index, NativeText.metaLen() });
+                    return error.ParityMismatch;
+                }
+                if (NativeText.diagLen() <= pacer.Abi.DIAGS_HEADER_LEN) {
+                    try out.print("parity: {s}: step {d}: diagnostic text load produced no PACD records\n", .{ name, index });
+                    return error.ParityMismatch;
+                }
+                text_loaded = false;
+                try expectSameBytes(out, name, index, "binary meta after diagnostics skip", b_meta_before, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+                try expectScalar(out, name, index, "binary expr-failures after diagnostics skip", b_counter_before, NativeRt.exprFailures());
+            },
+            .bad_version => {
+                if (!text_loaded) {
+                    try out.print("parity: {s}: step {d}: bad-version needs the restored text session\n", .{ name, index });
+                    return error.ParityMismatch;
+                }
+                // Text is an explicit binary-only skip: no text call.
+                const b_meta_before = try a.dupe(u8, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+                const b_counter_before = NativeRt.exprFailures();
+                const t_counter_before = NativeText.exprFailures();
+
+                const corrupt = try a.dupe(u8, pacb);
+                if (corrupt.len < 8) return error.MalformedPacbFixture;
+                std.mem.writeInt(u32, corrupt[4..8], 99, .little);
+                @memcpy(NativeRt.pacbPtr()[0..corrupt.len], corrupt);
+                const bs = NativeRt.load(@intCast(corrupt.len), @intCast(pact.len));
+                if (bs != 1) {
+                    try out.print("parity: {s}: step {d}: bad-version status {d}; expected 1\n", .{ name, index, bs });
+                    return error.ParityMismatch;
+                }
+                if (NativeRt.loadError() != REASON_VERSION) {
+                    try out.print(
+                        "parity: {s}: step {d}: bad-version reason {d}; expected {d}\n",
+                        .{ name, index, NativeRt.loadError(), REASON_VERSION },
+                    );
+                    return error.ParityMismatch;
+                }
+                if (NativeText.exprFailures() != t_counter_before or
+                    NativeRt.exprFailures() != b_counter_before)
+                {
+                    try out.print("parity: {s}: step {d}: bad-version changed an expr-failure counter\n", .{ name, index });
+                    return error.ParityMismatch;
+                }
+                try expectSameBytes(out, name, index, "binary meta after bad-version", b_meta_before, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+                // Restore valid A bytes immediately: the live score was
+                // never replaced, and ordinary replay needs a clean zone.
+                @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
+                probe_after_refusal = true;
+            },
+            .current => {
+                if (probe_after_refusal) {
+                    try out.print("parity: {s}: step {d}: current arrived before the bad-version counter probe\n", .{ name, index });
+                    return error.ParityMismatch;
+                }
+                // Successful reload of the ORIGINAL clean document/score on
+                // both paths: state, counters and metadata reset.
+                @memcpy(NativeText.docPtr()[0..doc.len], doc);
+                @memcpy(NativeText.targetsPtr()[0..pact.len], pact);
+                const ts = NativeText.load(@intCast(doc.len), @intCast(pact.len));
+                if (ts != 0) {
+                    try out.print("parity: {s}: step {d}: text current status {d}; expected 0\n", .{ name, index, ts });
+                    return error.ParityMismatch;
+                }
+                text_loaded = true;
+                @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
+                @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
+                const bs = NativeRt.load(@intCast(pacb.len), @intCast(pact.len));
+                if (bs != 0) {
+                    try out.print("parity: {s}: step {d}: binary current status {d}; expected 0\n", .{ name, index, bs });
+                    return error.ParityMismatch;
+                }
+                try expectScalar(out, name, index, "text expr-failures after current", 0, NativeText.exprFailures());
+                try expectScalar(out, name, index, "binary expr-failures after current", 0, NativeRt.exprFailures());
+                try expectSameBytes(out, name, index, "text meta after current", fresh, NativeText.metaPtr()[0..NativeText.metaLen()]);
+                try expectSameBytes(out, name, index, "binary meta after current", fresh, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+                history.clearRetainingCapacity();
+                probe_after_refusal = false;
+            },
+        },
+        .registry_mismatch => |mode| {
+            // Text is an explicit binary-only skip; the binary loads valid
+            // A against a VALID CANONICAL but mismatching PACT. Malformed
+            // PACT would be status 2 and is never this case.
+            if (!text_loaded) {
+                try out.print("parity: {s}: step {d}: registry probe needs the live text session\n", .{ name, index });
+                return error.ParityMismatch;
+            }
+            const t_meta_before = try a.dupe(u8, NativeText.metaPtr()[0..NativeText.metaLen()]);
+            const t_counter_before = NativeText.exprFailures();
+            const b_meta_before = try a.dupe(u8, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+            const b_counter_before = NativeRt.exprFailures();
+
+            const mutated = try a.alloc(pacer.Compile.Target, host_targets.len);
+            @memcpy(mutated, host_targets);
+            switch (mode) {
+                .structural => {
+                    if (mutated.len == 0) {
+                        try out.print("parity: {s}: step {d}: structural mismatch needs a nonempty host join\n", .{ name, index });
+                        return error.ParityMismatch;
+                    }
+                    // A valid registry/arity change; the PACT stays
+                    // canonical (the codec never sees a malformed shape).
+                    mutated[0].ncomp = if (mutated[0].ncomp < 4) mutated[0].ncomp + 1 else mutated[0].ncomp - 1;
+                },
+                .name_swap => {
+                    if (mutated.len < 2) {
+                        try out.print("parity: {s}: step {d}: name-swap needs two host targets\n", .{ name, index });
+                        return error.ParityMismatch;
+                    }
+                    if (!std.mem.eql(u8, mutated[0].name, mutated[1].name) and
+                        mutated[0].ncomp == mutated[1].ncomp and
+                        mutated[0].registry == mutated[1].registry and
+                        mutated[0].name.len == mutated[1].name.len)
+                    {
+                        std.mem.swap([]const u8, &mutated[0].name, &mutated[1].name);
+                    } else {
+                        try out.print("parity: {s}: step {d}: name-swap host join is not two distinct same-shaped names\n", .{ name, index });
+                        return error.ParityMismatch;
+                    }
+                },
+            }
+
+            const mutated_buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(mutated));
+            const mutated_pact = try pacer.PactCodec.encodeTargets(mutated, mutated_buf);
+            if (mutated_pact.len > targets_cap) {
+                try out.print("parity: {s}: step {d}: mismatching PACT exceeds the runtime cap\n", .{ name, index });
+                return error.PactOverCap;
+            }
+            @memcpy(NativeRt.targetsPtr()[0..mutated_pact.len], mutated_pact);
+            const bs = NativeRt.load(@intCast(pacb.len), @intCast(mutated_pact.len));
+            if (bs != 1) {
+                try out.print(
+                    "parity: {s}: step {d}: registry mismatch status {d}; expected 1 (not malformed status 2)\n",
+                    .{ name, index, bs },
+                );
+                return error.ParityMismatch;
+            }
+            if (NativeRt.loadError() != REASON_REGISTRY_MISMATCH) {
+                try out.print(
+                    "parity: {s}: step {d}: registry mismatch reason {d}; expected {d}\n",
+                    .{ name, index, NativeRt.loadError(), REASON_REGISTRY_MISMATCH },
+                );
+                return error.ParityMismatch;
+            }
+            if (NativeText.exprFailures() != t_counter_before or
+                NativeRt.exprFailures() != b_counter_before)
+            {
+                try out.print("parity: {s}: step {d}: registry mismatch changed an expr-failure counter\n", .{ name, index });
+                return error.ParityMismatch;
+            }
+            try expectSameBytes(out, name, index, "text meta after registry skip", t_meta_before, NativeText.metaPtr()[0..NativeText.metaLen()]);
+            try expectSameBytes(out, name, index, "binary meta after registry refusal", b_meta_before, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
+            // Restore the original join bytes before ordinary replay.
+            @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
+        },
+    };
+
+    if (probe_after_refusal) {
+        try out.print("parity: {s}: bad-version counter probe had no following eval\n", .{name});
+        return error.ParityMismatch;
+    }
+    if (!text_loaded) {
+        try out.print("parity: {s}: lifecycle script ended with the text session unloaded\n", .{name});
+        return error.ParityMismatch;
+    }
+    try expectScalar(out, name, harness.steps.len, "final expr-failures", NativeText.exprFailures(), NativeRt.exprFailures());
 }
 
 /// Compare complete byte surfaces. The report names the case, script step,
