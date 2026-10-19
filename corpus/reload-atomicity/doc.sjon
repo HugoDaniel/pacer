@@ -1,0 +1,21 @@
+; reload-atomicity — the text-first lifecycle anchor (binary03 T5b).
+;
+; One clean constant-tempo score with a document control (`depth` into the
+; audio registry's `gain`), a dynamic-control target (`lift`, unpinned), a
+; keyed ramp (`radius`), a control expression (`blend`), and a runtime
+; omission that is a pure function of time: `spike` divides by zero at
+; exactly beat 1 (0.5 s at 120 bpm; 0.6 s at the live 100 bpm nudge).
+(transport :bpm 120 :meter [4 4])
+
+(control :id depth :target gain :min 0 :max 1 :value 0.25)
+(control :id sway :value 0.5)
+
+(track :target radius
+  (key :at 0b :value 0.2)
+  (key :at 4b :value 0.8))
+
+(track :target blend
+  :expr (* depth sway))
+
+(track :target spike
+  :expr (/ 1 (- beat 1)))

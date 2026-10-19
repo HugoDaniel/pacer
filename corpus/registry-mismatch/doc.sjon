@@ -1,0 +1,18 @@
+; registry-mismatch — the binary-only registry-identity anchor (T5b).
+;
+; A nonempty host join with two distinct, same-shaped names (`alpha`,
+; `bravo`: both 5 bytes, ncomp 1, registry 0). Each has a keyed track so
+; the frames show the join is actually exercised. The harness probes a
+; structural change (a valid arity change) and a name swap (ordered names
+; only); both PACTs are VALID canonical bytes, so the binary gate is the
+; semantic registry-identity refusal (status 1/reason 9), never the
+; malformed-PACT status 2. The text path records explicit skips.
+(transport :bpm 120 :meter [4 4])
+
+(track :target alpha
+  (key :at 0b :value 0.1)
+  (key :at 4b :value 0.9))
+
+(track :target bravo
+  (key :at 0b :value 0.8)
+  (key :at 4b :value 0.2))

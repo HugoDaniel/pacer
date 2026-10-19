@@ -1,0 +1,42 @@
+; reload-atomicity harness — per-path second-load truth (binary03 T5b).
+;
+; Authored text-first. Tool-derived times (see the T5b report/log):
+;   0.3 s at 100 bpm = 90090 ticks = beat 0.5 exactly
+;   0.6 s at 100 bpm = 180180 ticks = beat 1 exactly (spike omits)
+;   0.6 s at 120 bpm = 216216 ticks = beat 1.2 (no omission)
+;
+; The initial state is re-applied after `current` so the bad-version
+; refusal has held document/dynamic controls, a live BPM nudge and a
+; nonzero runtime-failure counter to preserve. The repeated 0.6 s clock
+; after the refusal is the probe whose counter is captured immediately
+; before it (each eval increments it once again).
+(target radius :registry 0)  ; id 0 — keyed ramp
+(target blend :registry 0)   ; id 1 — expr track (depth * sway)
+(target spike :registry 0)   ; id 2 — expr track that omits at beat 1
+(target lift :registry 0)    ; id 3 — unpinned dynamic-control target
+(target gain :registry 1)    ; id 4 — document control depth's target
+(times "0000000000000000")
+
+(register-control :target-id 3 :registry 0 :ncomp 1)  ; dynamic slot 2
+(set-control :index 2 :value ["3F800000" "00000000" "00000000" "00000000"])
+(set-control :index 0 :value ["3F000000" "00000000" "00000000" "00000000"])
+(set-bpm :bpm "4059000000000000")                     ; 100 bpm, live
+(times "0000000000000000")                            ; held-state witness
+(times "3FD3333333333333")                            ; 0.3 s at 100 bpm
+
+(reload :kind bad-call)                               ; status 2, state kept
+(times "3FD3333333333333")                            ; repeated: unchanged
+(reload :kind diagnostics)                            ; text unload; binary not packed
+(times "0000000000000000")                            ; text zero / binary live
+(reload :kind current)                                ; both reset to the document
+(times "0000000000000000")
+
+(register-control :target-id 3 :registry 0 :ncomp 1)  ; re-apply held state
+(set-control :index 2 :value ["3F800000" "00000000" "00000000" "00000000"])
+(set-control :index 0 :value ["3F000000" "00000000" "00000000" "00000000"])
+(set-bpm :bpm "4059000000000000")
+(times "3FE3333333333333")                            ; 0.6 s at 100 bpm: omission (counter 1)
+(reload :kind bad-version)                            ; binary 1/reason 1, A live; text skip
+(times "3FE3333333333333")                            ; probe: same frame, counter 2
+(reload :kind current)                                ; reset both
+(times "3FE3333333333333")                            ; 120 bpm again: no omission

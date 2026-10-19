@@ -1,0 +1,16 @@
+; registry-mismatch harness — valid canonical PACT, wrong identity.
+;
+; Structural changes alpha's ncomp 1 -> 2 (arity/count relationship) and
+; name-swap exchanges only the ordered names alpha <-> bravo; both keep
+; the PACT structurally valid and the same encoded length. The original
+; join is restored before each ordinary frame below. Text records both
+; probes as explicit binary-only skips.
+(target alpha :registry 0 :ncomp 1)  ; id 0 — 5-byte name
+(target bravo :registry 0 :ncomp 1)  ; id 1 — 5-byte name, same shape
+(times "0000000000000000")           ; 0.0 s, original join
+(times "3FE0000000000000")           ; 0.5 s = beat 1
+(registry-mismatch :mode structural) ; binary 1/reason 9, A live
+(times "3FE0000000000000")           ; repeated: unchanged
+(registry-mismatch :mode name-swap)  ; binary 1/reason 9, A live
+(times "3FE0000000000000")           ; repeated: unchanged
+(times "3FF0000000000000")           ; 1.0 s = beat 2, ordinary replay
