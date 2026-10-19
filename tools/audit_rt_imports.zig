@@ -23,9 +23,11 @@
 //!       before the scan) — closing alias and `@field` laundering at the
 //!       one crossing.
 //!   (c) `.zig` imports resolve against the pacer allowlist (the frozen
-//!       02:234-236 twelve); anything else fails by absence — including
-//!       relative-`..` escapes, which normalize to a path that is simply
-//!       not on the list. Named (non-`.zig`) column-0 imports other than
+//!       02:234-236 twelve); anything else fails by absence. A relative
+//!       `..` that walks ABOVE the leg root is refused BY NAME — never
+//!       collapsed onto an inside-root path (a collapsed `../Writes.zig`
+//!       would otherwise read the allowlisted `Writes.zig` while naming
+//!       an outside-root file). Named (non-`.zig`) column-0 imports other than
 //!       `std`/`builtin` fail the same way — a column-0
 //!       `@import("pacer_schema")` would embed the text schema in the
 //!       runtime.
@@ -187,6 +189,8 @@ pub const Finding = struct {
         direct_sjon,
         /// A `.zig` import resolved outside the leg's allowlist.
         forbidden_zig,
+        /// A relative import whose `..` walks above the leg root.
+        escape_above_root,
         /// A column-0 named import outside the leg's allowed set.
         named_import,
         /// RtSjon.zig broke the strict alias grammar.
@@ -281,7 +285,23 @@ pub fn audit(
                     }
                     continue;
                 }
-                const resolved = try normalizeJoin(arena, dir, raw);
+                const resolved = normalizeJoin(arena, dir, raw) catch |err| switch (err) {
+                    error.TraversalAboveRoot => {
+                        const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ node.path, raw });
+                        if (!pacer_reported.contains(key)) {
+                            try pacer_reported.put(arena, key, {});
+                            try findings.append(arena, .{
+                                .kind = .escape_above_root,
+                                .path = raw,
+                                .where = try where(arena, "src", node.path, line_no),
+                                .detail = raw,
+                                .chain = try chain(arena, pacer_nodes.items, i),
+                            });
+                        }
+                        continue;
+                    },
+                    error.OutOfMemory => return error.OutOfMemory,
+                };
                 if (allowedEntry(&PACER_ALLOWED, resolved) == null) {
                     if (!pacer_reported.contains(resolved)) {
                         try pacer_reported.put(arena, resolved, {});
@@ -372,7 +392,23 @@ pub fn audit(
                     }
                     continue;
                 }
-                const resolved = try normalizeJoin(arena, dir, raw);
+                const resolved = normalizeJoin(arena, dir, raw) catch |err| switch (err) {
+                    error.TraversalAboveRoot => {
+                        const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ node.path, raw });
+                        if (!sjon_reported.contains(key)) {
+                            try sjon_reported.put(arena, key, {});
+                            try findings.append(arena, .{
+                                .kind = .escape_above_root,
+                                .path = raw,
+                                .where = try where(arena, "sjon", node.path, line_no),
+                                .detail = raw,
+                                .chain = try chain(arena, sjon_nodes.items, j),
+                            });
+                        }
+                        continue;
+                    },
+                    error.OutOfMemory => return error.OutOfMemory,
+                };
                 if (allowedEntry(&SJON_ALLOWED, resolved) == null) {
                     if (!sjon_reported.contains(resolved)) {
                         try sjon_reported.put(arena, resolved, {});
@@ -438,6 +474,10 @@ pub fn render(out: *std.Io.Writer, report: Report) !void {
             .forbidden_zig => try out.print(
                 "  x {s}\n      {s}\n      reached as `{s}` via {s}\n\n",
                 .{ f.path, whyForbidden(f.path), f.detail, f.chain },
+            ),
+            .escape_above_root => try out.print(
+                "  x relative import `{s}` escapes above the leg root\n      {s}\n      {s}\n\n",
+                .{ f.detail, f.where, f.chain },
             ),
             .named_import => try out.print(
                 "  x column-0 named import `{s}` is not std/builtin (or build_options on the SJON leg)\n      {s}\n      {s}\n\n",
@@ -721,10 +761,12 @@ fn collectImports(gpa: Allocator, line: []const u8, out: *std.ArrayList([]const 
 
 /// Join `base_dir` (root-relative, possibly "") with an `@import` argument
 /// `rel`, collapsing `.` / `..` / empty segments. Returns an owned,
-/// root-relative, forward-slashed path. A `..` above the root collapses
-/// away — the resolved path then simply isn't on the allowlist (relative
-/// escapes are forbidden by absence).
-fn normalizeJoin(gpa: Allocator, base_dir: []const u8, rel: []const u8) Allocator.Error![]u8 {
+/// root-relative, forward-slashed path. A `..` with no base component left
+/// is `error.TraversalAboveRoot`: it names a path OUTSIDE the leg root, so
+/// collapsing it onto an inside-root file (`../Writes.zig` → `Writes.zig`)
+/// would audit a different file than the import names. Escapes that stay
+/// below the root resolve normally and the allowlist decides them.
+fn normalizeJoin(gpa: Allocator, base_dir: []const u8, rel: []const u8) (Allocator.Error || error{TraversalAboveRoot})![]u8 {
     var parts: std.ArrayList([]const u8) = .empty;
     defer parts.deinit(gpa);
 
@@ -737,7 +779,8 @@ fn normalizeJoin(gpa: Allocator, base_dir: []const u8, rel: []const u8) Allocato
     while (it_rel.next()) |seg| {
         if (seg.len == 0 or std.mem.eql(u8, seg, ".")) continue;
         if (std.mem.eql(u8, seg, "..")) {
-            if (parts.items.len > 0) _ = parts.pop();
+            if (parts.items.len == 0) return error.TraversalAboveRoot;
+            _ = parts.pop();
             continue;
         }
         try parts.append(gpa, seg);
@@ -780,19 +823,36 @@ test "collectImports: every arg, unfiltered by extension" {
     try testing.expectEqualStrings("std", out.items[2]);
 }
 
-test "normalizeJoin: collapses . and .. against the importing dir" {
+test "normalizeJoin: resolves within the leg, refuses traversal above it" {
     const a = testing.allocator;
     const cases = [_]struct { base: []const u8, rel: []const u8, want: []const u8 }{
         .{ .base = "", .rel = "Ast.zig", .want = "Ast.zig" },
         .{ .base = "plugins", .rel = "../Ast.zig", .want = "Ast.zig" },
         .{ .base = "plugins", .rel = "./pattern.zig", .want = "plugins/pattern.zig" },
-        .{ .base = "", .rel = "../Parser.zig", .want = "Parser.zig" }, // escape collapses; absence forbids
-        .{ .base = "a/b", .rel = "../../x.zig", .want = "x.zig" },
+        .{ .base = "a/b", .rel = "../x.zig", .want = "a/x.zig" }, // one level, still inside
+        .{ .base = "a/b", .rel = "../../x.zig", .want = "x.zig" }, // exactly the root, still inside
     };
     for (cases) |c| {
         const got = try normalizeJoin(a, c.base, c.rel);
         defer a.free(got);
         try testing.expectEqualStrings(c.want, got);
+    }
+
+    // Escapes are refused, never collapsed onto an inside-root path — even
+    // when the escaped basename IS allowlisted (the real collision shape).
+    const escapes = [_]struct { base: []const u8, rel: []const u8 }{
+        .{ .base = "", .rel = "../Parser.zig" },
+        .{ .base = "", .rel = "../Writes.zig" },
+        .{ .base = "plugins", .rel = "../../Ast.zig" },
+        .{ .base = "a/b", .rel = "../../../x.zig" },
+    };
+    for (escapes) |c| {
+        if (normalizeJoin(a, c.base, c.rel)) |got| {
+            a.free(got);
+            return error.TestExpectedError;
+        } else |err| {
+            try testing.expectEqual(error.TraversalAboveRoot, err);
+        }
     }
 }
 
@@ -887,12 +947,21 @@ const Fixture = struct {
     /// Every needle must appear in some finding (path/detail) or stale
     /// list — the tool NAMES the shape; the test carries no list oracle.
     fail_needles: []const []const u8 = &.{},
+    /// The rendered report must carry these words too, so a generic
+    /// "forbidden" hit cannot stand in for a NAMED refusal.
+    fail_render_needles: []const []const u8 = &.{},
 };
 
 const FIXTURES = [_]Fixture{
     .{ .name = "direct-sjon", .want_ok = false, .fail_needles = &.{ "sjon", "TrackTable.zig" } },
     .{ .name = "rtsjon-extra-row", .want_ok = false, .fail_needles = &.{"sjon.Parser"} },
     .{ .name = "relative-laundering", .want_ok = false, .fail_needles = &.{"Parser.zig"} },
+    .{
+        .name = "escape-above-root",
+        .want_ok = false,
+        .fail_needles = &.{ "../Writes.zig", "../../Ast.zig" },
+        .fail_render_needles = &.{"escapes above the leg root"},
+    },
     .{ .name = "boundary-crossing", .want_ok = false, .fail_needles = &.{ "Parser.zig", "Expr.zig" } },
     .{ .name = "stale-both-directions", .want_ok = false, .fail_needles = &.{ "Writes.zig", "BinaryFormat.zig" } },
     .{ .name = "honest-split", .want_ok = true },
@@ -946,6 +1015,17 @@ test "mutation fixtures: the tool fails each bad tree naming the shape, passes t
                 try render(&aw.writer, report);
                 std.debug.print("fixture {s}: no finding names `{s}`; report:\n{s}\n", .{ fx.name, needle, aw.written() });
                 return error.TestUnexpectedResult;
+            }
+        }
+        if (fx.fail_render_needles.len > 0) {
+            var aw: Io.Writer.Allocating = .init(testing.allocator);
+            defer aw.deinit();
+            try render(&aw.writer, report);
+            for (fx.fail_render_needles) |needle| {
+                if (std.mem.indexOf(u8, aw.written(), needle) == null) {
+                    std.debug.print("fixture {s}: rendered report does not name `{s}`; report:\n{s}\n", .{ fx.name, needle, aw.written() });
+                    return error.TestUnexpectedResult;
+                }
             }
         }
     }
