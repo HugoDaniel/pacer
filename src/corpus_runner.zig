@@ -307,7 +307,7 @@ fn readCaseFile(
 
 /// Render the case verdict. False = a defect that voids the golden
 /// (already reported), e.g. a control byte in a diagnostic message.
-fn renderCase(
+pub fn renderCase(
     a: Allocator,
     out: *Io.Writer,
     name: []const u8,
@@ -446,11 +446,15 @@ const TextAdapter = struct {
             .bad_call => {
                 // Over-cap document length: the production validation runs
                 // before any teardown, so the live score/state survives.
+                // Preserve the state that was actually current: a bad call
+                // after a diagnostic reload keeps the text session unloaded
+                // instead of requiring a live score.
                 // Nothing out of bounds is read or copied.
+                const was_loaded = self.loaded;
                 const status = NativeText.load(NativeText.docCap() + 1, 0);
                 if (status != 2) return error.UnexpectedTextStatus;
-                if (!self.loaded) return error.UnexpectedTextState;
-                return .{ .status = .{ .status = status, .loaded = true } };
+                if (self.loaded != was_loaded) return error.UnexpectedTextState;
+                return .{ .status = .{ .status = status, .loaded = was_loaded } };
             },
             .diagnostics => {
                 if (DIAGNOSTIC_SOURCE.len > NativeText.docCap()) return error.OverCap;

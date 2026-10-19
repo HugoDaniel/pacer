@@ -136,3 +136,21 @@ test('harness: a bad-call step requires the test-only raw context', async () => 
   const harness = parseHarness('(reload :kind bad-call)');
   await assert.rejects(() => renderCase('doc', harness, driver), /raw-load/);
 });
+
+test('harness: bad-call after diagnostics reports the actual unloaded state', async () => {
+  const driver = fakeDriver({
+    reload(d, doc) {
+      d.ok = doc !== '(transport :bpm 0)\n';
+      d.meta = d.ok ? MINIMAL_META : null;
+    },
+  });
+  const harness = parseHarness(
+    ['(reload :kind diagnostics)', '(reload :kind bad-call)', '(times "3FE0000000000000")'].join(
+      '\n',
+    ),
+  );
+  const out = await renderCase('doc', harness, driver, { rawLoad: () => 2 });
+  assert.match(out, /\(reload :kind diagnostics :status 1 :loaded false\)/);
+  assert.match(out, /\(reload :kind bad-call :status 2 :loaded false\)/);
+  assert.match(out, /\(eval :t "3FE0000000000000" :unloaded true\)/);
+});

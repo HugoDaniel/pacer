@@ -14,6 +14,7 @@
 const std = @import("std");
 const pacer = @import("pacer");
 const runner = @import("parity_runner.zig");
+const CorpusHarness = @import("corpus_harness");
 const NativeRt = @import("NativeRt.zig");
 const NativeText = @import("NativeText.zig");
 
@@ -471,11 +472,13 @@ test "lifecycle: refusals preserve held state/counters; registry mismatches are 
     try t.expectEqual(@as(u32, 1), NativeRt.load(@intCast(corrupt.len), @intCast(pact.len)));
     try t.expectEqual(REASON_VERSION, NativeRt.loadError());
     try t.expectEqual(@as(u32, 2), NativeRt.exprFailures());
+    try t.expectEqual(@as(u32, 2), NativeText.exprFailures());
     try expectSameSlice(witness_rt, try captureRtFrame(a, 0.6));
     try t.expectEqual(@as(u32, 3), NativeRt.exprFailures());
     try expectSameSlice(held_rt_meta, try captureRtMeta(a));
     @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
     try expectSameSlice(witness_text, try captureTextFrame(a, 0.6));
+    try t.expectEqual(@as(u32, 3), NativeText.exprFailures());
 
     // Structural mismatch: a valid ncomp change, status 1/reason 9.
     var structural = try a.dupe(pacer.Compile.Target, &LIFECYCLE_TARGETS);
@@ -535,4 +538,167 @@ test "lifecycle: refusals preserve held state/counters; registry mismatches are 
     try expectSameSlice(reset_rt_frame, try captureRtFrame(a, 0.6));
     try expectSameSlice(initial_text_meta, try captureTextMeta(a));
     try expectSameSlice(initial_rt_meta, try captureRtMeta(a));
+}
+
+// ---------------------------------------------------------------------------
+// Generic lifecycle replay contracts — binary03 P2 correction.
+//
+// These drive `replayLifecycleCase` itself (the generic adapter), not a
+// case-specific copy. The counters must follow the ACTUAL equivalent
+// evaluation sequence: a key-only frame increments zero, two failing
+// expressions increment two, and the focused one-omission anchor above
+// keeps its exact 2 -> 3 expectation.
+// ---------------------------------------------------------------------------
+
+const ZERO_OMISSION_TARGETS = [_]pacer.Compile.Target{
+    .{ .name = "radius", .ncomp = 1, .registry = 0 },
+};
+
+const MULTI_OMISSION_SOURCE: [:0]const u8 =
+    \\(transport :bpm 120 :meter [4 4])
+    \\(track :target alpha :expr (/ 1 (- beat 1)))
+    \\(track :target bravo :expr (/ 1 (- beat 1)))
+;
+
+const MULTI_OMISSION_TARGETS = [_]pacer.Compile.Target{
+    .{ .name = "alpha", .ncomp = 1, .registry = 0 },
+    .{ .name = "bravo", .ncomp = 1, .registry = 0 },
+};
+
+const ZERO_BITS: u64 = 0x0000000000000000;
+const HALF_BITS: u64 = 0x3FE0000000000000;
+
+/// Compile and pack one clean score, then run a lifecycle script through the
+/// generic replay exactly as the corpus walk does.
+fn replayLifecycleScript(
+    a: std.mem.Allocator,
+    doc: [:0]const u8,
+    host_targets: []const pacer.Compile.Target,
+    steps: []const CorpusHarness.Step,
+) !void {
+    var schema = try pacer.Schema.load(a);
+    defer schema.deinit();
+    var driver: pacer.Driver = undefined;
+    try driver.init(a, &schema, doc, host_targets);
+    defer driver.deinit();
+    try t.expect(driver.result.ok());
+
+    const packed_case = try runner.packCase(a, &driver.result, host_targets);
+    const pacb = switch (packed_case) {
+        .encoded => |bytes| bytes,
+        else => return error.TestUnexpectedResult,
+    };
+    const harness: CorpusHarness.Harness = .{ .targets = &.{}, .steps = steps };
+    var sink: std.Io.Writer.Allocating = .init(a);
+    defer sink.deinit();
+
+    defer NativeRt.reset();
+    defer NativeText.reset();
+    try runner.replayLifecycleCase(
+        a,
+        &sink.writer,
+        "generic-lifecycle-replay",
+        &driver,
+        harness,
+        host_targets,
+        doc,
+        pacb,
+    );
+}
+
+test "lifecycle replay: zero-omission post-refusal eval keeps both counters" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A key-only score has no failing expression: the post-refusal eval is
+    // valid and both counters remain unchanged. The generic adapter must not
+    // claim a literal +1 that belongs only to the authored anchor.
+    try replayLifecycleScript(a, CLEAN_SOURCE, &ZERO_OMISSION_TARGETS, &.{
+        .{ .eval = ZERO_BITS },
+        .{ .reload = .bad_version },
+        .{ .eval = HALF_BITS },
+    });
+}
+
+test "lifecycle replay: multiple omissions move both counters by the same actual count" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Two expr tracks omit on the same frame: the equivalent sequence adds
+    // two to each counter, not the anchor's literal one.
+    try replayLifecycleScript(a, MULTI_OMISSION_SOURCE, &MULTI_OMISSION_TARGETS, &.{
+        .{ .reload = .bad_version },
+        .{ .eval = HALF_BITS },
+    });
+}
+
+test "lifecycle replay: terminal diagnostics is a valid script end" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The specified outcome is text unloaded / binary still live; the
+    // contract never required a final `current`.
+    try replayLifecycleScript(a, LIFECYCLE_SOURCE, &LIFECYCLE_TARGETS, &.{
+        .{ .reload = .diagnostics },
+    });
+}
+
+test "lifecycle replay: terminal bad-version is valid without a following eval" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A refused load may end the script; the counter probe is not a required
+    // postcondition. The refusal itself still preserves both paths' state.
+    try replayLifecycleScript(a, LIFECYCLE_SOURCE, &LIFECYCLE_TARGETS, &.{
+        .{ .eval = HALF_BITS },
+        .{ .reload = .bad_version },
+    });
+}
+
+test "lifecycle replay: diagnostics then bad-call keeps the unloaded text state" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A bad call preserves whatever state precedes it; after diagnostics
+    // that state is unloaded text / live binary. The following eval must be
+    // zero on the text path and still live on the binary path.
+    try replayLifecycleScript(a, LIFECYCLE_SOURCE, &LIFECYCLE_TARGETS, &.{
+        .{ .reload = .diagnostics },
+        .{ .reload = .bad_call },
+        .{ .eval = HALF_BITS },
+    });
+}
+
+test "lifecycle replay: diagnostics then bad-version needs no live text session" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // `bad-version` is an explicit binary-only skip. During the intentional
+    // text-unloaded divergence the binary refusal is still valid and the
+    // script may finish without restoring the text score.
+    try replayLifecycleScript(a, LIFECYCLE_SOURCE, &LIFECYCLE_TARGETS, &.{
+        .{ .reload = .diagnostics },
+        .{ .reload = .bad_version },
+    });
+}
+
+test "lifecycle replay: diagnostics then registry probe uses the live binary state" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The registry probe is binary-only too; an unloaded text session must
+    // not prevent the live binary from reaching reason 9, and the final
+    // assertions remain per path.
+    try replayLifecycleScript(a, LIFECYCLE_SOURCE, &LIFECYCLE_TARGETS, &.{
+        .{ .reload = .diagnostics },
+        .{ .registry_mismatch = .structural },
+        .{ .eval = HALF_BITS },
+    });
 }

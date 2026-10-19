@@ -578,10 +578,14 @@ fn replayOrdinaryCase(
 /// authored state is equivalent. During the diagnostic divergence the
 /// text eval must be zero; the binary frame is compared to its own
 /// pre-divergence history. Every refusal snapshots counters/meta first,
-/// so preservation is asserted without a probe increment; after a
-/// bad-version refusal the next eval captures the counter immediately
-/// before the probe and asserts the probe itself increments it by one.
-fn replayLifecycleCase(
+/// so preservation is asserted without a probe increment. Every eval while
+/// both paths are live compares the ACTUAL counter deltas from the same
+/// input sequence; no literal +1 is assumed (a key-only frame increments
+/// zero, two failing expressions increment two). A lifecycle script may end
+/// after a refusal or during the text-unloaded divergence: final checks are
+/// per path, and cross-path counter equality is required only while both
+/// paths are live and equivalent.
+pub fn replayLifecycleCase(
     a: Allocator,
     out: *Io.Writer,
     name: []const u8,
@@ -658,14 +662,10 @@ fn replayLifecycleCase(
     const FrameRecord = struct { bits: u64, text: []const u8, binary: []const u8 };
     var history: std.ArrayList(FrameRecord) = .empty;
 
-    // Set by bad-version: the NEXT eval captures counters before the
-    // probe and asserts the probe increments each by exactly one.
-    var probe_after_refusal = false;
-
     for (harness.steps, 0..) |step, index| switch (step) {
         .eval => |bits| {
-            const probe_t_before = if (probe_after_refusal) NativeText.exprFailures() else 0;
-            const probe_b_before = if (probe_after_refusal) NativeRt.exprFailures() else 0;
+            const t_counter_before = NativeText.exprFailures();
+            const b_counter_before = NativeRt.exprFailures();
 
             const t_len = NativeText.evalSeconds(@bitCast(bits));
             const t_bytes: []const u8 = if (t_len == 0)
@@ -733,17 +733,36 @@ fn replayLifecycleCase(
                 try history.append(a, .{ .bits = bits, .text = t_bytes, .binary = b_bytes });
             }
 
-            if (probe_after_refusal) {
-                const t_after = NativeText.exprFailures();
-                const b_after = NativeRt.exprFailures();
-                if (t_after != probe_t_before + 1 or b_after != probe_b_before + 1) {
+            // Counters follow the actual equivalent execution sequence.
+            // While both paths are live the same input must produce the same
+            // delta; zero, one or many omissions are all valid. An unloaded
+            // text session must not move its counter at all. The focused
+            // one-omission anchor test pins its exact 2 -> 3 expectation.
+            const t_counter_after = NativeText.exprFailures();
+            const b_counter_after = NativeRt.exprFailures();
+            if (t_counter_after < t_counter_before or b_counter_after < b_counter_before) {
+                try out.print(
+                    "parity: {s}: step {d}: expr-failure counters decreased: text {d}->{d}, binary {d}->{d}\n",
+                    .{ name, index, t_counter_before, t_counter_after, b_counter_before, b_counter_after },
+                );
+                return error.ParityMismatch;
+            }
+            const t_delta = t_counter_after - t_counter_before;
+            const b_delta = b_counter_after - b_counter_before;
+            if (text_loaded) {
+                if (t_delta != b_delta) {
                     try out.print(
-                        "parity: {s}: step {d}: probe counters: text {d}->{d}, binary {d}->{d}; each expected +1 from its captured pre-probe value\n",
-                        .{ name, index, probe_t_before, t_after, probe_b_before, b_after },
+                        "parity: {s}: step {d}: same-input expr-failure delta mismatch: text +{d}, binary +{d} (before {d}/{d}, after {d}/{d})\n",
+                        .{ name, index, t_delta, b_delta, t_counter_before, b_counter_before, t_counter_after, b_counter_after },
                     );
                     return error.ParityMismatch;
                 }
-                probe_after_refusal = false;
+            } else if (t_delta != 0) {
+                try out.print(
+                    "parity: {s}: step {d}: unloaded text counter moved {d}->{d}\n",
+                    .{ name, index, t_counter_before, t_counter_after },
+                );
+                return error.ParityMismatch;
             }
         },
         .set_control => |sc| {
@@ -867,11 +886,9 @@ fn replayLifecycleCase(
                 try expectScalar(out, name, index, "binary expr-failures after diagnostics skip", b_counter_before, NativeRt.exprFailures());
             },
             .bad_version => {
-                if (!text_loaded) {
-                    try out.print("parity: {s}: step {d}: bad-version needs the restored text session\n", .{ name, index });
-                    return error.ParityMismatch;
-                }
-                // Text is an explicit binary-only skip: no text call.
+                // Text is an explicit binary-only skip: no text call. The
+                // text session may be live or intentionally unloaded; the
+                // binary refusal is independent of that state.
                 const b_meta_before = try a.dupe(u8, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
                 const b_counter_before = NativeRt.exprFailures();
                 const t_counter_before = NativeText.exprFailures();
@@ -902,13 +919,8 @@ fn replayLifecycleCase(
                 // Restore valid A bytes immediately: the live score was
                 // never replaced, and ordinary replay needs a clean zone.
                 @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
-                probe_after_refusal = true;
             },
             .current => {
-                if (probe_after_refusal) {
-                    try out.print("parity: {s}: step {d}: current arrived before the bad-version counter probe\n", .{ name, index });
-                    return error.ParityMismatch;
-                }
                 // Successful reload of the ORIGINAL clean document/score on
                 // both paths: state, counters and metadata reset.
                 @memcpy(NativeText.docPtr()[0..doc.len], doc);
@@ -931,18 +943,17 @@ fn replayLifecycleCase(
                 try expectSameBytes(out, name, index, "text meta after current", fresh, NativeText.metaPtr()[0..NativeText.metaLen()]);
                 try expectSameBytes(out, name, index, "binary meta after current", fresh, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
                 history.clearRetainingCapacity();
-                probe_after_refusal = false;
             },
         },
         .registry_mismatch => |mode| {
             // Text is an explicit binary-only skip; the binary loads valid
             // A against a VALID CANONICAL but mismatching PACT. Malformed
-            // PACT would be status 2 and is never this case.
-            if (!text_loaded) {
-                try out.print("parity: {s}: step {d}: registry probe needs the live text session\n", .{ name, index });
-                return error.ParityMismatch;
-            }
-            const t_meta_before = try a.dupe(u8, NativeText.metaPtr()[0..NativeText.metaLen()]);
+            // PACT would be status 2 and is never this case. The text
+            // session may be live or intentionally unloaded.
+            const t_meta_before: []const u8 = if (text_loaded)
+                try a.dupe(u8, NativeText.metaPtr()[0..NativeText.metaLen()])
+            else
+                &.{};
             const t_counter_before = NativeText.exprFailures();
             const b_meta_before = try a.dupe(u8, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
             const b_counter_before = NativeRt.exprFailures();
@@ -1005,22 +1016,36 @@ fn replayLifecycleCase(
                 try out.print("parity: {s}: step {d}: registry mismatch changed an expr-failure counter\n", .{ name, index });
                 return error.ParityMismatch;
             }
-            try expectSameBytes(out, name, index, "text meta after registry skip", t_meta_before, NativeText.metaPtr()[0..NativeText.metaLen()]);
+            if (text_loaded) {
+                try expectSameBytes(out, name, index, "text meta after registry skip", t_meta_before, NativeText.metaPtr()[0..NativeText.metaLen()]);
+            }
             try expectSameBytes(out, name, index, "binary meta after registry refusal", b_meta_before, NativeRt.metaPtr()[0..NativeRt.metaLen()]);
             // Restore the original join bytes before ordinary replay.
             @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
         },
     };
 
-    if (probe_after_refusal) {
-        try out.print("parity: {s}: bad-version counter probe had no following eval\n", .{name});
-        return error.ParityMismatch;
+    // Final truth is per path, never forced across the intentional
+    // text-unloaded/binary-live divergence. While both sessions are live and
+    // equivalent, their counters must agree; while text is unloaded, its
+    // meta/frame/counter surfaces are the zero state and the binary keeps
+    // its live metadata. A refusal may end the script without a probe eval.
+    if (text_loaded) {
+        try expectScalar(out, name, harness.steps.len, "final expr-failures", NativeText.exprFailures(), NativeRt.exprFailures());
+    } else {
+        if (NativeText.metaLen() != 0) {
+            try out.print("parity: {s}: final unloaded text meta is {d} byte(s); expected 0\n", .{ name, NativeText.metaLen() });
+            return error.ParityMismatch;
+        }
+        if (NativeText.exprFailures() != 0) {
+            try out.print("parity: {s}: final unloaded text expr-failures is {d}; expected 0\n", .{ name, NativeText.exprFailures() });
+            return error.ParityMismatch;
+        }
+        if (NativeRt.metaLen() == 0) {
+            try out.print("parity: {s}: final binary metadata vanished during text divergence\n", .{name});
+            return error.ParityMismatch;
+        }
     }
-    if (!text_loaded) {
-        try out.print("parity: {s}: lifecycle script ended with the text session unloaded\n", .{name});
-        return error.ParityMismatch;
-    }
-    try expectScalar(out, name, harness.steps.len, "final expr-failures", NativeText.exprFailures(), NativeRt.exprFailures());
 }
 
 /// Compare complete byte surfaces. The report names the case, script step,

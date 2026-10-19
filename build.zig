@@ -219,6 +219,28 @@ pub fn build(b: *std.Build) void {
     const run_corpus_harness_tests = b.addRunArtifact(corpus_harness_tests);
     test_step.dependOn(&run_corpus_harness_tests.step);
 
+    // The corpus renderer's lifecycle adapter is tested in its OWN root:
+    // it imports the source-owning runner (the actual `TextAdapter` and
+    // `renderCase`) and links the separately compiled text object, so the
+    // regression exercises the real `drv_*` entry rather than a local copy.
+    const corpus_lifecycle_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/CorpusLifecycleTests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_mod },
+            .{ .name = "corpus_harness", .module = corpus_harness_mod },
+        },
+    });
+    corpus_lifecycle_test_mod.addAnonymousImport("pacer_schema", .{
+        .root_source_file = b.path("schema/pacer.sjon"),
+    });
+    corpus_lifecycle_test_mod.addImport("build_options", build_options_mod);
+    corpus_lifecycle_test_mod.addObject(native_text_object);
+    const corpus_lifecycle_tests = b.addTest(.{ .root_module = corpus_lifecycle_test_mod });
+    const run_corpus_lifecycle_tests = b.addRunArtifact(corpus_lifecycle_tests);
+    test_step.dependOn(&run_corpus_lifecycle_tests.step);
+
     // `zig build cli` — the native `pacer` binary: `ir` / `eval` / `check`,
     // JSON on stdout, everything else on stderr.
     //
@@ -319,6 +341,7 @@ pub fn build(b: *std.Build) void {
     verify_step.dependOn(&run_tests.step);
     verify_step.dependOn(&run_corpus_verify.step);
     verify_step.dependOn(&run_corpus_harness_tests.step);
+    verify_step.dependOn(&run_corpus_lifecycle_tests.step);
     verify_step.dependOn(&node_test.step);
     verify_step.dependOn(&cli_golden_check.step);
 
