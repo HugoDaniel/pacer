@@ -1614,7 +1614,10 @@ pub fn decodeEaseControls(
             }
             list[i] = .{ .byte_start = @intCast(pos + 2 - 8), .len = elen };
             prev = slice;
-            pos += 2 + elen;
+            // `2 + elen` alone would compute in u16 and overflow at the
+            // 65535-byte boundary id — widen before the add (the same
+            // discipline as the `pos + 2 + elen` bound check above).
+            pos += 2 + @as(usize, elen);
         }
         // The entries consume byte_size exactly — no tail slack.
         if (pos != payload.len) return fail(refusal, .strs_invalid, pos);

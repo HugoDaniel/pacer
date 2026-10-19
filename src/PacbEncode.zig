@@ -1033,6 +1033,39 @@ pub fn preflight(
             .{ tick_total, Pacb.MAX_TICK_ENTRIES },
         );
     }
+
+    // Control ids ride three u16 length fields — 'STRS' `id_len`, the
+    // 'CTRL' id range, and PACM's control `id_len` — none of which the
+    // compiler caps (`control-id` is a bare symbol with no length
+    // bound). A native-band source compiles clean past the field and
+    // would trap the encoder's `@intCast`; refuse here, measured, with
+    // the id symbol's own span. This is the one producer-bound gap the
+    // decoder's own checks cannot backstop: every count cap
+    // (tracks/keys/scenes/controls/tempo/targets/ease programs) is
+    // compile-side, and host/declared NAMES are bounded at the CLI's
+    // two inputs before this — but ids enter as score text.
+    for (result.validated.result.data_forest) |form| {
+        if (tree.tagOf(form) != .form) continue;
+        const hdr = tree.formHeader(form);
+        if (!std.mem.eql(u8, hdr.head, "control")) continue;
+        for (hdr.children) |child| {
+            if (tree.tagOf(child) != .kvpair) continue;
+            const kv = tree.kvpairHeader(child);
+            if (!std.mem.eql(u8, kv.key, "id")) continue;
+            const id = tree.symbolText(kv.value);
+            if (id.len > std.math.maxInt(u16)) {
+                try addDiag(
+                    gpa,
+                    diags,
+                    .pack_cap_exceeded,
+                    tree.spanOf(kv.value),
+                    "pack: control id is {d} bytes, over the {d}-byte v1 'STRS'/'CTRL'/PACM id field",
+                    .{ id.len, std.math.maxInt(u16) },
+                );
+            }
+            break;
+        }
+    }
 }
 
 /// The message spelling of one head — `ns/head` when qualified.
@@ -1456,6 +1489,77 @@ test "PacbEncode: preflight refuses the tick-count overage with the measured cou
     var decoded = try Pacb.decode(a, bytes, null);
     defer decoded.deinit();
     try t.expectEqual(Pacb.MAX_TICK_ENTRIES, decoded.tracks[0].source.trigger.at.len);
+}
+
+// Final-review I3, the one REAL producer gap (binary01-fc): a control
+// id rides three u16 length fields — 'STRS' id_len, the 'CTRL' id
+// range, and PACM's control id_len — none of which the compiler caps
+// (`control-id` is a bare symbol). A native-band source compiles clean
+// past 65535 and would trap the encoder's `@intCast`; preflight
+// refuses it measured, with the id's own span.
+test "PacbEncode: preflight refuses a control id over the u16 id field, measured" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cap = std.math.maxInt(u16);
+
+    // Over-cap: compile clean, then refuse at preflight with the
+    // measured length at the id symbol's span.
+    const over_src = try std.fmt.allocPrintSentinel(
+        a,
+        "{s}(control :id {s} :value 0)",
+        .{ transport_line, "k" ** (cap + 1) },
+        0,
+    );
+    var r = try compileForTest(a, over_src, &.{});
+    defer r.deinit();
+    try t.expectEqual(@as(usize, 1), r.table.?.controls.len);
+    try t.expectEqual(cap + 1, r.table.?.controls[0].id.len);
+
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r, &diags);
+    try t.expectEqual(@as(usize, 1), diags.items.len);
+    const d = diags.items[0];
+    try t.expect(d.code == .pack_cap_exceeded);
+    try t.expect(std.mem.indexOf(u8, d.message, "65536") != null);
+    // The span is the id symbol's own span, so the diagnostic points at
+    // the exact spelling in score coordinates.
+    const tree = &r.validated.result.tree;
+    var want_span: sjon.Ast.Span = .{ .start = 0, .end = 0 };
+    for (r.validated.result.data_forest) |form| {
+        if (tree.tagOf(form) != .form) continue;
+        const hdr = tree.formHeader(form);
+        if (!std.mem.eql(u8, hdr.head, "control")) continue;
+        for (hdr.children) |c| {
+            if (tree.tagOf(c) != .kvpair) continue;
+            const kv = tree.kvpairHeader(c);
+            if (std.mem.eql(u8, kv.key, "id")) {
+                want_span = tree.spanOf(kv.value);
+                break;
+            }
+        }
+    }
+    try t.expectEqual(want_span.start, d.span.start);
+    try t.expectEqual(want_span.end, d.span.end);
+
+    // At-cap: packs and round-trips — the boundary is exact, `>` not
+    // `>=`, on the same field all three writers spell.
+    const ok_src = try std.fmt.allocPrintSentinel(
+        a,
+        "{s}(control :id {s} :value 0)",
+        .{ transport_line, "k" ** cap },
+        0,
+    );
+    var r2 = try compileForTest(a, ok_src, &.{});
+    defer r2.deinit();
+    var diags2: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r2, &diags2);
+    try t.expectEqual(@as(usize, 0), diags2.items.len);
+    const blob = try encode(a, &r2, &.{});
+    defer a.free(blob);
+    var decoded = try Pacb.decode(a, blob, null);
+    defer decoded.deinit();
+    try t.expectEqual(cap, decoded.controls[0].id.len);
 }
 
 test "PacbEncode: preflight acceptance set — grammar name slots and form-as-data pack clean" {

@@ -767,7 +767,9 @@ pub const MetaView = struct {
             const flags = r[5];
             const id_len = std.mem.readInt(u16, r[6..8], .little);
             const id = self.blob[self.pos + META_CONTROL_LEN ..][0..id_len];
-            self.pos += META_CONTROL_LEN + id_len;
+            // Widen before the add: `META_CONTROL_LEN + id_len` alone
+            // computes in u16 and overflows at the 65535-byte boundary.
+            self.pos += META_CONTROL_LEN + @as(usize, id_len);
             return .{
                 .target_id = if (target_id == META_NO_TARGET) null else target_id,
                 .registry = r[2],
