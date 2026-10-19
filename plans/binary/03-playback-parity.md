@@ -4,11 +4,13 @@
 **Wire impact:** none (test architecture only).
 **Gates:** new `zig build parity` (proposed; created by P1) joins the wave's
 gate set; `zig build verify`; npm gate for the wasm leg.
-**Created 2026-10-18; IN PROGRESS 2026-10-19 — T1–T3 task-complete
+**Created 2026-10-18; IN PROGRESS 2026-10-19 — T1–T4 task-complete
 (private native composition proof; shared corpus parser; native parity
-runner/classifier). P1 COMPLETE (measured totals in the progress log);
-P2–P3 acceptance remains open (anchors, lifecycle grammar, negatives are
-next). No phase checkbox is claimed.**
+runner/classifier; three ordinary text-first anchors). P1 COMPLETE
+(measured totals in the progress log); P2 PARTIAL — 3 of 5 anchors
+(tempo-82bpm, clock-nonmonotonic, scene-seek) are landed; P2–P3
+acceptance remains open (reload/registry anchors, lifecycle grammar and
+negatives are next). No phase checkbox is claimed.**
 
 ## Why
 
@@ -199,3 +201,42 @@ _(created 2026-10-18; entries appended per phase)_
   No corpus/golden, fixture, schema, JS, wire/version, public-root export,
   wasm export or production-load change. Evidence:
   `.agent/control/binary03-t3-report.md`.
+- **2026-10-19 — T4 PARTIAL: three ordinary text-first anchors (P2
+  remains OPEN).** Authored only `corpus/tempo-82bpm`,
+  `corpus/clock-nonmonotonic` and `corpus/scene-seek` (doc + harness),
+  text-first. `tempo-82bpm` pins 82 bpm 4/4 at tps 246246 ticks/s and
+  samples the f64 nearest 30/41 s and 90/41 s plus each representable
+  neighbour and one tick past, against key landings at 1b/3b and the
+  emitted `beat` lane. `clock-nonmonotonic` runs forward, backward,
+  repeated and negative clocks through a 120→60 bpm map (segment 1 at
+  tick 360360 = 1.0 s, loop_secs 7.0 s exactly) with an explicit
+  `:at [1b 3b 5b 7b]` trigger; repeated 0.5 s before and after the seeks
+  reproduces the same frame bytes. `scene-seek` overlaps intro/seek/tail
+  on one `level` target, binds `scene-phase`/`scene-beat`, starts the
+  seek scene at 2b (nonzero origin), samples each exclusive end and the
+  inactive gaps [5,6) s / [7,8) s, and seeks backward across the 8 s loop
+  wrap and re-entry.
+  RED: check-only `corpus` saw the three new directories with
+  `FileNotFound` for `expected.sjon` (41 cases, 3 failed). `zig build
+  corpus --update` then regenerated all 41; the 38 pre-existing goldens
+  were byte-identical before/after (git object hashes; no pre-existing
+  corpus file changed vs `b08b403` — the only corpus diff is the three
+  additions) and only the three new directories appeared.
+  All new golden frames were checked against an independent Python
+  oracle reproducing the documented `TimeMap` op order, key interpolation
+  and `f32` emission (`binary03-t4-oracle.log` / `binary03-t4-verify.log`):
+  exact ticks, f64 sample bits and f32 lane bits all match; repeated
+  frames/writes match. GREEN: `corpus` 41/0; `parity` 41 cases = 22 clean
+  non-pattern replayed (+3), 4 clean pattern skipped-pending-SJON (not
+  passes), 15 load-failing compile-refused, 0 failed; `test` 537/537;
+  `verify` 28/28 with 423/423 Zig, corpus 41/0, node 107/107;
+  `audit-rt-imports` 10/10 with the frozen 17 `prt_*` + memory. A
+  separate LOW producer-ABI guard commit pins the actual
+  `Rt.NativeHarness` alias types in the separately compiled bridge
+  (temporary `prt_loadError` return-type perturbation produced the exact
+  guard error and was restored byte-identically; `native-composition`
+  and audit re-ran green). **P2 is NOT complete:** only 3 of the 5
+  anchors have landed; `reload-atomicity`, `registry-mismatch` and the
+  lifecycle grammar/JS leg remain T5 work. No owner decision, SJON
+  permission, pattern acceptance or metadata claim changed. Evidence:
+  `.agent/control/binary03-t4-report.md`.

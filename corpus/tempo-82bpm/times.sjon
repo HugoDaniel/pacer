@@ -1,0 +1,19 @@
+; tempo-82bpm harness. Tool-derived (`.agent/control/binary03-t4-oracle.log`):
+; tps = 246246 exactly; beat 1 = tick 180180 at 30/41 s, beat 3 = tick
+; 540540 at 90/41 s. The "nextdown/nextup" lines are adjacent f64 values;
+; the tick comments are floor(s × tps) in the documented one-mul-one-floor
+; order, not a conversion back from the authored beat. nextup stays on
+; tick 180180 (product rounds just above an integer), so the sample after
+; it uses 180181/tps to pin the next grid position.
+(target beat :registry 0)  ; id 0 — emitted clock lane
+(target ramp :registry 0)  ; id 1 — keyed structural landing
+(times
+  "3FE76A2576A25769" ; 0.7317073170731706 s — 30/41 nextdown → tick 180179
+  "3FE76A2576A2576A" ; 0.7317073170731707 s — nearest 30/41 → tick 180180, key 1.0
+  "3FE76A2576A2576B" ; 0.7317073170731708 s — nextup → tick 180180
+  "3FE76A2DFADB2332" ; 0.7317113780528415 s — 180181/tps → tick 180181
+  "40018F9C18F9C18F" ; 2.1951219512195120 s — 90/41 nextdown → tick 540539
+  "40018F9C18F9C190" ; 2.1951219512195124 s — nearest 90/41 → tick 540540, key 0.0
+  "40018F9C18F9C191" ; 2.1951219512195130 s — nextup → tick 540540
+  "40018F9E3A07F482" ; 2.1951260121991830 s — 540541/tps → tick 540541
+)

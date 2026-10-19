@@ -1,0 +1,22 @@
+; scene-seek harness. Tool-derived (`.agent/control/binary03-t4-oracle.log`):
+; constant 120 bpm → floor(s × 360360), then tick-domain @mod by
+; 2882880 for the loop. Times seek forward and backward across both
+; scene boundaries, the exclusive ends, the inactive gaps and re-entry.
+(target level :registry 0)  ; id 0 — written by ALL THREE scenes (shared target)
+(target sweep :registry 0)  ; id 1 — intro's scene-phase expr
+(target pulse :registry 0)  ; id 2 — seek's scene-beat expr (scene starts 2b)
+(times
+  "0000000000000000" ; 0.0 s  → intro start: level 0.1, phase 0
+  "4004000000000000" ; 2.5 s  → 5b: overlap mid — intro level then seek level (wins)
+  "3FF8000000000000" ; 1.5 s  → 3b: BACKWARD into the overlap
+  "4008000000000000" ; 3.0 s  → 6b: intro's exclusive end; seek only
+  "4014000000000000" ; 5.0 s  → 10b: seek's exclusive end; no scene active
+  "4016000000000000" ; 5.5 s  → 11b: inactive gap (empty writes)
+  "4000000000000000" ; 2.0 s  → 4b: BACKWARD into the overlap again
+  "401A000000000000" ; 6.5 s  → 13b: tail only (nonzero-added window)
+  "401C000000000000" ; 7.0 s  → 14b: tail's exclusive end; inactive gap
+  "4020000000000000" ; 8.0 s  → exactly :dur: wraps to tick 0, re-enters intro
+  "4021000000000000" ; 8.5 s  → wraps to 1b: intro only, mid scene-phase
+  "4010000000000000" ; 4.0 s  → 8b: BACKWARD; seek only, scene-beat 6
+  "4022000000000000" ; 9.0 s  → wraps to 2b: overlap re-entry at the seek origin
+)

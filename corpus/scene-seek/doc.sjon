@@ -1,0 +1,29 @@
+; scene-seek: overlapping scene windows on one shared target, scene-local
+; expr bindings, a NONZERO-START scene, exclusive ends, inactive gaps and
+; a loop re-entry — with seeks deliberately out of order. 120 bpm 4/4:
+; 1 beat = 0.5 s, :dur 4bar = 16 beats = 2882880 ticks = 8.0 s.
+;   intro [0b,6b)  = [0.0,3.0) s — level keys + scene-phase
+;   seek  [2b,10b) = [1.0,5.0) s — level keys + scene-beat (origin 2b)
+;   tail  [12b,14b) = [6.0,7.0) s — level keys
+; On [1.0,3.0) s intro and seek both write `level`; the later-listed seek
+; wins by write order (both writes remain in the golden). 3.0 s is intro's
+; exclusive end, 5.0 s seek's, 7.0 s tail's; [5.0,6.0) s and [7.0,8.0) s
+; are inactive gaps. At 8.0 s the loop wraps to tick 0 and re-enters intro.
+(transport :bpm 120 :meter [4 4] :dur 4bar :end loop)
+
+(scene :name intro :at 0b :dur 6b
+  (track :target level
+    (key :at 0b :value 0.1)
+    (key :at 6b :value 0.7))
+  (track :target sweep :expr scene-phase))
+
+(scene :name seek :at 2b :dur 8b
+  (track :target level
+    (key :at 0b :value 0.9)
+    (key :at 8b :value 0.3))
+  (track :target pulse :expr scene-beat))
+
+(scene :name tail :at 12b :dur 2b
+  (track :target level
+    (key :at 0b :value 0.25)
+    (key :at 2b :value 0.75)))

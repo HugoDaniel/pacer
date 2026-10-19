@@ -1,0 +1,24 @@
+; clock-nonmonotonic harness. Tool-derived
+; (`.agent/control/binary03-t4-oracle.log`): loop_secs = 7.0 s; a mapped
+; score wraps seconds with @mod before converting, then scans the segment
+; table (start_sec 0.0 at tps 360360, start_sec 1.0 at tps 180180).
+; ticks are floor(wrapped × tps) in the documented op order. Times run
+; forward, back, repeat, negative and past/at the loop edge.
+(target ramp :registry 0)          ; id 0 — four key segments
+(target hit :registry 0 :ncomp 4)  ; id 1 — explicit trigger, all four lanes
+(times
+  "0000000000000000" ; 0.0 s  → tick 0; before the first trigger event
+  "3FE0000000000000" ; 0.5 s  → tick 180180 = 1b; trigger k=0 exact
+  "3FF0000000000000" ; 1.0 s  → tick 360360, tempo boundary + 2b key
+  "3FEFFFFFFFFFFFFF" ; 0.9999999999999999 s — nextdown of 1.0 → tick 360359, segment 0
+  "3FF0000000000001" ; 1.0000000000000002 s — nextup of 1.0 → tick 360360, segment 1
+  "4000000000000000" ; 2.0 s  → tick 540540 = 3b; trigger k=1 exact
+  "3FF8000000000000" ; 1.5 s  → tick 450450; BACKWARD seek, mid segments
+  "3FE0000000000000" ; 0.5 s  → tick 180180; revisited with unchanged state
+  "4010000000000000" ; 4.0 s  → tick 900900 = 5b; trigger k=2 exact
+  "4018000000000000" ; 6.0 s  → tick 1261260 = 7b; trigger k=3 exact
+  "BFE0000000000000" ; -0.5 s → wraps to 6.5 s, tick 1351350; holds last event
+  "401C000000000000" ; 7.0 s  → @mod(7,7) = 0; loop boundary
+  "4020000000000000" ; 8.0 s  → wraps to 1.0 s, tick 360360
+  "C01C000000000000" ; -7.0 s → wraps to 0 s; negative whole-loop boundary
+)

@@ -1,0 +1,21 @@
+; clock-nonmonotonic: forward, backward, repeated and negative host clocks
+; through a two-segment tempo map plus an explicit trigger schedule.
+; 120 bpm at tick 0, 60 bpm from 2b (tick 360360 = 1.0 s exactly; tps is
+; 360360 before and 180180 after). :dur 2bar = 8 beats = 1441440 ticks;
+; loop_secs = 1.0 + 6.0 = 7.0 s exactly, so mapped scores wrap in SECONDS
+; first and iteration 2 replays the early segment's tempo.
+; `ramp` has four keyed segments; `hit` fires at 1b,3b,5b,7b (absolute
+; ticks) and writes phase,count,gate,beats-since. The repeated 0.5 s
+; probe before and after forward/backward seeks pins that a revisited
+; clock with unchanged control state reproduces the complete frame bytes.
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+(tempo :at 2b :bpm 60)
+
+(track :target ramp
+  (key :at 0b :value 0.0)
+  (key :at 2b :value 1.0)
+  (key :at 4b :value 0.0)
+  (key :at 6b :value 1.0)
+  (key :at 8b :value 0.0))
+
+(trigger :target hit :at [1b 3b 5b 7b])

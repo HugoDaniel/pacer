@@ -1,0 +1,15 @@
+; tempo-82bpm: the seconds→tick seam at an exact rational tempo.
+; 82 bpm 4/4: PPC 720720 / 4 = 180180 ticks per beat;
+; tps = (82 × 180180) / 60 = 246246 ticks/s exactly.
+; One beat is 30/41 s (not a dyadic f64). The harness samples the f64
+; nearest to 30/41 and 90/41 plus each representable neighbour and one
+; tick past the landing, so mul+floor and the exact structural key
+; landings sit under the golden. `beat` is the emitted clock lane;
+; `ramp` lands 1.0 at 1b and 0.0 at 3b (then rises again toward 4b).
+(transport :bpm 82 :meter [4 4] :emit [beat])
+
+(track :target ramp
+  (key :at 0b :value 0.0)
+  (key :at 1b :value 1.0)
+  (key :at 3b :value 0.0)
+  (key :at 4b :value 1.0))
