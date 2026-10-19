@@ -101,6 +101,9 @@ test {
     // executable root — but its harness vocabulary earns the same
     // discovery as everything else.
     _ = @import("corpus_runner.zig");
+    // The playback runtime's entry is its own wasm root (like
+    // wasm_entry, discovered here for its native export tests only).
+    _ = @import("rt_entry.zig");
 }
 
 test "sjon dependency wiring: tick grid + trig kernels reachable" {

@@ -97,6 +97,32 @@ pub fn build(b: *std.Build) void {
     const wasm_step = b.step("wasm", "Build pacer.wasm (browser driver artifact)");
     wasm_step.dependOn(&install_wasm.step);
 
+    // `zig build wasm-rt` — pacer-rt.wasm, the playback runtime artifact
+    // (02 T2.2). The `wasm` recipe verbatim: wasm32-freestanding,
+    // ReleaseSmall, rdynamic, entry disabled, sjon `.@"plugin-exec" =
+    // false`; root `src/rt_entry.zig`, name `pacer-rt`. The resolved
+    // wasm32 SJON module is shared with the `wasm` step above. No
+    // `pacer_schema` import: the runtime never loads a text schema (the
+    // binary arm's schema is the frozen core-only one, `rt_entry.zig`).
+    const wasm_rt_mod = b.createModule(.{
+        .root_source_file = b.path("src/rt_entry.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+        .link_libc = false,
+        .imports = &.{
+            .{ .name = "sjon", .module = sjon_wasm_dep.module("sjon") },
+        },
+    });
+    const wasm_rt = b.addExecutable(.{
+        .name = "pacer-rt",
+        .root_module = wasm_rt_mod,
+    });
+    wasm_rt.entry = .disabled;
+    wasm_rt.rdynamic = true;
+    const install_wasm_rt = b.addInstallArtifact(wasm_rt, .{});
+    const wasm_rt_step = b.step("wasm-rt", "Build pacer-rt.wasm (playback runtime artifact)");
+    wasm_rt_step.dependOn(&install_wasm_rt.step);
+
     // `zig build corpus` — the native half of the determinism gate:
     // walk corpus/<case>/, compile + eval each score, compare the
     // canonical rendering byte-equal against expected.sjon. Pass

@@ -141,10 +141,18 @@ behavior change (status board row B). Plan 02's **P2 is now under
 way: T2.1 landed the `RtSjon` window** — the runtime closure's single
 SJON import behind the frozen nine-row table, with the frozen
 `Pacb.MAX_TREE_DEPTH` copy equality-pinned in root's frozen-copy
-family and zero corpus/CLI drift vs the P1 HEAD. Next plan-02 work is
-**T2.2** — `rt_entry.zig`, the `wasm-rt` artifact, the transactional
-load — then the closure gate (T2.3/T2.4) and the preliminary size
-trend (T2.5) close P2. The pre-existing `posToTickLocal` assert on a
+family and zero corpus/CLI drift vs the P1 HEAD — **and T2.2 landed
+`rt_entry.zig` + the `wasm-rt` verb**: the first actual
+`pacer-rt.wasm` artifact is now BUILT (172,255 bytes; closure
+UNVERIFIED — T2.3/T2.4's layer-1/2 gate is still ahead, no closure
+claim), with the transactional `prt_load` (statuses 0/1/2/3, the
+02-frozen u16 reason map), the measured static PACB zone
+(`PACB_CAP` = 6,049,576 bytes — the hard whole-blob input cap; the
+decoded heap is separate), C4 materialization, C5 scene-start
+dry-runs, and the ownership suite. Next plan-02 work is
+**T2.3/T2.4** — the layer-1/2 closure auditor and its smoke — then
+the preliminary size trend (T2.5) closes P2. The pre-existing
+`posToTickLocal` assert on a
 bare unitless number in a time-pos slot (T3.2 finding, G-ter item 9)
 also remains owner-notified.
 

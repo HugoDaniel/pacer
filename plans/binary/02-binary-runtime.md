@@ -426,3 +426,55 @@ _(created 2026-10-18; entries appended per phase)_
   `zig fmt --check` clean on every touched file. NOT in this task (P2
   stays open): `rt_entry.zig`, the `wasm-rt` verb, the layer-1/2
   closure auditor, the transactional load — T2.2–T2.5 next.
+- **2026-10-19 — P2 in progress: T2.2 landed `rt_entry.zig` + the
+  `wasm-rt` verb + the transactional load (the phase gate stays T2.5's —
+  interim carry-forward, not a phase close).** `src/rt_entry.zig` is the
+  playback runtime's entry: the static zones (PACB in at the measured
+  **`PACB_CAP` = 6,049,576 bytes** — toolchain-computed
+  `Pacb.pacbWorstCase(256)`, the R-I2 256-byte allowance; labeled:
+  *static zone = hard input byte cap, a whole-blob length policy, never
+  a per-string rejection; decoded heap (the score's single arena)
+  separate* — this row is T2.5's zone figure), `'PACT'` in 64 KiB,
+  writes out at `Writes.encodedLen(EvalCore.MAX_FRAME_ENTRIES)`), the 17
+  frozen `prt_*` exports (drv-twins' shapes incl. the 2^53 tick gate and
+  registerControl range checks), `prt_load` statuses 0/1/2/3 with the
+  02:127-131 frozen u16 reason map (R-O3; the two review-flagged
+  stretches doc-commented at the table; `7 non_finite`
+  reserved-no-emitter; `11 dry_run_failed` entry-side), meta served from
+  the score's OWN embedded-`'PACM'` copy (pointer moves across loads).
+  The load is TRANSACTIONAL: args ⇒ 2 (true no-op, reason word
+  included) → `Pacb.decode` ⇒ 1+reason (OOM ⇒ 3, never faked) → pattern
+  gate (`required_features` bit0 ⇒ `unsupported_feature`, pre-P4) →
+  `canonicalPactEquals` ⇒ `registry_mismatch` → C4 materialization (inert
+  `.invalid` sentinels, parallel payload slice, zeroed wire-absent
+  spans) → C5 expr dry-runs at each track's own dry tick
+  (`scene.start_tick` else 0, FBA over `ExprTrack.SCRATCH_BYTES`,
+  `evalAtBinary` — budget exhaustion is a refusal, never OOM) →
+  `EvalCore.initContext` → swap, then teardown (evaluator before the one
+  arena free). REDs all observed: missing-module (root discovery,
+  FileNotFound), unknown-step `wasm-rt`, then group-2: (a) refusal
+  killing the old score under unload-first, (d) missing registry gate,
+  (e) missing dry-run — each failed against the v1 shape before the
+  transactional implement landed. Tests (native, calling the exports,
+  text-path oracles on indented imports only): zones/ABI + the whole
+  reason map, load/eval tracer, (a)–(h) incl. the (g) three-fixture
+  byte-equal parity sweep (the C4 sentinel proof) and the (h) named
+  scened-expr `(sqrt scene-beat)` acceptance-parity pin with its flat-0
+  divergence inverse, control/bpm twins, and the ownership suite
+  (zone-no-alias `@memset`, repeated alternating reloads under
+  page-munmap, meta = current score's own bytes). Gates: `zig build
+  test` 499/499; `zig build wasm-rt` builds the REAL
+  `zig-out/bin/pacer-rt.wasm` (172,255 bytes, first actual artifact —
+  BUILT, closure UNVERIFIED: T2.3/T2.4's gate is still ahead, no
+  closure claim made); `zig build verify` 15/15; `zig build fuzz` 5/5
+  361/361; fmt clean. Node smoke (one-off control script, Linux node
+  v26.10.0, inert env stub, actual output in `binary02-t22-report.md`):
+  `prt_load(full-small.pacb)` ⇒ 0, metaLen 2879, `prt_eval(0.5)` 152
+  bytes, a corrupted reload ⇒ 1 with the old frame byte-identical and a
+  held control intact, `keys-only` reload ⇒ 0 (metaLen 1784). Two test
+  premises corrected during RED (not weakened): (c)'s reason-word pin
+  made order-independent (before/after, not assumed-initial), (e)'s
+  payload mutation made structural (`'PAYL'` `[len][bytes]` walk —
+  0x2a-as-length is a coincidence). NOT in this task (P2 stays open):
+  the layer-1/2 closure auditor + mutation fixtures (T2.3/T2.4), the
+  size trend (T2.5).
