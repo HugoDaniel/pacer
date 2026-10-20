@@ -77,7 +77,10 @@ const gpa = std.heap.page_allocator;
 const MAX_DOC_SIZE: usize = 256 * 1024;
 const MAX_TARGETS_BLOB: usize = 64 * 1024;
 const DIAGS_CAP: usize = 64 * 1024;
-const META_CAP: usize = 320 * 1024;
+/// Derived from the format's own worst-case sum — the exact arithmetic
+/// `metaWorstCase` states beside the wire constants — so the zone cannot
+/// drift from the format the way a hand-picked literal can.
+const META_CAP: usize = Abi.metaWorstCase(256);
 /// Sized for the true full house — every emit lane, track, document
 /// control, and dynamic slot writing on one frame. Derived from
 /// `Eval.MAX_FRAME_ENTRIES` (the same constant `Evaluator.init` sizes
@@ -90,8 +93,12 @@ const NO_SLOT: u32 = 0xffff_ffff;
 comptime {
     // The score text must stay parseable by SJON. The schema is preloaded
     // beside the document, not prepended to it, so the whole budget is the
-    // document's.
+    // document's — and it never exceeds the format-side aggregate bound
+    // `Abi.MAX_DOC_SIZE` (the 'SNAM' name bytes are slices of this same
+    // document), so a meta blob encoded from a document here always fits
+    // the derived meta zone.
     std.debug.assert(MAX_DOC_SIZE <= sjon.Binary.MAX_FILE_SIZE);
+    std.debug.assert(MAX_DOC_SIZE <= Abi.MAX_DOC_SIZE);
     // A full diag buffer still fits useful records (16-byte fixed part).
     std.debug.assert(DIAGS_CAP >= Abi.DIAGS_HEADER_LEN + 64 * (Abi.DIAG_RECORD_LEN + 256));
     // Meta at the caps fits — every record and every section at its

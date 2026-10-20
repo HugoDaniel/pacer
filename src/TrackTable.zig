@@ -184,6 +184,15 @@ pub const Scene = struct {
     /// editor slices the scene's name from it (`drv_meta` writes it
     /// through verbatim); the frame path never reads it.
     name_span: RtSjon.Ast.Span,
+    /// The scene's name: the verbatim source bytes `name_span` points
+    /// at, captured at the same compile site (a borrow of the compile's
+    /// source, same lifetime as the spans — valid through
+    /// `encodeMeta`, which carries it in the `'SNAM'` section so a
+    /// binary consumer needs no source text). Default empty: a record
+    /// not filled from source (a hand-built shell) has no name to
+    /// carry — on the wire `name_len = 0` means a genuinely empty name
+    /// span, never a degrade of a real one.
+    name: []const u8 = "",
     /// Window start on the transport grid.
     start_tick: Tick,
     /// Window length; child tracks play over `[start, start+dur)`.

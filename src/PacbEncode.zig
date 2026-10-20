@@ -2401,7 +2401,10 @@ test "PacbEncode: the three committed CLI fixtures re-encode byte-identical" {
     const a = arena.allocator();
     const root = @import("build_options").repo_root;
 
-    for ([_][]const u8{ "keys-only", "expr-keys", "full-small" }) |name| {
+    // Sceneless sources: still byte-identical to the frozen CLI output —
+    // the metadata wave's 'SNAM' section is OMITTED at scene count 0, so
+    // these pins are untouched by it.
+    for ([_][]const u8{ "keys-only", "expr-keys" }) |name| {
         const src_path = try std.fmt.allocPrint(a, "{s}/tools/testdata/pacb/{s}.score.sjon", .{ root, name });
         const pacb_path = try std.fmt.allocPrint(a, "{s}/tools/testdata/pacb/{s}.pacb", .{ root, name });
         const src = try sjon.CappedRead.readFileZ(std.testing.io, src_path, a, 1 << 20);
@@ -2415,5 +2418,105 @@ test "PacbEncode: the three committed CLI fixtures re-encode byte-identical" {
 
         const bytes = try encode(a, &r, &.{});
         try t.expectEqualSlices(u8, want, bytes);
+    }
+
+    // full-small carries one scene, so the metadata wave changes the
+    // producer's output: the fresh pack is the FROZEN bytes (the
+    // fixtures stay frozen forever) PLUS exactly the known appended
+    // 'SNAM' tail frame — the legitimate known-producer-append form of
+    // this exact assert. Every frozen byte still matches one-to-one and
+    // the append itself is pinned byte-for-byte; parity is strengthened,
+    // not weakened.
+    const snam_tail = [_]u8{
+        'S', 'N', 'A', 'M', // section id "SNAM", LE 4-CC
+        12,  0,   0,   0, // payload_len: count(4) + name_len(4) + name(4)
+        1,   0,   0,   0, // count — equals the 'SCEN' count
+        4,   0,   0,   0, // name_len u32
+        'd', 'r', 'o', 'p', // the verbatim :name symbol bytes
+    };
+    {
+        const src_path = try std.fmt.allocPrint(a, "{s}/tools/testdata/pacb/full-small.score.sjon", .{root});
+        const pacb_path = try std.fmt.allocPrint(a, "{s}/tools/testdata/pacb/full-small.pacb", .{root});
+        const src = try sjon.CappedRead.readFileZ(std.testing.io, src_path, a, 1 << 20);
+        const want = try sjon.CappedRead.readFile(std.testing.io, pacb_path, a, 1 << 20);
+
+        var r = try compileForTest(a, src, &.{});
+        defer r.deinit();
+        var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+        try preflight(a, &r, &diags);
+        try t.expectEqual(@as(usize, 0), diags.items.len);
+
+        const bytes = try encode(a, &r, &.{});
+        // The embedded 'PACM' is the container's LAST section, so the
+        // appended 'SNAM' frame shows up as exactly four changes against
+        // the frozen file: the directory's 'PACM' length field (frozen
+        // directory entry: kind@148, off@152, len@156) grows by the
+        // tail's 20 bytes; the TRAN record's pacm_fnv (@208 — TRAN@160:
+        // bpm, meter, dur, flags, target counts, pact_fnv, pacm_fnv)
+        // re-hashes over the grown PACM; and the tail itself closes the
+        // file. Every other byte is identical.
+        const pacm_dir_len_off = 156;
+        const pacm_fnv_off = 208;
+        const old_pacm_len = std.mem.readInt(u32, want[pacm_dir_len_off..][0..4], .little);
+        try t.expectEqual(want.len + snam_tail.len, bytes.len);
+        try t.expectEqualSlices(u8, want[0..pacm_dir_len_off], bytes[0..pacm_dir_len_off]);
+        try t.expectEqual(old_pacm_len + snam_tail.len, std.mem.readInt(u32, bytes[pacm_dir_len_off..][0..4], .little));
+        try t.expectEqualSlices(u8, want[pacm_dir_len_off + 4 .. pacm_fnv_off], bytes[pacm_dir_len_off + 4 .. pacm_fnv_off]);
+        // pacm_fnv: FNV-1a-64 over the grown embedded PACM (its offset
+        // is unchanged — nothing before the last section moved).
+        const fresh_pacm = bytes[want.len - old_pacm_len ..];
+        try t.expectEqual(fnv1a64(fresh_pacm), std.mem.readInt(u64, bytes[pacm_fnv_off..][0..8], .little));
+        try t.expectEqualSlices(u8, want[pacm_fnv_off + 8 ..], bytes[pacm_fnv_off + 8 .. want.len]);
+        try t.expectEqualSlices(u8, &snam_tail, bytes[want.len..]);
+    }
+}
+
+test "PacbEncode: long scene names ride the pack's embedded 'PACM' verbatim" {
+    // The CLI-pack producer path: this module embeds the real
+    // `Abi.encodeMeta` blob as 'PACM', so the pack must carry long scene
+    // names exactly. A 300-byte name (past the dead 255-ish per-name
+    // policy) and a 66,000-byte name (past any 16-bit field — the wire
+    // length is u32) each survive pack → container decode → metadata
+    // section walk, read back out of the PRODUCED bytes, never a
+    // constructed record.
+    inline for ([_]usize{ 300, 66000 }) |name_len| {
+        const name = "a" ** 66000;
+        const src = try std.fmt.allocPrintSentinel(
+            t.allocator,
+            "(transport :bpm 120)\n(scene :name {s} :at 0b :dur 4b\n  (track :target circle-radius (key :at 0b :value 0.5)))\n",
+            .{name[0..name_len]},
+            0,
+        );
+        defer t.allocator.free(src);
+        var r = try compileForTest(t.allocator, src, fixture_host[0..1]);
+        defer r.deinit();
+        var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+        try preflight(t.allocator, &r, &diags);
+        try t.expectEqual(@as(usize, 0), diags.items.len);
+        const bytes = try encode(t.allocator, &r, &.{});
+        defer t.allocator.free(bytes);
+
+        var score = try Pacb.decode(t.allocator, bytes, null);
+        defer score.deinit();
+
+        // Walk the embedded PACM's section stream to the 'SNAM' tail:
+        // 1 track, 1 key, 0 controls before the stream, then 'SCEN'.
+        const pacm = score.pacm;
+        var off: usize = Abi.META_HEADER_LEN + Abi.META_TRACK_LEN + Abi.META_KEY_LEN;
+        try t.expect(pacm.len >= off + Abi.META_SECTION_HEADER_LEN);
+        try t.expectEqual(Abi.SCENES_SECTION_ID, std.mem.readInt(u32, pacm[off..][0..4], .little));
+        off += Abi.META_SECTION_HEADER_LEN + std.mem.readInt(u32, pacm[off + 4 ..][0..4], .little);
+        // The 'SNAM' tail frame must EXIST: this expect fails (never an
+        // out-of-bounds read) while the producer does not append it yet.
+        try t.expect(pacm.len >= off + Abi.META_SECTION_HEADER_LEN + 8 + name_len);
+        try t.expectEqual(Abi.SNAM_SECTION_ID, std.mem.readInt(u32, pacm[off..][0..4], .little));
+        const plen = std.mem.readInt(u32, pacm[off + 4 ..][0..4], .little);
+        try t.expectEqual(@as(u32, @intCast(4 + 4 + name_len)), plen);
+        const body = off + Abi.META_SECTION_HEADER_LEN;
+        try t.expectEqual(@as(u32, 1), std.mem.readInt(u32, pacm[body..][0..4], .little));
+        const got_len = std.mem.readInt(u32, pacm[body + 4 ..][0..4], .little);
+        try t.expectEqual(@as(u32, @intCast(name_len)), got_len);
+        try t.expectEqualSlices(u8, name[0..name_len], pacm[body + 8 ..][0..got_len]);
+        try t.expectEqual(pacm.len, off + Abi.META_SECTION_HEADER_LEN + plen); // tail
     }
 }

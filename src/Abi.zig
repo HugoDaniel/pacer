@@ -96,6 +96,21 @@
 //!         [count u32]
 //!         count × 16 { tick i64, bpm f64 }   // ascending, [0].tick == 0
 //!
+//!     'SNAM' scene names — the exact source bytes of every scene's
+//!       `:name` symbol, parallel to 'SCEN' (same count, same order), so
+//!       a binary consumer reports names with no source text. Emitted
+//!       AFTER 'TMPO' (the stream's tail), OMITTED when the scene count
+//!       is 0 (a sceneless blob stays byte-stable). Payload:
+//!         [count u32]                          // == the 'SCEN' count
+//!         count × { name_len u32, name bytes }
+//!       (names are carried EXACTLY — no per-name cap, no truncation,
+//!       no drop, no empty fallback; `name_len = 0` means a genuinely
+//!       empty name span, never a degrade. Names are non-overlapping
+//!       slices of one source document, so their aggregate is bounded
+//!       by the document size: the `MAX_DOC_SIZE` term in
+//!       `metaWorstCase`. Decoders check bounds only, never re-validate
+//!       name content — symbol bodies are ASCII-permissive.)
+//!
 //! Both formats are wire-stable from day one: append/version, never
 //! reorder. The third boundary format, `'PACW'`, lives in `Writes`.
 //!
@@ -156,6 +171,19 @@ pub const META_EASE_OP_LEN: usize = 20;
 pub const META_EASE_STAGE_LEN: usize = 96;
 /// Bytes per program record inside the `'EASE'` payload.
 pub const META_EASE_PROGRAM_LEN: usize = 772;
+/// `"SNAM"` read LE — the scene-name section id in the meta stream.
+/// The byte spelling is `"SNAM"` (0x53 0x4E 0x41 0x4D); the value is
+/// that read as one little-endian u32, house 4-CC style.
+pub const SNAM_SECTION_ID: u32 = 0x4D414E53;
+/// Aggregate bound for the `'SNAM'` name bytes: names are
+/// non-overlapping slices of the compiled source document, so their
+/// total can never exceed the source document cap. `MAX_DOC_SIZE` here
+/// is that FORMAT-side bound, the same 256 KiB `wasm_entry.zig` spells
+/// as its host policy (`wasm_entry` asserts its own value never grows
+/// past this one); a native source larger than the bound packs, and the
+/// wasm zone refuses the over-cap blob at load — the pre-existing
+/// loud over-cap class, never a silent loss budget.
+pub const MAX_DOC_SIZE: usize = 256 * 1024;
 
 /// Worst-case `'PACM'` blob size at every cap — term by term in wire
 /// order, ending with the section stream. `id_allowance` is caller
@@ -172,7 +200,13 @@ pub fn metaWorstCase(comptime id_allowance: usize) usize {
         META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_SCENES * SCENE_REC_LEN + // 'SCEN'
         META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_EASE_PROGRAMS * META_EASE_PROGRAM_LEN +
         4 + TrackTable.MAX_KEYS * 2 + // 'EASE' (programs + per-key ease_refs)
-        META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_TEMPO_SEGMENTS * TEMPO_REC_LEN; // 'TMPO'
+        META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_TEMPO_SEGMENTS * TEMPO_REC_LEN + // 'TMPO'
+        // 'SNAM' — count + one u32 length field per name + the aggregate
+        // name bytes. Names are non-overlapping slices of ONE source
+        // document, so the aggregate is bounded by that document's size
+        // (`MAX_DOC_SIZE`), not per-name-something: the honest worst
+        // case, not a multiplied guess.
+        META_SECTION_HEADER_LEN + 4 + TrackTable.MAX_SCENES * 4 + MAX_DOC_SIZE; // 'SNAM'
 }
 
 /// Most targets any host may join at load — `PactCodec.MAX_TARGETS`, THE
@@ -404,6 +438,15 @@ pub fn metaEncodedLen(result: *const Compile.CompileResult) usize {
     // alone — so a mapless blob stays byte-stable).
     if (table.transport.segments.len > 1)
         len += META_SECTION_HEADER_LEN + 4 + table.transport.segments.len * TEMPO_REC_LEN;
+    // 'SNAM' section (omitted when there are no scenes — the names ride
+    // nowhere else on the wire, and a sceneless blob stays byte-
+    // identical to its pre-SNAM encoding). Payload: count + one u32
+    // length field per name + the aggregate name bytes.
+    if (table.scenes.len > 0) {
+        var name_bytes: usize = 0;
+        for (table.scenes) |scene| name_bytes += scene.name.len;
+        len += META_SECTION_HEADER_LEN + 4 + table.scenes.len * 4 + name_bytes;
+    }
     return len;
 }
 
@@ -548,6 +591,31 @@ pub fn encodeMeta(result: *const Compile.CompileResult, dest: []u8) Error![]u8 {
             const rec: MetaTempoRec = .{ .tick = seg.start_tick, .bpm = seg.bpm };
             @memcpy(dest[pos..][0..TEMPO_REC_LEN], std.mem.asBytes(&rec));
             pos += TEMPO_REC_LEN;
+        }
+    }
+
+    // The 'SNAM' section (after 'TMPO' — the stream's tail, fixed
+    // order): every scene's name as the verbatim source-symbol bytes,
+    // parallel to 'SCEN' — count equals the 'SCEN' count, entry order is
+    // scene order — so a binary consumer reports names with no source
+    // text. Names are carried EXACTLY: no per-name cap, no truncation,
+    // no drop, no empty fallback; the u32 length field is large enough
+    // for any accepted source. Present only when the score has scenes,
+    // so a sceneless blob stays byte-stable.
+    if (table.scenes.len > 0) {
+        var name_bytes: usize = 0;
+        for (table.scenes) |scene| name_bytes += scene.name.len;
+        const payload_len = 4 + table.scenes.len * 4 + name_bytes;
+        std.mem.writeInt(u32, dest[pos..][0..4], SNAM_SECTION_ID, .little);
+        std.mem.writeInt(u32, dest[pos + 4 ..][0..4], @intCast(payload_len), .little);
+        pos += META_SECTION_HEADER_LEN;
+        std.mem.writeInt(u32, dest[pos..][0..4], @intCast(table.scenes.len), .little);
+        pos += 4;
+        for (table.scenes) |scene| {
+            std.mem.writeInt(u32, dest[pos..][0..4], @intCast(scene.name.len), .little);
+            pos += 4;
+            @memcpy(dest[pos..][0..scene.name.len], scene.name);
+            pos += scene.name.len;
         }
     }
 
@@ -1313,12 +1381,24 @@ test "encodeMeta: a scenes section rides after the controls as a 'SCEN' TLV fram
     try t.expectEqual(@as(u32, 0), std.mem.readInt(u32, m[36..40], .little)); // controls
     const sec = META_HEADER_LEN + 2 * META_TRACK_LEN + 2 * META_KEY_LEN;
 
-    // Frame header: id 'SCEN', payload_len = 4 (count) + 2 × 24 (records).
+    // The frame header: id 'SCEN', payload_len = 4 (count) + 2 × 24 (records).
     try t.expectEqual(SCENES_SECTION_ID, std.mem.readInt(u32, m[sec..][0..4], .little));
     const plen = std.mem.readInt(u32, m[sec + 4 ..][0..4], .little);
     try t.expectEqual(@as(u32, 4 + 2 * SCENE_REC_LEN), plen);
-    // The frame accounts for exactly the rest of the blob (self-delimiting).
-    try t.expectEqual(m.len, sec + META_SECTION_HEADER_LEN + plen);
+    // The frame is self-delimiting: exactly the appended 'SNAM' tail
+    // frame follows it (the metadata wave's scene-name section — the
+    // same two scenes, names "intro" then "drop" verbatim), and that
+    // tail closes the blob.
+    const snam = sec + META_SECTION_HEADER_LEN + plen;
+    try t.expectEqual(m.len, snam + META_SECTION_HEADER_LEN + 21); // 4 + 2×(4+len)
+    try t.expectEqual(SNAM_SECTION_ID, std.mem.readInt(u32, m[snam..][0..4], .little));
+    try t.expectEqual(@as(u32, 21), std.mem.readInt(u32, m[snam + 4 ..][0..4], .little));
+    const sbody = snam + META_SECTION_HEADER_LEN;
+    try t.expectEqual(@as(u32, 2), std.mem.readInt(u32, m[sbody..][0..4], .little)); // == 'SCEN' count
+    try t.expectEqual(@as(u32, 5), std.mem.readInt(u32, m[sbody + 4 ..][0..4], .little));
+    try t.expectEqualStrings("intro", m[sbody + 8 ..][0..5]);
+    try t.expectEqual(@as(u32, 4), std.mem.readInt(u32, m[sbody + 13 ..][0..4], .little));
+    try t.expectEqualStrings("drop", m[sbody + 17 ..][0..4]);
 
     const body = sec + META_SECTION_HEADER_LEN;
     try t.expectEqual(@as(u32, 2), std.mem.readInt(u32, m[body..][0..4], .little)); // count
@@ -1575,7 +1655,158 @@ test "encodeMeta: 'EASE' rides after 'SCEN' when both are present" {
     off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
     try t.expectEqual(EASE_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
     off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
-    try t.expectEqual(m.len, off); // the two frames account for the whole stream
+    // The appended 'SNAM' tail (one scene, "intro") closes the stream.
+    try t.expectEqual(SNAM_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(m.len, off); // the three frames account for the whole stream
+}
+
+test "encodeMeta: a scene-name 'SNAM' section rides last as the tail frame" {
+    // Scenes + ease + tempo: the full fixed order, so the tail position
+    // after 'TMPO' is pinned (the order the section stream has grown in
+    // since 'SCEN' — append-only, never reorder).
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+        \\(tempo :at 8b :bpm 160)
+        \\(scene :name drop :at 2bar :dur 2bar
+        \\  (track :target circle-radius
+        \\    (key :at 0b :value 30)
+        \\    (key :at 4b :value 140 :ease (steps :n 8))))
+    ;
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    var buf: [4096]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    try t.expectEqual(metaEncodedLen(&r), m.len);
+
+    // 1 track, 2 keys, 0 controls before the stream; then 'SCEN', 'EASE',
+    // 'TMPO' in the frozen order.
+    var off: usize = META_HEADER_LEN + META_TRACK_LEN + 2 * META_KEY_LEN;
+    try t.expectEqual(SCENES_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(EASE_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(TEMPO_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+
+    // The 'SNAM' tail frame must EXIST: this expect fails (never an
+    // out-of-bounds read) while the encoder does not append it yet.
+    try t.expect(m.len >= off + META_SECTION_HEADER_LEN + 12);
+    try t.expectEqual(SNAM_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    const plen = std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(@as(u32, 4 + 4 + 4), plen); // count + name_len + "drop"
+    try t.expectEqual(m.len, off + META_SECTION_HEADER_LEN + plen); // self-delimiting tail
+
+    // Payload: [count u32 == the 'SCEN' count][name_len u32][name bytes].
+    const body = off + META_SECTION_HEADER_LEN;
+    try t.expectEqual(@as(u32, 1), std.mem.readInt(u32, m[body..][0..4], .little));
+    const name_len = std.mem.readInt(u32, m[body + 4 ..][0..4], .little);
+    try t.expectEqual(@as(u32, 4), name_len);
+    try t.expectEqualStrings("drop", m[body + 8 ..][0..name_len]);
+}
+
+test "encodeMeta: a 300-byte scene name encodes exactly" {
+    // R3 — exactness: no per-name cap, no truncate, no drop, no empty
+    // fallback. A 300-byte name rides whole (the old 255-ish per-name
+    // policy is dead), produced by the ordinary text-compile path and
+    // read back out of the produced bytes.
+    const name = "a" ** 300;
+    const src = try std.fmt.allocPrintSentinel(
+        t.allocator,
+        "(transport :bpm 120)\n(scene :name {s} :at 0b :dur 4b\n  (track :target circle-radius (key :at 0b :value 0.5)))\n",
+        .{name},
+        0,
+    );
+    defer t.allocator.free(src);
+    var r = try Compile.compile(t.allocator, test_support.schema(), src, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    var buf: [1024]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    try t.expectEqual(metaEncodedLen(&r), m.len);
+
+    // Stream after 1 track, 1 key, 0 controls: 'SCEN' then 'SNAM'.
+    var off: usize = META_HEADER_LEN + META_TRACK_LEN + META_KEY_LEN;
+    try t.expectEqual(SCENES_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    // Guard before reading: the 'SNAM' frame must exist at all.
+    try t.expect(m.len >= off + META_SECTION_HEADER_LEN + 308);
+    try t.expectEqual(SNAM_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    const plen = std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(@as(u32, 4 + 4 + 300), plen);
+    const body = off + META_SECTION_HEADER_LEN;
+    try t.expectEqual(@as(u32, 1), std.mem.readInt(u32, m[body..][0..4], .little));
+    const name_len = std.mem.readInt(u32, m[body + 4 ..][0..4], .little);
+    try t.expectEqual(@as(u32, 300), name_len);
+    try t.expectEqualStrings(name, m[body + 8 ..][0..name_len]);
+    try t.expectEqual(m.len, off + META_SECTION_HEADER_LEN + plen);
+}
+
+test "encodeMeta: a >65535-byte scene name encodes exactly (u32 wire length)" {
+    // R4 — the wire length field is u32: 65,535 is NOT a cap (a u16
+    // spelling would wrap here). The name is 66,000 bytes — under the
+    // aggregate source bound, over any 16-bit field. The read-back runs
+    // against the PRODUCED bytes, not a constructed record.
+    const name = "a" ** 66000;
+    const src = try std.fmt.allocPrintSentinel(
+        t.allocator,
+        "(transport :bpm 120)\n(scene :name {s} :at 0b :dur 4b\n  (track :target circle-radius (key :at 0b :value 0.5)))\n",
+        .{name},
+        0,
+    );
+    defer t.allocator.free(src);
+    var r = try Compile.compile(t.allocator, test_support.schema(), src, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    const m = try t.allocator.alloc(u8, metaEncodedLen(&r));
+    defer t.allocator.free(m);
+    try t.expectEqual(m.len, (try encodeMeta(&r, m)).len);
+
+    var off: usize = META_HEADER_LEN + META_TRACK_LEN + META_KEY_LEN;
+    try t.expectEqual(SCENES_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    // Guard before reading: the 'SNAM' frame must exist at all.
+    try t.expect(m.len >= off + META_SECTION_HEADER_LEN + 66008);
+    try t.expectEqual(SNAM_SECTION_ID, std.mem.readInt(u32, m[off..][0..4], .little));
+    const plen = std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    try t.expectEqual(@as(u32, 4 + 4 + 66000), plen);
+    const body = off + META_SECTION_HEADER_LEN;
+    try t.expectEqual(@as(u32, 1), std.mem.readInt(u32, m[body..][0..4], .little));
+    const name_len = std.mem.readInt(u32, m[body + 4 ..][0..4], .little);
+    try t.expectEqual(@as(u32, 66000), name_len);
+    try t.expectEqualStrings(name, m[body + 8 ..][0..name_len]);
+    try t.expectEqual(m.len, off + META_SECTION_HEADER_LEN + plen);
+}
+
+test "encodeMeta: a sceneless score emits no 'SNAM' frame" {
+    // Omission rule: scene count 0 → the section is absent, so a
+    // sceneless blob stays byte-identical to its pre-SNAM encoding —
+    // the exact property the committed sceneless oracles
+    // (`keys-controls.pacm`, `minimal.pacm`) pin byte-for-byte in
+    // root.zig's producer test. Here with a NON-empty stream (a tempo
+    // map) to prove the omission is SNAM-specific, not stream emptiness.
+    var r = try Compile.compile(t.allocator, test_support.schema(),
+        \\(transport :bpm 120 :meter [4 4])
+        \\(tempo :at 4b :bpm 240)
+        \\(track :target circle-radius (key :at 0b :value 0.1))
+    , &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+    var buf: [512]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    try t.expectEqual(metaEncodedLen(&r), m.len);
+    // The stream is exactly the 'TMPO' frame; nothing follows it.
+    const sec = META_HEADER_LEN + META_TRACK_LEN + META_KEY_LEN;
+    try t.expectEqual(TEMPO_SECTION_ID, std.mem.readInt(u32, m[sec..][0..4], .little));
+    const plen = std.mem.readInt(u32, m[sec + 4 ..][0..4], .little);
+    try t.expectEqual(m.len, sec + META_SECTION_HEADER_LEN + plen);
 }
 
 // ---------------------------------------------------------------------------

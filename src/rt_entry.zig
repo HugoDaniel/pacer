@@ -370,6 +370,10 @@ fn materialize(shell: *RtScore) bool {
     for (shell.score.scenes, scenes) |ds, *scene| {
         scene.* = .{
             .name_span = .{ .start = 0, .end = 0 },
+            // The binary shell's spans are inert zeros — no source to
+            // borrow — so the name is explicitly empty (the wire's
+            // name_len = 0 spelling), never a borrowed garbage slice.
+            .name = "",
             .start_tick = ds.start_tick,
             .dur_ticks = ds.dur_ticks,
         };

@@ -1011,6 +1011,11 @@ const Builder = struct {
             const scene_index: u16 = @intCast(self.scenes.items.len);
             const scene: TrackTable.Scene = .{
                 .name_span = tree.spanOf(name_node.?),
+                // The same verbatim source bytes the span points at —
+                // the `'SNAM'` section's cargo (symbol bodies are
+                // ASCII-permissive; the bytes ride exactly, no
+                // re-validation).
+                .name = name,
                 .start_tick = start_tick,
                 .dur_ticks = dur_ticks,
             };

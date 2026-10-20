@@ -2492,6 +2492,10 @@ pub fn pacmWorstCase(comptime str_allowance: usize) usize {
     const meta_section_header_len = 8;
     const scene_rec_len = 24;
     const tempo_rec_len = 16;
+    const snam_len_field = 4;
+    // Abi.MAX_DOC_SIZE, frozen copy — the source-document bound the
+    // aggregate name bytes can never exceed.
+    const max_doc_size = 256 * 1024;
 
     return meta_header_len +
         MAX_TRACKS * meta_track_len +
@@ -2500,7 +2504,8 @@ pub fn pacmWorstCase(comptime str_allowance: usize) usize {
         meta_section_header_len + 4 + MAX_SCENES * scene_rec_len +
         meta_section_header_len + 4 + MAX_EASE_PROGRAMS * PACM_EASE_PROGRAM_LEN +
         4 + MAX_KEYS * 2 +
-        meta_section_header_len + 4 + MAX_TEMPO_SEGMENTS * tempo_rec_len;
+        meta_section_header_len + 4 + MAX_TEMPO_SEGMENTS * tempo_rec_len +
+        meta_section_header_len + 4 + MAX_SCENES * snam_len_field + max_doc_size; // 'SNAM'
 }
 
 /// The largest `'PACB'` file at every v1 cap, term by term in wire order.
@@ -2934,9 +2939,13 @@ test "Pacb: v1 caps are frozen and pacbWorstCase is the spec sum" {
 
     // Independent tool arithmetic (Python) over the frozen terms: the
     // exact totals pin every term, so a typo in a width/cap cannot hide
-    // behind the growth property above.
-    try t.expectEqual(@as(usize, 5_754_664), pacbWorstCase(0));
-    try t.expectEqual(@as(usize, 5_828_392), pacbWorstCase(64));
+    // behind the growth property above. (The metadata wave's 'SNAM'
+    // section added 262,412 bytes — 8 + 4 + 64×4 + the 256 KiB source
+    // bound — to both totals; measured by the compiler itself in the
+    // first post-change run: pacbWorstCase(0) printed as the `found`
+    // value of the old pin's failure.)
+    try t.expectEqual(@as(usize, 6_017_076), pacbWorstCase(0));
+    try t.expectEqual(@as(usize, 6_090_804), pacbWorstCase(64));
 
     // The 'PAYL' term alone is the frozen 4 MiB cap plus its length prefix.
     try t.expect(pacbWorstCase(0) > MAX_PAYL_BYTES);

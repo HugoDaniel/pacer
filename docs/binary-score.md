@@ -248,6 +248,24 @@ at pack and served verbatim to JS — but only after `src/Pacm.zig`, a
 std-only runtime-side reader (the encoder stays compiler-side and never
 enters the runtime closure), has validated it at decode:
 
+### The `'SNAM'` scene-name section
+
+Appended to the `'PACM'` section stream after `'TMPO'` (2026-10-20, the
+source-free metadata wave — plans/binary/05). Id `"SNAM"` LE
+(`0x4D414E53`); payload `[count u32]` then `count × { name_len u32,
+name bytes }`, where `count` MUST equal the `'SCEN'` count and the
+entries run in scene order. The bytes are the verbatim source-symbol
+bytes of each scene's `:name` — carried **exactly**: no per-name cap,
+no truncation, no drop, no empty fallback; `name_len = 0` means a
+genuinely empty name span, never a degrade. Names are non-overlapping
+slices of one source document, so the aggregate is bounded by that
+document's size (`Abi.MAX_DOC_SIZE` = 256 KiB; the static worst-case
+term in `Abi.metaWorstCase` / the frozen copy in
+`Pacb.pacmWorstCase`). The section is OMITTED when the scene count is
+0, so a sceneless blob stays byte-identical to its pre-`'SNAM'`
+encoding. Decoders (Zig and JS) that predate the section skip it by
+TLV length; bound-checking only, never name re-validation.
+
 1. **Structural read of the whole blob** — magic/version, every record
    width, the post-controls TLV section stream walked to EXACT
    end-of-buffer, span pairs ordered (`end ≥ start`), transport domains

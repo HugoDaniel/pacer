@@ -126,7 +126,23 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 - [x] **Step 2: Hash with a trustworthy binary.** `/usr/bin/sha256sum` **and** `openssl dgst -sha256` each artifact; both must agree (session note: `/home/agent/bin/sha256sum` is a wrapper that misreported — the empty-string hash `e3b0c442…` for a 171,667-byte file; the agreed value for `pacer-rt.wasm` is `656030906c8bb3b879b3c8bb4cdedef332b909afce742e8ce9a8e6b43a44b776`). Record all values in `metadata-frozen-artifacts.md`.
 - [x] **Step 3: Verify + commit.** Byte-compare copies against originals; `git status --porcelain` shows only the new pin plus pre-existing `zig-pkg/`. Commit: `test(meta): pin pre-SNAM fixture and frozen reader artifacts before edits`.
 
-### Group 1: `'SNAM'` encoder + ALL sizer/oracle coherence — one green commit
+### Group 1: `'SNAM'` encoder + ALL sizer/oracle coherence — one green commit — **DONE 2026-10-20** (this commit; report `.agent/control/metadata-g1-report.md`)
+
+> Executed with actual RED (exit=1, `metadata-g1-red1.log`) before any
+> production edit; fixture regenerated once and proven append-only by
+> `cmp` (1772 → 1792 bytes). Measured caps (compiler-printed probe,
+> `metadata-g1-probe.log`): `metaWorstCase(256)` = 536,924 (= the plan's
+> number; `pacmWorstCase` equality holds), `pacbWorstCase(0)` = 6,017,076,
+> so `META_CAP` = 536,924 (was the hand-picked 327,680) and `PACB_CAP` =
+> 6,311,988. Three premises the plan missed, adjusted minimally as the
+> brief's "legitimate known-producer append changes" (details in the
+> report): (1) `PacbEncode`'s "three committed CLI fixtures re-encode
+> byte-identical" full-small leg — the frozen container's embedded
+> `'PACM'` grows, so the fresh pack differs from the frozen bytes in the
+> directory's `'PACM'` len field, the `'TRAN'` `pacm_fnv`, and the
+> appended 20-byte tail (every other byte pinned identical); (2) `Pacb`'s
+> frozen cap-sum numeric pins gained the 262,412-byte `'SNAM'` term;
+> (3) two existing `Abi` stream-extent asserts now see the `'SNAM'` tail.
 
 **Files:**
 - Modify: `src/TrackTable.zig` (scene record gains `name: []const u8 = ""`; `MAX_SCENES` at `:46` unchanged)
@@ -142,12 +158,12 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 - Consumes: Group 0's pin (immutability gate re-scoped before this commit lands).
 - Produces: `Abi.SNAM_SECTION_ID`, scene-record `name` field, the worst-case term formula of §3. Groups 2-4 rely on these exact names; the regenerated fixture is what npm `pretest` rebuilds downstream.
 
-- [ ] **Step 1: Write the failing tests** in `src/Abi.zig` (builder style of the `:1293` scenes test): (a) tail-frame layout — id `0x4D414E53`, payload `[count][len]["drop"]` with u32 length; (b) a 300-byte name encodes **exactly** (R3 — kills the old truncate/degrade contradiction); (c) sceneless blob byte-identical to pre-SNAM encoding; (d) `metaWorstCase`/`pacmWorstCase` equality still holds at `{0,1,16,64,256}` (existing `root.zig:164-174` test is the gate).
-- [ ] **Step 2: Run RED** — `zig build test` on obs-dev; new tests fail (no SNAM frame). Capture exit code pre-pipe.
-- [ ] **Step 3: Implement** encoder + both sizer terms + `META_CAP` re-derivation. Exactness: encode the full span slice, u32 length, no `@min` anywhere.
-- [ ] **Step 4: Regenerate the oracle fixture once** by running the `root.zig:452-472` oracle's own encode path and writing its output bytes over `src/testdata/pacm/scenes-tempo-ease.pacm`; review the diff (only an appended `'SNAM'` frame); the other two oracles (`root.zig:299-307,318-320`) are sceneless and stay green untouched.
-- [ ] **Step 5: Run GREEN gates** on obs-dev — `zig build test` (incl. oracle byte-equality + worst-case equality), `zig build verify` (corpus 43/43; node 114/114 — masks still present, binary names render `''` until Group 3). Exit codes captured pre-pipe.
-- [ ] **Step 6: Commit** — `feat(meta): encode scene names as append-only 'SNAM' TLV; sizers/oracle coherent`. Record in the task report: new `META_CAP`, new `PACB_CAP`, fixture size delta.
+- [x] **Step 1: Write the failing tests** in `src/Abi.zig` (builder style of the `:1293` scenes test): (a) tail-frame layout — id `0x4D414E53`, payload `[count][len]["drop"]` with u32 length; (b) a 300-byte name encodes **exactly** (R3 — kills the old truncate/degrade contradiction); (c) sceneless blob byte-identical to pre-SNAM encoding; (d) `metaWorstCase`/`pacmWorstCase` equality still holds at `{0,1,16,64,256}` (existing `root.zig:164-174` test is the gate).
+- [x] **Step 2: Run RED** — `zig build test` on obs-dev; new tests fail (no SNAM frame). Capture exit code pre-pipe.
+- [x] **Step 3: Implement** encoder + both sizer terms + `META_CAP` re-derivation. Exactness: encode the full span slice, u32 length, no `@min` anywhere.
+- [x] **Step 4: Regenerate the oracle fixture once** by running the `root.zig:452-472` oracle's own encode path and writing its output bytes over `src/testdata/pacm/scenes-tempo-ease.pacm`; review the diff (only an appended `'SNAM'` frame); the other two oracles (`root.zig:299-307,318-320`) are sceneless and stay green untouched.
+- [x] **Step 5: Run GREEN gates** on obs-dev — `zig build test` (incl. oracle byte-equality + worst-case equality), `zig build verify` (corpus 43/43; node 114/114 — masks still present, binary names render `''` until Group 3). Exit codes captured pre-pipe.
+- [x] **Step 6: Commit** — `feat(meta): encode scene names as append-only 'SNAM' TLV; sizers/oracle coherent`. Record in the task report: new `META_CAP`, new `PACB_CAP`, fixture size delta.
 
 ### Group 2: Zig decoders — strict refusals, skip tolerance, structured fuzz reach
 
