@@ -8,6 +8,13 @@
 // uses (`npm run g5:serve` semantics: node browser/server.mjs), bound
 // to the fixture port 8046; reuseExistingServer lets an externally
 // started server (the parent's) be used as-is.
+//
+// PACER_G5_PORT / PACER_G5_ROOT (G5 corrections wave): a worker run
+// can point the proof at its own ephemeral server + webroot — e.g. a
+// RED run against a preserved pre-fix copy — without touching the
+// parent's 8046 origin. Unset → the documented defaults, unchanged.
+const port = process.env.PACER_G5_PORT ?? '8046';
+const rootFlag = process.env.PACER_G5_ROOT ? ` --root ${process.env.PACER_G5_ROOT}` : '';
 
 export default {
   testDir: './browser',
@@ -15,13 +22,13 @@ export default {
   timeout: 120_000,
   expect: { timeout: 15_000 },
   use: {
-    baseURL: 'http://127.0.0.1:8046',
+    baseURL: `http://127.0.0.1:${port}`,
     headless: true,
     viewport: { width: 1365, height: 900 },
   },
   webServer: {
-    command: 'node browser/server.mjs --port 8046',
-    url: 'http://127.0.0.1:8046/manifest.json',
+    command: `node browser/server.mjs --port ${port}${rootFlag}`,
+    url: `http://127.0.0.1:${port}/manifest.json`,
     reuseExistingServer: true,
     timeout: 15_000,
   },

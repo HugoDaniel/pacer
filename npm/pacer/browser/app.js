@@ -28,6 +28,11 @@ const state = {
   driver: null,
   variant: null,
   writes: 0,
+  // Monotonic load epoch — last intent wins (H1): every async load
+  // captures the epoch at entry and commits only if it is still the
+  // newest. A stale chain (fetch/completion order ≠ click order) bails
+  // silently before touching state, its driver, or the error box.
+  loadEpoch: 0,
 };
 
 // Passive QA readback: values, digests, requests, errors — no fake
@@ -53,10 +58,13 @@ function showError(error) {
   const message = error?.message ?? String(error);
   $('error').textContent = message;
   $('error').hidden = false;
-  setStatus(`error: ${message}`, 'error');
+  // Short status copy (design O-B): the role=alert below carries the
+  // full message — the polite status region must not announce it twice.
+  setStatus('error — see the alert above', 'error');
   proof.errors.push(message);
   proof.digests = {};
   proof.names = null;
+  proof.variant = null;
   // Clear and block every data zone — no stale names, no stale
   // writes, no eval against a half-armed runtime.
   $('names').textContent = '—';
@@ -108,12 +116,19 @@ async function fetchVerified(route) {
 
 /** Raw-DEFLATE via the platform — the same primitive pngine uses. */
 async function inflateRaw(bytes) {
-  if (typeof DecompressionStream !== 'function') {
+  // Construct the EXACT format inside the guard (L1): Safari 16.0–16.3
+  // ships DecompressionStream without the 'deflate-raw' format, where
+  // the constructor itself throws. Curated refusal — never a bare
+  // TypeError, never a bundled fallback codec.
+  let stream;
+  try {
+    if (typeof DecompressionStream !== 'function') throw new Error('missing global');
+    stream = new DecompressionStream('deflate-raw');
+  } catch {
     throw new Error(
       'DecompressionStream("deflate-raw") unsupported — cannot inflate the compressed bundle',
     );
   }
-  const stream = new DecompressionStream('deflate-raw');
   const writer = stream.writable.getWriter();
   const reader = stream.readable.getReader();
   writer.write(bytes).catch(() => {});
@@ -136,13 +151,20 @@ async function inflateRaw(bytes) {
 }
 
 async function refreshRequestLog() {
-  const res = await fetch('/__requests.json');
-  if (!res.ok) return;
-  const { requests } = await res.json();
-  proof.requests = requests;
-  $('request-log').textContent = requests
-    .map((e) => `${e.method} ${e.path} ${e.status}`)
-    .join('\n');
+  // Passive readback (L3): a dead server mid-session must never become
+  // an unhandled rejection out of a finally block — the last rendered
+  // log stays until the next successful refresh.
+  try {
+    const res = await fetch('/__requests.json');
+    if (!res.ok) return;
+    const { requests } = await res.json();
+    proof.requests = requests;
+    $('request-log').textContent = requests
+      .map((e) => `${e.method} ${e.path} ${e.status}`)
+      .join('\n');
+  } catch {
+    // Network failure only — never surfaced as an unhandled rejection.
+  }
 }
 
 function renderMetadata(driver) {
@@ -167,16 +189,25 @@ function setPressed(name) {
 }
 
 async function loadVariant(name) {
+  // Last intent wins (H1): the epoch is captured at entry; only the
+  // NEWEST load may commit. Entry-side intent lines (press, eval
+  // disable) run synchronously at click time — a newer click always
+  // overwrites them; a stale chain never re-writes them.
+  const epoch = ++state.loadEpoch;
+  const stale = () => epoch !== state.loadEpoch;
   clearError();
   setPressed(`toggle-${name}`);
-  $('eval-button').disabled = true;
-  const bundleRoute = state.manifest.variants[name].bundle;
+  $('eval-button').disabled = true; // eval stays disabled through pending
   try {
+    if (!state.manifest) {
+      throw new Error('manifest not loaded — cannot resolve a variant bundle');
+    }
+    const bundleRoute = state.manifest.variants[name].bundle;
     setStatus(`loading ${bundleRoute} …`);
     const bundle = await fetchVerified(bundleRoute);
-    proof.variant = name;
-    state.variant = name;
-    proof.digests.bundle = { route: bundleRoute, sha256: await sha256Hex(bundle), match: true };
+    if (stale()) return; // a newer intent exists — commit nothing
+    const bundleDigest = await sha256Hex(bundle);
+    if (stale()) return;
 
     setStatus(`extracting PACB payloads …`);
     const payloads = [...payloadsOf(bundle)]; // throws on a malformed bundle
@@ -196,6 +227,7 @@ async function loadVariant(name) {
 
     setStatus('materializing the cartridge …');
     const cartridge = pacb.flags & 1 ? await inflateRaw(pacb.body) : pacb.body;
+    if (stale()) return;
     const cartridgeDigest = await sha256Hex(cartridge);
     const cartridgePin = state.manifest.variants[name].cartridgeSha256;
     if (cartridgeDigest !== cartridgePin) {
@@ -203,22 +235,29 @@ async function loadVariant(name) {
         `cartridge digest mismatch: inflated ${cartridgeDigest}, manifest pins ${cartridgePin}`,
       );
     }
-    proof.digests.cartridge = { sha256: cartridgeDigest, bytes: cartridge.length, match: true };
+    if (stale()) return;
 
     setStatus('arming PacerRt …');
-    const driver = await PacerRt.load(state.rtModule, cartridge);
+    const driver = await PacerRt.load(state.rtModule, cartridge); // LOCAL candidate
+    if (stale()) return; // an earlier race can never poison the actual driver
     if (!driver.ok)
       throw new Error(`PacerRt refused the cartridge: status ${driver.status} (${driver.reason})`);
-    state.driver = driver;
 
+    // ── Commit — only when this load is still the newest intent ──
+    state.driver = driver;
+    state.variant = name;
+    proof.variant = name;
+    proof.digests.bundle = { route: bundleRoute, sha256: bundleDigest, match: true };
+    proof.digests.cartridge = { sha256: cartridgeDigest, bytes: cartridge.length, match: true };
     renderMetadata(driver);
-    $('hash').textContent = `${bundleRoute} sha256 ${proof.digests.bundle.sha256}`;
+    $('hash').textContent = `${bundleRoute} sha256 ${bundleDigest}`;
     setStatus(
       `ready — variant ${name}, ${state.manifest.variants[name].names.length} scene(s); eval enabled`,
       'ready',
     );
-    $('eval-button').disabled = false;
+    $('eval-button').disabled = false; // only the current load re-enables eval
   } catch (error) {
+    if (stale()) return; // a stale older request's failure must not clear the newer state
     showError(error);
   } finally {
     await refreshRequestLog();
@@ -227,42 +266,62 @@ async function loadVariant(name) {
 
 function evalAt(supplied) {
   if (!state.driver) return;
-  const t = Number(supplied);
-  if (!Number.isFinite(t)) {
-    showError(new Error(`supplied time must be a finite number, got "${supplied}"`));
+  const input = $('time-input');
+  input.setCustomValidity('');
+  // L5: a blank (or otherwise non-finite) supplied time is REFUSED
+  // with a visible validity hint — never coerced (Number('') was 0).
+  // Refusal writes nothing and advances no count; the armed runtime
+  // and the loaded variant stay exactly as they are.
+  const text = String(supplied ?? '').trim();
+  const t = Number(text);
+  if (text === '' || !Number.isFinite(t)) {
+    input.setCustomValidity(
+      `supplied time must be a finite number — the field is ${text === '' ? 'blank' : `“${text}”`}`,
+    );
+    input.reportValidity();
+    setStatus('eval refused — the supplied time is not a finite number', 'error');
     return;
   }
-  const entries = state.driver.eval(t) ?? [];
-  const tbody = $('writes-table').tBodies[0];
-  for (const entry of entries) {
-    const row = tbody.insertRow();
-    // textContent only, everywhere; names of targets are absent on
-    // this path (declared-only targets carry no name over the wire),
-    // so the key is the wasm-supplied join of id/registry/ncomp.
-    row.insertCell().textContent = String(t);
-    row.insertCell().textContent = `#${entry.targetId} reg${entry.registry} ×${entry.ncomp}`;
-    row.insertCell().textContent = Array.from(entry.value.slice(0, entry.ncomp), String).join(', ');
-    row.insertCell().textContent = String(entries.length);
-    proof.writes.push({
-      variant: state.variant,
-      t,
-      targetId: entry.targetId,
-      registry: entry.registry,
-      ncomp: entry.ncomp,
-      value: Array.from(entry.value.slice(0, entry.ncomp)),
-    });
+  try {
+    const entries = state.driver.eval(t) ?? [];
+    const tbody = $('writes-table').tBodies[0];
+    for (const entry of entries) {
+      const row = tbody.insertRow();
+      // textContent only, everywhere; names of targets are absent on
+      // this path (declared-only targets carry no name over the wire),
+      // so the key is the wasm-supplied join of id/registry/ncomp.
+      row.insertCell().textContent = String(t);
+      row.insertCell().textContent = `#${entry.targetId} reg${entry.registry} ×${entry.ncomp}`;
+      row.insertCell().textContent = Array.from(entry.value.slice(0, entry.ncomp), String).join(
+        ', ',
+      );
+      row.insertCell().textContent = String(entries.length);
+      proof.writes.push({
+        variant: state.variant,
+        t,
+        targetId: entry.targetId,
+        registry: entry.registry,
+        ncomp: entry.ncomp,
+        value: Array.from(entry.value.slice(0, entry.ncomp)),
+      });
+    }
+    if (entries.length === 0) {
+      const row = tbody.insertRow();
+      row.insertCell().textContent = String(t);
+      row.insertCell().textContent = '—';
+      row.insertCell().textContent = '—';
+      row.insertCell().textContent = '0';
+      proof.writes.push({ variant: state.variant, t, entries: 0 });
+    }
+    state.writes += 1;
+    $('writes').textContent = `evals: ${state.writes} — rows: ${tbody.rows.length} (last t=${t})`;
+    refreshRequestLog();
+  } catch (error) {
+    // A glue-bug throw in the runtime bridge must surface visibly and
+    // clear/block every data zone (L3) — never escape the listener
+    // uncaught, never leave half-written rows claiming success.
+    showError(error);
   }
-  if (entries.length === 0) {
-    const row = tbody.insertRow();
-    row.insertCell().textContent = String(t);
-    row.insertCell().textContent = '—';
-    row.insertCell().textContent = '—';
-    row.insertCell().textContent = '0';
-    proof.writes.push({ variant: state.variant, t, entries: 0 });
-  }
-  state.writes += 1;
-  $('writes').textContent = `evals: ${state.writes} — rows: ${tbody.rows.length} (last t=${t})`;
-  refreshRequestLog();
 }
 
 async function init() {
@@ -274,6 +333,8 @@ async function init() {
   // error path is never a forged callback.
   $('toggle-malformed').addEventListener('click', () => loadMalformed());
   $('eval-button').addEventListener('click', () => evalAt($('time-input').value));
+  // Editing the field clears a past refusal hint (L5).
+  $('time-input').addEventListener('input', () => $('time-input').setCustomValidity(''));
   for (const id of ['preset-0', 'preset-05', 'preset-2']) {
     $(id).addEventListener('click', () => {
       $('time-input').value = $(id).dataset.t;
@@ -305,19 +366,27 @@ async function init() {
 
 /** The failure-path control: the REAL truncated PNG through the REAL walker. */
 async function loadMalformed() {
+  // Same last-intent-wins contract as loadVariant (H1): a stale
+  // malformed chain that completes after a newer good load must never
+  // render its error over the committed state.
+  const epoch = ++state.loadEpoch;
+  const stale = () => epoch !== state.loadEpoch;
   clearError();
   setPressed(null);
   $('eval-button').disabled = true;
   try {
     setStatus('loading /bundle/g5-malformed.png (this must fail) …');
     const res = await fetch('/bundle/g5-malformed.png');
+    if (stale()) return;
     if (!res.ok) throw new Error(`fetch malformed bundle failed: HTTP ${res.status}`);
     const bytes = new Uint8Array(await res.arrayBuffer());
+    if (stale()) return;
     const payloads = [...payloadsOf(bytes)]; // the walker throws here
     throw new Error(
       `the malformed bundle unexpectedly yielded ${payloads.length} payload(s) — fixture broken`,
     );
   } catch (error) {
+    if (stale()) return; // a stale failure must not clobber the newer state
     showError(error);
   } finally {
     await refreshRequestLog();

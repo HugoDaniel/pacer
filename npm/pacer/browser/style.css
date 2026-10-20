@@ -107,6 +107,11 @@ th { background: #f2f2f2; font-weight: 600; }
   border: 1px solid var(--line);
   overflow-x: auto;
   white-space: pre;
+  /* Bounded scroll (design O-A): the log grows with every polled
+     request — cap its height and scroll inside the box (native bar,
+     full column width, no layout shift). */
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 /* 390 px: same single column — labels stack above their data. */

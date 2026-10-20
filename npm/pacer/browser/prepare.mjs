@@ -154,9 +154,21 @@ async function main() {
   const argv = process.argv.slice(2);
   const opts = { root: defaultWebroot(), keepGen: false };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--root') opts.root = path.resolve(argv[++i]);
-    else if (argv[i] === '--keep-gen') opts.keepGen = true;
-    else fail(`unknown argument ${argv[i]} — usage: prepare.mjs [--root DIR] [--keep-gen]`);
+    // L4: a flag with no value is a curated refusal — never a thrown
+    // path resolve.
+    if (argv[i] === '--root' || argv[i] === '--keep-gen') {
+      if (argv[i] === '--root') {
+        if (i + 1 >= argv.length) {
+          fail('--root requires a value — usage: prepare.mjs [--root DIR] [--keep-gen]');
+        }
+        i++;
+        opts.root = path.resolve(argv[i]);
+      } else {
+        opts.keepGen = true;
+      }
+    } else {
+      fail(`unknown argument ${argv[i]} — usage: prepare.mjs [--root DIR] [--keep-gen]`);
+    }
   }
 
   // 1. Toolchain probes — loud, with resolved absolute paths.

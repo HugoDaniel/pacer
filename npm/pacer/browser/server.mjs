@@ -191,10 +191,33 @@ function main(argv) {
   const opts = { root: defaultWebroot(), port: 8046, host: '127.0.0.1' };
   for (let i = 2; i < argv.length; i++) {
     const flag = argv[i];
-    if (flag === '--port') opts.port = Number(argv[++i]);
-    else if (flag === '--root') opts.root = path.resolve(argv[++i]);
-    else if (flag === '--host') opts.host = argv[++i];
-    else {
+    // L4: a flag with no value is a curated refusal — never a NaN
+    // port, a thrown path resolve, or a silently defaulting host.
+    if (flag === '--port' || flag === '--root' || flag === '--host') {
+      if (i + 1 >= argv.length) {
+        console.error(
+          `${flag} requires a value — usage: node server.mjs [--port 8046] [--root DIR] [--host 127.0.0.1]`,
+        );
+        process.exit(2);
+      }
+      if (flag === '--port') {
+        i++;
+        const port = Number(argv[i]);
+        if (!Number.isInteger(port) || port < 0 || port > 65535) {
+          console.error(
+            `--port must be an integer 0-65535, got "${argv[i]}" — usage: node server.mjs [--port 8046] [--root DIR] [--host 127.0.0.1]`,
+          );
+          process.exit(2);
+        }
+        opts.port = port;
+      } else if (flag === '--root') {
+        i++;
+        opts.root = path.resolve(argv[i]);
+      } else {
+        i++;
+        opts.host = argv[i];
+      }
+    } else {
       console.error(
         `unknown argument ${flag} — usage: node server.mjs [--port 8046] [--root DIR] [--host 127.0.0.1]`,
       );

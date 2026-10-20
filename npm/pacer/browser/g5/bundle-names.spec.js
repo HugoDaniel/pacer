@@ -166,3 +166,140 @@ test('keyboard-only: variant toggles operate with Enter', async ({ page }) => {
   await expect(page.locator('#toggle-raw')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#names')).toHaveText('drop');
 });
+
+// ── Async load races (G5 corrections H-1) ────────────────────────────
+//
+// The page must be last-intent-wins: a load that was clicked EARLIER
+// but completes LATER must never commit state. Every gate below holds
+// a REAL fetch of REAL served bytes (route.fetch → fulfill) and is
+// released deterministically — the page app runs unmodified; no state
+// is mocked. Post-release assertions use a bounded 5 s wait so a RED
+// fails fast for the right reason (observed stale data), never a
+// runner timeout.
+
+test('race: rapid raw→hostile toggle — the stale raw completion never overwrites the hostile state', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await waitReady(page);
+  let releaseRaw;
+  const rawGated = new Promise((release) => {
+    releaseRaw = release;
+  });
+  await page.route('**/bundle/g4-bundle-raw.png', async (route) => {
+    const response = await route.fetch(); // real bytes from the real server
+    await rawGated; // hold the raw chain mid-flight
+    await route.fulfill({ response });
+  });
+
+  await page.locator('#toggle-raw').click();
+  await page.locator('#toggle-hostile').click(); // newer intent while raw is pending
+  await expect(page.locator('#names')).toHaveText(HOSTILE);
+  await expect(page.locator('#toggle-hostile')).toHaveAttribute('aria-pressed', 'true');
+
+  releaseRaw(); // let the OLDER raw load finish now
+  // Hostile must still own every committed zone — bounded wait: a
+  // stale overwrite shows up as 'drop' near-instantly.
+  await expect(page.locator('#names')).toHaveText(HOSTILE, { timeout: 5_000 });
+  await expect(page.locator('#toggle-hostile')).toHaveAttribute('aria-pressed', 'true', {
+    timeout: 5_000,
+  });
+  await expect(page.locator('#eval-button')).toBeEnabled({ timeout: 5_000 });
+  const proof = await page.evaluate(() => window.__pacerProof);
+  expect(proof.variant).toBe('hostile');
+  expect(proof.names).toEqual([HOSTILE]);
+  expect(proof.status).toBe('ready');
+  // The committed digests must be the WINNER's, not the stale raw's.
+  const manifest = await page.evaluate(() => fetch('/manifest.json').then((r) => r.json()));
+  expect(proof.digests.bundle.sha256).toBe(manifest.variants.hostile.bundleSha256);
+  expect(proof.digests.cartridge.sha256).toBe(manifest.variants.hostile.cartridgeSha256);
+});
+
+test('race: variant pending while malformed errors — the stale good completion never clears the failure', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await waitReady(page);
+  let releaseCompressed;
+  const compressedGated = new Promise((release) => {
+    releaseCompressed = release;
+  });
+  await page.route('**/bundle/g4-bundle.png', async (route) => {
+    const response = await route.fetch();
+    await compressedGated;
+    await route.fulfill({ response });
+  });
+
+  await page.locator('#toggle-compressed').click(); // held mid-flight
+  await page.locator('#toggle-malformed').click(); // the real walker error
+  await expect(page.locator('#error')).toBeVisible();
+  await expect(page.locator('#names')).toHaveText('—');
+  await expect(page.locator('#writes-table tbody tr')).toHaveCount(0);
+
+  releaseCompressed(); // the OLDER good load finishes now
+  // The demonstrated failure must stay committed: no stale re-render,
+  // no eval re-enable, no ready flip.
+  await expect(page.locator('#names')).toHaveText('—', { timeout: 5_000 });
+  await expect(page.locator('#writes-table tbody tr')).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator('#eval-button')).toBeDisabled({ timeout: 5_000 });
+  await expect(page.locator('#hash')).toHaveText('—', { timeout: 5_000 });
+  await expect(page.locator('#error')).toBeVisible({ timeout: 5_000 });
+  const proof = await page.evaluate(() => window.__pacerProof);
+  expect(proof.status).toBe('error');
+  expect(proof.names).toBeNull();
+  expect(proof.variant).toBeNull();
+});
+
+test('race: malformed pending while a good load commits — the stale failure never clobbers the good state', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await waitReady(page);
+  let releaseMalformed;
+  const malformedGated = new Promise((release) => {
+    releaseMalformed = release;
+  });
+  await page.route('**/bundle/g5-malformed.png', async (route) => {
+    const response = await route.fetch();
+    await malformedGated;
+    await route.fulfill({ response });
+  });
+
+  await page.locator('#toggle-malformed').click(); // held mid-flight
+  await page.locator('#toggle-hostile').click(); // completes for real
+  await expect(page.locator('#names')).toHaveText(HOSTILE);
+  await expect(page.locator('#eval-button')).toBeEnabled();
+
+  releaseMalformed(); // the OLDER failing chain wakes up now
+  // Its error must NOT land: the good state stays committed.
+  await expect(page.locator('#error')).toBeHidden({ timeout: 5_000 });
+  await expect(page.locator('#names')).toHaveText(HOSTILE, { timeout: 5_000 });
+  await expect(page.locator('#eval-button')).toBeEnabled({ timeout: 5_000 });
+  const proof = await page.evaluate(() => window.__pacerProof);
+  expect(proof.status).toBe('ready');
+  expect(proof.variant).toBe('hostile');
+  expect(proof.names).toEqual([HOSTILE]);
+});
+
+test('blank time input is refused with a visible validity hint — no eval write, no count advance', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await waitReady(page);
+  await page.locator('#preset-0').click();
+  await page.locator('#eval-button').click();
+  await expect(page.locator('#writes-table tbody tr')).toHaveCount(1);
+  const writesLine = await page.locator('#writes').textContent();
+  const writesProofBefore = (await page.evaluate(() => window.__pacerProof.writes)).length;
+
+  // Clear the field entirely — the page previously coerced '' to t=0.
+  await page.locator('#time-input').fill('');
+  await page.locator('#eval-button').click();
+
+  await expect(page.locator('#writes-table tbody tr')).toHaveCount(1, { timeout: 5_000 });
+  await expect(page.locator('#writes')).toHaveText(writesLine, { timeout: 5_000 });
+  const hint = await page.locator('#time-input').evaluate((el) => el.validationMessage);
+  expect(hint).toContain('finite');
+  const writesProofAfter = (await page.evaluate(() => window.__pacerProof.writes)).length;
+  expect(writesProofAfter).toBe(writesProofBefore);
+});

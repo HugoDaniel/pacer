@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pacer bundle proof — Operate/Read (diagnostic)</title>
+<!-- Data-URL icon: the browser's automatic favicon discovery never
+     fires, so the cold console stays at zero network errors without
+     adding any route to the allowlist server. -->
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
 <script type="module" src="/app.js"></script>
 </head>
@@ -86,7 +90,9 @@
       <dd id="hash" class="mono">—</dd>
     </dl>
     <h3>observed requests (server log)</h3>
-    <pre id="request-log">—</pre>
+    <!-- tabindex 0: the log is a scrollable region (design O-A) — it
+         must stay keyboard-scrollable, and its label names it. -->
+    <pre id="request-log" tabindex="0">—</pre>
   </section>
 </main>
 </body>

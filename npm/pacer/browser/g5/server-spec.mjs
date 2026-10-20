@@ -29,9 +29,16 @@ import { fileURLToPath } from 'node:url';
 import { createPacerServer } from '../server.mjs';
 
 /**
- * GET with a RAW request target: unlike fetch (whose URL parser
- * normalizes backslashes and dot segments before a byte is sent) this
- * puts the exact bytes on the wire — what a malicious client does.
+ * GET through node:http's client — with the honest caveat (L2): the
+ * client parses its URL string through WHATWG normalization BEFORE a
+ * byte is sent, so the raw-looking `..`/`\` shapes below are folded
+ * client-side (dot segments collapse — `%2e` counts as a dot — and
+ * under special schemes `\` folds to `/`). The server sees the
+ * normalized form and still refuses by exact-table miss; its own
+ * guard branches ARE genuinely exercised by the single-encoded shapes
+ * that survive URL parsing (`%5c`, `%00`, `//`, `%252e`). Every
+ * outcome assertion (404 + no secret leak) holds either way — this is
+ * a comment-accuracy note, not a behavior gap.
  * @returns {Promise<{ status: number, contentType: string | null, body: string }>}
  */
 function rawGet(origin, target) {
@@ -221,5 +228,26 @@ test('refuses to mount repo-looking or missing roots (no monorepo accident)', as
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  }
+});
+
+test('CLI: a flag with no value refuses with usage (exit 2) — no NaN port, no path throw', () => {
+  const modUrl = fileURLToPath(new URL('../server.mjs', import.meta.url));
+  for (const flag of ['--port', '--root']) {
+    const probe = spawnSync(process.execPath, [modUrl, flag], {
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+    assert.notEqual(probe.status, 0, `${flag} with no value must fail`);
+    assert.equal(probe.status, 2, `${flag} refusal exits with the usage code 2`);
+    const output = probe.stderr + probe.stdout;
+    assert.match(output, /requires a value/, `${flag} refusal names the flag`);
+    assert.match(output, /usage/i, `${flag} refusal prints the usage line`);
+    assert.equal(
+      output.includes('RangeError'),
+      false,
+      `${flag} must not surface a NaN port RangeError`,
+    );
+    assert.equal(output.includes('TypeError'), false, `${flag} must not surface a path TypeError`);
   }
 });

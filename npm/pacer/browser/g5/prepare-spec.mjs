@@ -104,6 +104,19 @@ test('config: a bad PACER_PNGINE override fails loudly with the resolved path', 
   assert.match(bogus.stderr + bogus.stdout, /does.not.exist/s);
 });
 
+test('config: --root with no value refuses with usage — never a path TypeError', () => {
+  const probe = spawnSync(
+    process.execPath,
+    [path.join(NPM_PACER, 'browser', 'prepare.mjs'), '--root'],
+    { encoding: 'utf8', cwd: NPM_PACER, timeout: 60_000 },
+  );
+  assert.notEqual(probe.status, 0, '--root with no value must fail');
+  const output = probe.stderr + probe.stdout;
+  assert.match(output, /--root requires a value/, 'the refusal names the flag');
+  assert.match(output, /usage/i, 'the refusal prints the usage line');
+  assert.equal(output.includes('TypeError'), false, 'no raw path TypeError escapes');
+});
+
 test('prepare: fresh CLIs build an isolated webroot whose manifest pins every served byte', async (t) => {
   if (!tools.usable) {
     return t.skip(
