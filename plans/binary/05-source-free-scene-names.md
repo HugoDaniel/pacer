@@ -218,7 +218,35 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 - [x] **Step 5: Run GREEN + closure gates** on obs-dev — `zig build test`, `zig build fuzz --summary all` (361 → record the new honest count), `zig build audit-rt-imports` (same 12 pacer + 16 SJON allowlisted modules, same 17 `prt_*` exports, 1 import; record the new `pacer-rt.wasm` byte size vs the 171,667 baseline). *(Plus `zig build verify` and `zig build parity`, both green; all actuals in the report's gate table.)*
 - [x] **Step 6: Commit** — `feat(meta): decode 'SNAM' scene names; strict refusals, skip tolerance, structured fuzz reach`. *(Commit `d71d4d9`, 5 files, +972/−5.)*
 
-### Group 3: JS decode + types + unmasked parity + frozen-old-reader actual proofs
+### Group 3: JS decode + types + unmasked parity + frozen-old-reader actual proofs — **DONE 2026-10-20** (commit `418ea6a`; report `.agent/control/metadata-g3-report.md`)
+
+> Executed with an actual behavioral RED before any production edit
+> (`metadata-g3-red1-js.log`: two test-side slips — a stale span constant
+> and a `WebAssembly.Module` overload in the compat helper — fixed;
+> `metadata-g3-red2-js.log`: the clean RED, 115/131). The RED family is
+> exactly the exact-name flip (rt.test.js + the compat legs'
+> new-decoder assertions), the IM-3 present-empty legs, and 11 strict
+> TypeError refusals; the pure back-compat legs (old-wasm load-ok,
+> byte-verbatim PACM serving, old-decoder `''` names, legacy fixture)
+> were green from birth — never a fabricated failure. GREEN: obs
+> `npm test` **131/131, 0 skipped** (114 → 131, +17 tests; O5 both
+> actuals — the long-name pack leg RAN on the wave host), biome clean
+> (cached `cli-linux-x64` 2.5.15 binary — this checkout's node_modules
+> lacks the platform package; exact alternative, not a skip),
+> `tsc --noEmit` clean, obs `zig build verify` exit 0 (corpus 43/43,
+> node 131/131), `zig build parity` exit 0 (43/43 with exactly the 4
+> known pattern skips), `grep mask` empty on rt.test.js and
+> parity_runner.zig, frozen fixtures byte-identical. Plan-premise
+> corrections recorded in the report: (1) Step 2's "compat legs (a)-(b)
+> expected already GREEN" holds only for their back-compat subsets —
+> the exact-name assertions inside them are RED by design (BL-1's own
+> point); (2) `zig-out/bin/pacer` is a stale installed copy — `zig
+> build run` executes the build-cache artifact, so the long-name test
+> packs through the pretest-style `zig build run -- pack` invocation;
+> (3) the strict-refusal matrix lives in a new `test/meta.test.js`
+> (wasm-free home for the directly exported `decodeMeta`); (4) the
+> name-span regex asserts were retired with the differences loop —
+> exact equality is strictly stronger.
 
 **Files:**
 - Modify: `npm/pacer/src/meta.js` (`PACM_SNAM_ID` arm after `'TMPO'`; u32 count/length reads; count mismatch → `TypeError`; bounds overrun → `TypeError`; `TextDecoder` verbatim fill; C6 precedence; `docBytes` param doc `:74-76` becomes fallback-only per O1)
@@ -232,12 +260,12 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 **Interfaces:**
 - Consumes: Groups 0-2 (frozen artifacts, wire, Zig decoders); npm `pretest` rebuilds `test/rt-fixture.pacb` with the Group-1 encoder. Produces: source-free `MetaScene.name` on the binary path; the P2 requirement met unmasked.
 
-- [ ] **Step 1: Write the failing tests** — flip `rt.test.js:119-120`; write `compat-old-readers.test.js`: (a) load `.agent/artifacts/pacer-rt-pre-SNAM.wasm` exactly as `rt.test.js:28-33` loads the rt wasm, feed it the freshly built SNAM-carrying `test/rt-fixture.pacb`, and assert **load ok** (the real old-runtime-on-new-bytes proof: TLV skip + TRAN FNV + routing all pass), optionally that the wasm-served meta contains the `'SNAM'` frame verbatim, and **`meta.scenes[0].name === 'drop'` under the new JS decoder** — `PacerRt` is constructed from npm `rt.js`, which imports the new (post-Group-3) `meta.js`, so names decode exact; the old wasm never needed name knowledge (BL-1: expecting `''` here is wrong — at RED it passes vacuously on the pre-arm decoder and after Step 3 it fails permanently); (b) import `.agent/artifacts/meta-pre-SNAM.mjs` (BL-2: `.mjs` — the name Group 0 actually executed), obtain the PACM bytes by instantiating the frozen old wasm and slicing `prt_metaPtr()[0..prt_metaLen()]` (OP-4: proves old-wasm-serves + old-JS-decodes on new bytes in one motion, with no hand PACB-directory parse in JS), decode the way `rt.js:225` calls `decodeMeta`, and assert sections decode and names are `''` (skipped by length — this is the correct `''` leg); (c) **SNAM-present-empty precedence (IM-3, mandatory)**: hand-built blob with the `'SNAM'` section present, one entry `name_len = 0`, `docBytes` covering a non-empty `nameSpan` → assert `name === ''` (presence-keyed; kills the `snamName || sourceSlice` falsy-fallback hazard). Honest skip with printed artifact path only if an artifact is absent; completion criterion 7 requires **actual PASS (never skip) on the wave host**. Legs (a)-(b) pin **existing back-compat**: they are expected GREEN the moment they are written and stay green through Step 3 — RED comes only from the `:119-120` flip and leg (c); never fabricate a failure to manufacture RED for the old-reader legs.
-- [ ] **Step 2: Run RED** — `cd npm/pacer && npm test` (pretest rebuilds wasm + fixture on obs-provided artifacts); the `:119-120` name flip and the (c) precedence test fail; the compat old-reader legs (a)-(b) are expected already GREEN — they exercise existing back-compat, so a green leg here is the correct result, not a fabricated failure to suppress. Exit code pre-pipe.
-- [ ] **Step 3: Implement** `meta.js` arm + fill precedence; regenerate types via `npm run build:types`.
-- [ ] **Step 4: Retire the mask** (edit above) — parity asserts exact equality; comment states the owner-decided requirement is now met by `'SNAM'`.
-- [ ] **Step 5: Run GREEN gates** — `npm run lint && npm run typecheck && npm test` (biome clean; `test/exports.test.js` unchanged green — no new exports); `grep -n mask npm/pacer/test/rt.test.js` empty; `grep -n "mask\|mscene" src/parity_runner.zig` confirms no native mask exists (recon found none). On obs-dev: `zig build verify && zig build parity` — green with the same 4 pattern skips. Record node count delta (O5).
-- [ ] **Step 6: Commit** — `feat(meta): JS 'SNAM' decode; unmasked source-free parity; frozen old readers run new bytes`.
+- [x] **Step 1: Write the failing tests** — flip `rt.test.js:119-120`; write `compat-old-readers.test.js`: (a) load `.agent/artifacts/pacer-rt-pre-SNAM.wasm` exactly as `rt.test.js:28-33` loads the rt wasm, feed it the freshly built SNAM-carrying `test/rt-fixture.pacb`, and assert **load ok** (the real old-runtime-on-new-bytes proof: TLV skip + TRAN FNV + routing all pass), optionally that the wasm-served meta contains the `'SNAM'` frame verbatim, and **`meta.scenes[0].name === 'drop'` under the new JS decoder** — `PacerRt` is constructed from npm `rt.js`, which imports the new (post-Group-3) `meta.js`, so names decode exact; the old wasm never needed name knowledge (BL-1: expecting `''` here is wrong — at RED it passes vacuously on the pre-arm decoder and after Step 3 it fails permanently); (b) import `.agent/artifacts/meta-pre-SNAM.mjs` (BL-2: `.mjs` — the name Group 0 actually executed), obtain the PACM bytes by instantiating the frozen old wasm and slicing `prt_metaPtr()[0..prt_metaLen()]` (OP-4: proves old-wasm-serves + old-JS-decodes on new bytes in one motion, with no hand PACB-directory parse in JS), decode the way `rt.js:225` calls `decodeMeta`, and assert sections decode and names are `''` (skipped by length — this is the correct `''` leg); (c) **SNAM-present-empty precedence (IM-3, mandatory)**: hand-built blob with the `'SNAM'` section present, one entry `name_len = 0`, `docBytes` covering a non-empty `nameSpan` → assert `name === ''` (presence-keyed; kills the `snamName || sourceSlice` falsy-fallback hazard). Honest skip with printed artifact path only if an artifact is absent; completion criterion 7 requires **actual PASS (never skip) on the wave host**. Legs (a)-(b) pin **existing back-compat**: they are expected GREEN the moment they are written and stay green through Step 3 — RED comes only from the `:119-120` flip and leg (c); never fabricate a failure to manufacture RED for the old-reader legs.
+- [x] **Step 2: Run RED** — `cd npm/pacer && npm test` (pretest rebuilds wasm + fixture on obs-provided artifacts); the `:119-120` name flip and the (c) precedence test fail; the compat old-reader legs (a)-(b) are expected already GREEN — they exercise existing back-compat, so a green leg here is the correct result, not a fabricated failure to suppress. Exit code pre-pipe.
+- [x] **Step 3: Implement** `meta.js` arm + fill precedence; regenerate types via `npm run build:types`.
+- [x] **Step 4: Retire the mask** (edit above) — parity asserts exact equality; comment states the owner-decided requirement is now met by `'SNAM'`.
+- [x] **Step 5: Run GREEN gates** — `npm run lint && npm run typecheck && npm test` (biome clean; `test/exports.test.js` unchanged green — no new exports); `grep -n mask npm/pacer/test/rt.test.js` empty; `grep -n "mask\|mscene" src/parity_runner.zig` confirms no native mask exists (recon found none). On obs-dev: `zig build verify && zig build parity` — green with the same 4 pattern skips. Record node count delta (O5).
+- [x] **Step 6: Commit** — `feat(meta): JS 'SNAM' decode; unmasked source-free parity; frozen old readers run new bytes`.
 
 ### Group 4: pngine `PACB` reservation (local repo) + node bundle gate
 
@@ -333,4 +361,4 @@ Also of record: Group 0 marked **DONE** (commit `77d8c11`, report + hashes linke
 
 ## Execution handoff
 
-Groups 0→6 execute in order, one green commit each, with an independent fresh-reviewer gate after every group and a whole-branch review at the end. **Groups 0-2 are DONE (Group 0 commit `77d8c11`; Group 1 commit `61c69a8`; Group 2 commit `d71d4d9`, 2026-10-20 — Zig `'SNAM'` decoders green on all gates). Next implementation group: Group 3 (JS decode + types + unmasked parity + frozen-old-reader actual proofs).**
+Groups 0→6 execute in order, one green commit each, with an independent fresh-reviewer gate after every group and a whole-branch review at the end. **Groups 0-3 are DONE (Group 0 commit `77d8c11`; Group 1 commit `61c69a8`; Group 2 commit `d71d4d9`, corrections commit `55e1c4c`; Group 3 commit `418ea6a`, 2026-10-20 — JS `'SNAM'` decode green on all gates, parity unmasked, frozen old readers run new bytes). Next implementation group: Group 4 (pngine `PACB` reservation + node bundle gate).**
