@@ -179,10 +179,34 @@ repo; `pacer.wasm` is built from the Zig sources by Zig 0.16.
 ```sh
 npm run build      # zig build wasm + wasm-rt → copy both in → emit .d.ts (types/)
 npm run typecheck  # tsc --noEmit over the JSDoc-typed source
-npm run lint       # biome check src test (lint + format, read-only)
-npm run format     # biome check --write src test (apply fixes)
+npm run lint       # biome check src test browser (lint + format, read-only)
+npm run format     # biome check --write src test browser (apply fixes)
 npm test           # node --test (rebuilds the wasm first); incl. corpus parity
 ```
+
+### G5 browser-proof fixture (`browser/`)
+
+A diagnostic Operate/Read page that proves a served PNG bundle →
+pngine's public `payloadsOf` → a source-free `PacerRt`, passively
+verifying every fetched byte against a digest manifest. The served
+root is an isolated, gitignored webroot — never this package's tree.
+
+```sh
+npm run g5:prepare   # author + pack the fixtures via the fresh CLIs and
+                     # build .agent/artifacts/g5-web (needs zig + the
+                     # sibling pngine CLI — runs on the wave host)
+npm run g5:serve     # serve the prepared webroot on http://127.0.0.1:8046/
+                     # (flags: --port N --root DIR --host H)
+npm run g5:test      # node --test over browser/g5/*-spec.mjs (server +
+                     # builder specs; builder legs need the wave host)
+npm run test:browser # playwright via the sibling pngine install
+                     # (browser/g5/bundle-names.spec.js)
+```
+
+`browser/g5/expected.json` is the hand-authored oracle (names, ticks,
+supplied-time writes); nothing in the fixture is sampled from a run.
+The G5 node specs are named `*-spec.mjs` so `npm test`'s autodiscovery
+and playwright's default testMatch never pick them up.
 
 `npm publish` rebuilds `pacer.wasm` fresh and runs the full gate before it
 packs: `prepublishOnly` runs `lint` + `typecheck` + `test`, then `prepack` runs

@@ -1,0 +1,41 @@
+{
+  "comment": [
+    "Hand-authored oracle for the G5 browser-proof fixture — the score",
+    "texts embedded in ../prepare.mjs are the ONLY source of these",
+    "literals; nothing here was sampled from a runtime run. BigInt tick",
+    "values are spelled as strings (JSON has no 64-bit integers). The",
+    "write values are the exact f64 spellings of the f32 landings",
+    "(Math.fround): 0.5 is f32-exact; 0.9 is 0.8999999761581421."
+  ],
+  "BEAT": 180180,
+  "variants": {
+    "compressed": {
+      "bundle": "/bundle/g4-bundle.png",
+      "names": ["drop"],
+      "scene": { "startTick": "0", "durTicks": "1441440" },
+      "transport": { "bpm": 120, "dur": "2882880", "end": "loop", "beatsPerBar": 4 },
+      "writes": { "0": [0.5], "2": [0.8999999761581421] },
+      "entriesPerEval": 1
+    },
+    "raw": {
+      "bundle": "/bundle/g4-bundle-raw.png",
+      "names": ["drop"],
+      "scene": { "startTick": "0", "durTicks": "1441440" },
+      "transport": { "bpm": 120, "dur": "2882880", "end": "loop", "beatsPerBar": 4 },
+      "writes": { "0": [0.5], "2": [0.8999999761581421] },
+      "entriesPerEval": 1
+    },
+    "hostile": {
+      "bundle": "/bundle/g5-hostile.png",
+      "names": ["<b>&<img/src=x>"],
+      "scene": { "startTick": "0", "durTicks": "1441440" },
+      "transport": { "bpm": 120, "dur": "2882880", "end": "loop", "beatsPerBar": 4 },
+      "writes": { "0": [0.5], "2": [0.8999999761581421] },
+      "entriesPerEval": 1
+    }
+  },
+  "malformed": {
+    "bundle": "/bundle/g5-malformed.png",
+    "expect": "error"
+  }
+}

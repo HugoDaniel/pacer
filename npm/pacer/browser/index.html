@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pacer bundle proof — Operate/Read (diagnostic)</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<main class="col">
+  <h1>pacer bundle proof</h1>
+  <p class="sub">diagnostic Operate/Read bench — served PNG bundle → payloadsOf → source-free PacerRt</p>
+
+  <p id="status" role="status" aria-live="polite">loading…</p>
+  <p id="error" role="alert" hidden></p>
+
+  <section aria-label="bundle variant">
+    <h2>bundle</h2>
+    <div class="row" role="group" aria-label="load a bundle variant">
+      <button id="toggle-compressed" aria-pressed="true">compressed (G4)</button>
+      <button id="toggle-raw" aria-pressed="false">raw (G4)</button>
+      <button id="toggle-malformed">malformed (must fail)</button>
+      <button id="toggle-hostile" aria-pressed="false">hostile names</button>
+    </div>
+  </section>
+
+  <section id="metadata" aria-label="metadata window">
+    <h2>metadata (decoded from the cartridge)</h2>
+    <dl class="kv">
+      <dt>scene names</dt>
+      <dd id="names">—</dd>
+      <dt>scene count</dt>
+      <dd id="scene-count">—</dd>
+    </dl>
+    <dl class="kv" id="transport">
+      <dt>tempo (bpm)</dt>
+      <dd id="transport-bpm">—</dd>
+      <dt>transport dur (ticks)</dt>
+      <dd id="transport-dur">—</dd>
+      <dt>end</dt>
+      <dd id="transport-end">—</dd>
+      <dt>beats per bar</dt>
+      <dd id="transport-bpb">—</dd>
+      <dt>scene start (ticks)</dt>
+      <dd id="scene-start">—</dd>
+      <dt>scene dur (ticks)</dt>
+      <dd id="scene-dur">—</dd>
+    </dl>
+  </section>
+
+  <section aria-label="supplied time">
+    <h2>supplied time (seconds)</h2>
+    <div class="row">
+      <label for="time-input">t =</label>
+      <input id="time-input" type="number" min="0" step="any" value="0">
+      <button id="preset-0" data-t="0">t=0</button>
+      <button id="preset-05" data-t="0.5">t=0.5</button>
+      <button id="preset-2" data-t="2">t=2</button>
+      <button id="eval-button" disabled>eval at t</button>
+    </div>
+  </section>
+
+  <section aria-label="writes">
+    <h2>writes</h2>
+    <p id="writes">no evals yet</p>
+    <div class="tablewrap">
+      <table id="writes-table">
+        <thead>
+          <tr>
+            <th scope="col">time supplied (s)</th>
+            <th scope="col">key</th>
+            <th scope="col">value written</th>
+            <th scope="col">count</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-label="proof">
+    <h2>proof</h2>
+    <dl class="kv">
+      <dt>fetched bundle sha256 (crypto.subtle, in-page)</dt>
+      <dd id="hash" class="mono">—</dd>
+    </dl>
+    <h3>observed requests (server log)</h3>
+    <pre id="request-log">—</pre>
+  </section>
+</main>
+</body>
+</html>

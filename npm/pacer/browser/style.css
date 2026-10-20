@@ -1,0 +1,116 @@
+/* Diagnostic bench styling — system stack, near-monochrome, one
+   green/red semantic pair, 8 px rhythm, single column, max-width
+   900 px. No transitions; native focus rings only. */
+
+:root {
+  color-scheme: light;
+  --ink: #1a1a1a;
+  --muted: #555;
+  --line: #d4d4d4;
+  --ok: #0a6b2d;
+  --bad: #a11212;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 8px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: #fff;
+}
+
+.col {
+  max-width: 900px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+h1 { font-size: 1.25rem; margin: 8px 0 0; }
+h2 { font-size: 1rem; margin: 0 0 8px; }
+h3 { font-size: 0.9rem; margin: 8px 0; }
+.sub { color: var(--muted); margin: 0; }
+
+section {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+button, input {
+  font: inherit;
+  padding: 4px 10px;
+}
+
+button[aria-pressed="true"] {
+  background: var(--ink);
+  color: #fff;
+}
+
+button:disabled { opacity: 0.45; }
+
+#status { margin: 0; font-weight: 600; }
+#status.ready { color: var(--ok); }
+#status.error { color: var(--bad); }
+
+#error {
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--bad);
+  color: var(--bad);
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(180px, max-content) 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+
+.mono, #names, #request-log, td, input {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13.5px;
+}
+
+.tablewrap { overflow-x: auto; }
+
+table { border-collapse: collapse; min-width: 480px; }
+th, td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: #f2f2f2; font-weight: 600; }
+
+#request-log {
+  margin: 0;
+  padding: 8px;
+  background: #f7f7f7;
+  border: 1px solid var(--line);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* 390 px: same single column — labels stack above their data. */
+@media (max-width: 480px) {
+  .kv { grid-template-columns: 1fr; gap: 0 0; }
+  .kv dd { margin-bottom: 8px; }
+}

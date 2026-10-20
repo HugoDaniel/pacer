@@ -8,3 +8,7 @@ npm/pacer/pacer-rt.wasm
 npm/pacer/test/rt-fixture.pacb
 npm/pacer/types/
 npm/pacer/*.tgz
+
+# playwright (G5 browser proof) run artifacts
+npm/pacer/test-results/
+npm/pacer/playwright-report/

@@ -5,7 +5,7 @@
   // the existing source idiom (not Biome's double-quote default) — adopting the
   // tool should not reflow every string. Recommended rules are on by default.
   "files": {
-    "includes": ["src/**/*.js", "test/**/*.js"]
+    "includes": ["src/**/*.js", "test/**/*.js", "browser/**/*.{js,mjs}"]
   },
   "formatter": {
     "enabled": true,
