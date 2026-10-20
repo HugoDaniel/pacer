@@ -172,7 +172,10 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 > malformed shape; `metadata-g2-red2-test.log`: landing tests failed on the
 > missing name fill) before any production edit. GREEN: test 812/812 (791 →
 > +21 slots), fuzz 379/379 (plan-quoted baseline 361 → +18, of which +14 this
-> group; corpus 11 → 15), audit-rt-imports green with the same allowlist and
+> group; corpus 9 → 13 — endpoints corrected by the 2026-10-20 review-
+> corrections wave: programmatic git inventory, `61c69a8` = 9, post-G2 = 13;
+> the previously quoted 11 → 15 was wrong on both endpoints), audit-rt-imports
+> green with the same allowlist and
 > 17 `prt_*` exports (rt wasm 171,852 B vs the 171,667 baseline), verify
 > corpus 43/43 + node 114/114, parity 43/43 with exactly the 4 known pattern
 > skips. Plan-premise corrections recorded in the report and applied here:
@@ -187,6 +190,17 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 > composition ruling: scene names are NOT materialized into the binary arm's
 > table — nothing native reads `.name`, names travel via the served `'PACM'`
 > copy decoded by the G3 glue; no native exact-name claim is made or tested.
+> Review-corrections wave (2026-10-20, MEDIUM-1): the four `'SNAM'` corpus
+> seeds did not actually route as their comments claimed — zig 0.16's
+> `Smith.sliceWithHash` consumes a leading `u32` LE length prefix, so the
+> unprefixed seeds lost their first four bytes and never reached the arms
+> named (runtime-probe verified; the mid-entry-cut seed routed to raw mode,
+> not even to arm 7). All four seeds re-shaped to `[len u32 LE][stream]` so
+> each routes to its documented arm/flaw with every draw in range; pinned by
+> a new corpus-routing test that drives the real draw code and
+> `fuzzPacbDecode` per entry (RED on the old seeds: test 812/813, fuzz
+> 379/380; GREEN: test 813/813, fuzz 380/380). The nine pre-G2 corpus
+> entries are byte-identical; no decoder/production change.
 
 **Files:**
 - Modify: `src/Pacm.zig` (id constant, `MetaScene.name: []const u8 = ""`, TLV walk arm after `'TMPO'`, tests in the hand-built-blob style of `:601,:856,:884`)
