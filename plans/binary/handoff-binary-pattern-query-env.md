@@ -1,5 +1,39 @@
 # Handoff — the binary pattern query needs the host's outer env (and its `(pure …)` leaves back)
 
+> **Status (current) — 2026-10-20: OWNER FEATURE DELIVERED — the SJON side
+> is implemented and independently review READY (native-qualified gates);
+> pacer consumer adoption is NOT DONE. This is a handoff, not
+> integration.** The SJON owner authorized both ask29 plans on
+> 2026-10-19; the env-carrying binary query is delivered — consumers MUST
+> select `queryBinaryWithEnv` / `queryBinaryWithBudgetAndEnv` (null-free
+> env required; the entry selects eval semantics). The legacy
+> `queryBinary` / `queryBinaryWithBudget` **remain frozen** as the
+> qualified, semantically non-equivalent control — a `(pure <form>)` leaf
+> is still silence there — and must not be adopted for pattern scores.
+> The tree-trailing `BinaryCursor` gap is closed at SJON `8b8a38ee`: a
+> payload walker MUST drain the `RootIter` through `null` — exact-end
+> exhaustion now consumes the tree-trailing comment block — before
+> treating leftovers as invalid. SJON commit chain: delivery source
+> feature `f207113e`, final adversarial tests `661d2f15`, fuzz leg
+> `7f364501`, cursor drain `8b8a38ee`, review-closure docs `bad5cddf`;
+> current records:
+> [`29-validation/pattern-plan.md`](../../../SJON/docs/plans/asks/29-validation/pattern-plan.md)
+> and the timing artifact
+> [`29-validation/perf/performance.md`](../../../SJON/docs/plans/asks/29-validation/perf/performance.md)
+> (review disposition and parent verification record:
+> [`29-validation/README.md`](../../../SJON/docs/plans/asks/29-validation/README.md)).
+> SJON-side qualification: build test 4124/4127 (3 skipped), fuzz
+> 102/102, audit-fmt / audit-docs / audit-wasm-imports OK, `wasm-binary`
+> green without libwasmtime; full merge acceptance
+> (`zig build verify`, `audit-diagnostics`, `audit-format-versions`,
+> wasmtime-side audits) is deferred on SJON's host — not claimed. **No
+> pacer-side claim is made or implied**: `pacer pack` still refuses
+> `:pattern` scores, the plan-03 P4 binary replay of the `pattern-env`
+> corpus case has NOT run, and no pack-pattern support, parity result, or
+> runtime integration exists. The binary wave's missing-scene-name owner
+> decision is unrelated to this handoff and still open. The original
+> filing below is historical and stands verbatim.
+
 **Status: filed as SJON
 [`docs/plans/asks/29-binary-pattern-query-env.md`](../../../SJON/docs/plans/asks/29-binary-pattern-query-env.md)
 on 2026-10-19 — awaiting the SJON verdict.** This is the pacer-local
