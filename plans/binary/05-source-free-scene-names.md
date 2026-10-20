@@ -85,7 +85,7 @@ applied, docs-only. Working copy: `.agent/control/plan-metadata-names.md`.
 | bytes ↓ / reader → | new Zig `Pacm`/`Abi` | new JS `meta.js` | frozen old rt wasm | frozen old `meta.js` |
 |---|---|---|---|---|
 | new blob (SNAM) | names exact (G2 tests) | names exact (G3) | loads, wasm skips SNAM internally, names exact via the new JS glue (`'drop'`; `''` only via frozen old `meta.js`) (G3 compat, artifact run) | decodes, skips SNAM by length, names `''` (G3 compat, artifact run) |
-| old blob (pre-SNAM pin) | loads, names `''` (G2 pin test + `rt_entry` fixture test, O3 home) | names `''` (existing `rt.test.js` pre-SNAM behavior) | n/a (today's behavior, baseline green) | n/a (baseline green) |
+| old blob (pre-SNAM pin) | loads, names ABSENT (`null` — the spelling a source-holding consumer keys its span fallback on; pinned at the unit readers and through the legacy cartridge load, G2) | names `''` (existing `rt.test.js` pre-SNAM behavior) | n/a (today's behavior, baseline green) | n/a (baseline green) |
 
 Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src/Abi.zig:1356+` skip-tolerance tests, and the Group-1-before-Group-2 window in which the pre-SNAM `Pacb.decode` length-skip (`src/Pacb.zig:2472-2476`, depended on by `PacbEncode.zig:281`) exercises old-decode-on-new-bytes in CI.
 
@@ -165,7 +165,28 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 - [x] **Step 5: Run GREEN gates** on obs-dev — `zig build test` (incl. oracle byte-equality + worst-case equality), `zig build verify` (corpus 43/43; node 114/114 — masks still present, binary names render `''` until Group 3). Exit codes captured pre-pipe.
 - [x] **Step 6: Commit** — `feat(meta): encode scene names as append-only 'SNAM' TLV; sizers/oracle coherent`. Record in the task report: new `META_CAP`, new `PACB_CAP`, fixture size delta.
 
-### Group 2: Zig decoders — strict refusals, skip tolerance, structured fuzz reach
+### Group 2: Zig decoders — strict refusals, skip tolerance, structured fuzz reach — **DONE 2026-10-20** (commit `d71d4d9`; report `.agent/control/metadata-g2-report.md`)
+
+> Executed with a two-phase actual RED (`metadata-g2-red1-test3.log`: refusal
+> tests failed because the decoder skipped SNAM as unknown and ACCEPTED every
+> malformed shape; `metadata-g2-red2-test.log`: landing tests failed on the
+> missing name fill) before any production edit. GREEN: test 812/812 (791 →
+> +21 slots), fuzz 379/379 (plan-quoted baseline 361 → +18, of which +14 this
+> group; corpus 11 → 15), audit-rt-imports green with the same allowlist and
+> 17 `prt_*` exports (rt wasm 171,852 B vs the 171,667 baseline), verify
+> corpus 43/43 + node 114/114, parity 43/43 with exactly the 4 known pattern
+> skips. Plan-premise corrections recorded in the report and applied here:
+> **v1 `'PACB'` has NO container checksum** — the fuzz repair list is the
+> directory's `'PACM'` len field plus `'TRAN'`'s `pacm_fnv`, nothing else;
+> **`MetaScene.name` is `?[]const u8 = null`** (presence-keyed — a plain
+> slice cannot express present-empty vs absence and invites the falsy
+> fallback IM-3 forbids; the C6 consumer chain is `name orelse
+> source[name_span]`); and `src/root.zig` gained 8 lines (frozen-copy assert,
+> `pacmExpectSameView` name comparison, one oracle literal assert) so the
+> twin-decoder contract is actually tested across the pair. The PacerRuntime
+> composition ruling: scene names are NOT materialized into the binary arm's
+> table — nothing native reads `.name`, names travel via the served `'PACM'`
+> copy decoded by the G3 glue; no native exact-name claim is made or tested.
 
 **Files:**
 - Modify: `src/Pacm.zig` (id constant, `MetaScene.name: []const u8 = ""`, TLV walk arm after `'TMPO'`, tests in the hand-built-blob style of `:601,:856,:884`)
@@ -176,12 +197,12 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 **Interfaces:**
 - Consumes: Group 1 wire layout + pin. Produces: `MetaScene.name` on both Zig views; fuzz coverage of the new arms.
 
-- [ ] **Step 1: Write the failing tests** — decode landing (count-parallel); refusals, one test each: count mismatch vs `'SCEN'`, `name_len` overrun, trailing payload bytes, `'SNAM'` before `'SCEN'` (fixed encoder order), **duplicate `'SNAM'` id** (O2); tolerance: unknown section after `'SNAM'` skipped by length; pin-blob empty names; **SNAM-present-empty precedence (IM-3): a hand-built blob with `'SNAM'` present whose one entry carries `name_len = 0`, decoded against a non-empty held source slice, yields `""` — presence-keyed, never a falsy `snamName || sourceSlice` fallback**; UTF-8 bytes verbatim; 300-byte name round-trips exactly through encode→decode.
-- [ ] **Step 2: Run RED** on obs-dev (`zig build test`; exit code pre-pipe).
-- [ ] **Step 3: Implement** both TLV arms (bounds-checked reads, `null` on any violation; unknown-id skip arm untouched — that arm IS the old-code-on-new-blob guarantee).
-- [ ] **Step 4: Structured fuzz mutator** — locate the embedded PACM inside the three committed `tools/testdata/pacb/*.pacb` fixtures (canonical section order per `docs/binary-score.md`; offsets from the PACB header), then mutate: splice a syntactically valid `'SNAM'` frame with random names, inflate the `'SNAM'` count field, overrun a `name_len`, truncate mid-entry. **Repair the PACM FNV and container checksum after mutation** (recompute as `PacbEncode.zig:646` does at pack) so bytes reach metadata validation (Review Focus 2). Malformed hostile negatives per refusal stay as unit tests.
-- [ ] **Step 5: Run GREEN + closure gates** on obs-dev — `zig build test`, `zig build fuzz --summary all` (361 → record the new honest count), `zig build audit-rt-imports` (same 12 pacer + 16 SJON allowlisted modules, same 17 `prt_*` exports, 1 import; record the new `pacer-rt.wasm` byte size vs the 171,667 baseline).
-- [ ] **Step 6: Commit** — `feat(meta): decode 'SNAM' scene names; strict refusals, skip tolerance, structured fuzz reach`.
+- [x] **Step 1: Write the failing tests** — decode landing (count-parallel); refusals, one test each: count mismatch vs `'SCEN'`, `name_len` overrun, trailing payload bytes, `'SNAM'` before `'SCEN'` (fixed encoder order), **duplicate `'SNAM'` id** (O2); tolerance: unknown section after `'SNAM'` skipped by length; pin-blob empty names; **SNAM-present-empty precedence (IM-3): a hand-built blob with `'SNAM'` present whose one entry carries `name_len = 0`, decoded against a non-empty held source slice, yields `""` — presence-keyed, never a falsy `snamName || sourceSlice` fallback**; UTF-8 bytes verbatim; 300-byte name round-trips exactly through encode→decode. *(Executed as 16 named tests: 9 Pacm, 4 Abi, 2 rt_entry, 1 fuzz_pacb — see the report's inventory; the Zig spelling of IM-3 presence is the `?[]const u8` optional, per the correction above.)*
+- [x] **Step 2: Run RED** on obs-dev (`zig build test`; exit code pre-pipe). *(Two-phase RED, both exit=1 and logged; details in the report.)*
+- [x] **Step 3: Implement** both TLV arms (bounds-checked reads, `null` on any violation; unknown-id skip arm untouched — that arm IS the old-code-on-new-blob guarantee). *(Identical arm in both decoders; every length compared against what remains before it is added — u32-max `name_len` cannot wrap; entries account for the payload exactly.)*
+- [x] **Step 4: Structured fuzz mutator** — locate the embedded PACM inside the three committed `tools/testdata/pacb/*.pacb` fixtures (canonical section order per `docs/binary-score.md`; offsets from the PACB header), then mutate: splice a syntactically valid `'SNAM'` frame with random names, inflate the `'SNAM'` count field, overrun a `name_len`, truncate mid-entry. **Repair the PACM FNV and container checksum after mutation** (recompute as `PacbEncode.zig:646` does at pack) so bytes reach metadata validation (Review Focus 2). Malformed hostile negatives per refusal stay as unit tests. *(Executed as `spliceSnam` over full-small — the scene-carrying fixture — with the repair list corrected to directory-len + `pacm_fnv`: there is no container checksum in v1. Three fuzz arms + 4 deterministic corpus entries; the valid splice must decode with the names visible through the served `'PACM'` copy, each broken rule must refuse `meta_malformed`.)*
+- [x] **Step 5: Run GREEN + closure gates** on obs-dev — `zig build test`, `zig build fuzz --summary all` (361 → record the new honest count), `zig build audit-rt-imports` (same 12 pacer + 16 SJON allowlisted modules, same 17 `prt_*` exports, 1 import; record the new `pacer-rt.wasm` byte size vs the 171,667 baseline). *(Plus `zig build verify` and `zig build parity`, both green; all actuals in the report's gate table.)*
+- [x] **Step 6: Commit** — `feat(meta): decode 'SNAM' scene names; strict refusals, skip tolerance, structured fuzz reach`. *(Commit `d71d4d9`, 5 files, +972/−5.)*
 
 ### Group 3: JS decode + types + unmasked parity + frozen-old-reader actual proofs
 
@@ -298,4 +319,4 @@ Also of record: Group 0 marked **DONE** (commit `77d8c11`, report + hashes linke
 
 ## Execution handoff
 
-Groups 0→6 execute in order, one green commit each, with an independent fresh-reviewer gate after every group and a whole-branch review at the end. **Group 0 is DONE (commit `77d8c11`, 2026-10-20). Next implementation group: Group 1 (`'SNAM'` encoder + sizer/oracle coherence).**
+Groups 0→6 execute in order, one green commit each, with an independent fresh-reviewer gate after every group and a whole-branch review at the end. **Groups 0-2 are DONE (Group 0 commit `77d8c11`; Group 1 commit `61c69a8`; Group 2 commit `d71d4d9`, 2026-10-20 — Zig `'SNAM'` decoders green on all gates). Next implementation group: Group 3 (JS decode + types + unmasked parity + frozen-old-reader actual proofs).**
