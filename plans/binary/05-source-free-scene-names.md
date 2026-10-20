@@ -281,7 +281,36 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 - [x] **Step 5: Run GREEN gates** — `npm run lint && npm run typecheck && npm test` (biome clean; `test/exports.test.js` unchanged green — no new exports); `grep -n mask npm/pacer/test/rt.test.js` empty; `grep -n "mask\|mscene" src/parity_runner.zig` confirms no native mask exists (recon found none). On obs-dev: `zig build verify && zig build parity` — green with the same 4 pattern skips. Record node count delta (O5).
 - [x] **Step 6: Commit** — `feat(meta): JS 'SNAM' decode; unmasked source-free parity; frozen old readers run new bytes`.
 
-### Group 4: pngine `PACB` reservation (local repo) + node bundle gate
+### Group 4: pngine `PACB` reservation (local repo) + node bundle gate — **DONE 2026-10-20** (pngine commit `e9aff0d5`; pacer commit `b67c6f7`; report `.agent/control/metadata-g4-report.md`)
+
+> Executed with an actual behavioral RED before the production row
+> (`metadata-g4-pngine-red1.log`: count test `expected 16, found 15` +
+> the new `findKind('PACB').?` null-panic — the registry row was
+> genuinely absent; the pack-accepts-unknown-uppercase fact stayed an
+> expected-green compat note, never fabricated as RED). GREEN:
+> test-payload **21/21**, drift **"16 kinds agree"**, npm
+> envelope+bundle **423/423** (baseline count unchanged, OP-3) and
+> extract suites **49/49**, exactly one pngine commit (registry row +
+> docs row + the required dated note; PACR untouched, no handler, no
+> autoplay claim). pngine aggregate `zig build test` is
+> provision-blocked on obs **pre-existing**: the identical aggregate at
+> baseline `bc0b41ff` fails with the byte-identical failing set
+> (OpenBSD `realPath` in `cli.inprocess_test` + `cli.render`) — A/B
+> logs `metadata-g4-pngine-green5-aggregate-zig-test.log` vs
+> `metadata-g4-pngine-baseline-aggregate-zig-test.log`; the narrow
+> gates stand as the commit's gates of record. Pacer:
+> `test/bundle.test.js` — 4 tests, obs **4/4, 0 skipped** (ai-linux 1
+> pass + 3 loud host skips proving skip-not-crash), obs `npm test`
+> **135/135** (O5: 131 → 135), `zig build verify` exit 0 (corpus 43/0,
+> node 135/135, Zig 699/699), parity exit 0 with exactly the 4 known
+> pattern skips, frozen fixtures byte-identical. Public extraction seam
+> = `pngine/viewer` (`dist/viewer.mjs` exports `payloadsOf`; the node
+> root stub does not). One honest iteration recorded: the first obs
+> bundle run failed on my own `spawnSync` array-as-file bug, fixed
+> before green. G5 replay assets produced under gitignored
+> `.agent/artifacts/` (hashes in the report); no browser files started.
+> Untracked names preserved: pacer `?? zig-pkg/`, pngine
+> `?? pnpm-lock.yaml ?? pnpm-workspace.yaml`.
 
 **Files (pngine — the one authorized local commit):**
 - Modify: `pngine/src/payload/envelope.zig` (`v1_kinds` row after the `PACR` row at `:386`: tag `"PACB"`, owner `"pacer"`, status `.reserved` — R5 true reservation, no handler invented)
@@ -293,10 +322,10 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 **Interfaces:**
 - Consumes: Groups 1-3 (SNAM-carrying `rt-fixture.pacb`, source-free `PacerRt`, `meta.js`). Produces: the registered-lane node-tier bundling gate Group 5 builds on; `PACB` becomes a family tag (drift-gated).
 
-- [ ] **Step 1: pngine registration + gates.** Apply the two hunks; on obs-dev run `zig build drift_payload_kinds` (gate at `pngine/build.zig:1891`, script `scripts/check-payload-kinds.mjs` — tag set/status/owner compared both sides) and `node --test tests/npm/envelope.test.js tests/npm/bundle-closure.test.js` — green; count recorded (baseline 423; envelope.test.js is a byte-level mutation corpus with no v1_kinds enumeration, so a benign count drift is recorded both ways, never a spurious red — OP-3). Exit codes pre-pipe. Commit in pngine: `feat(payload): reserve PACB kind for pacer cartridges (pacer metadata wave)`. No push/publish.
-- [ ] **Step 2: Write the bundle test.** `PACER_PNGINE` env, default `new URL("../../../../pngine", import.meta.url)` from `npm/pacer/test/` (B4: four levels; print the resolved absolute path in every skip/failure). CLI probe first: spawn `pngine version` (`cli.zig:151-156`); on exec failure skip loudly naming the host constraint (O6: the prebuilt binary is OpenBSD-only). Then: pack a fixed 1×1 PNG with `--add PACB=<rt-fixture.pacb>` (deflate and `,raw` variants), extract with the public `payloadsOf` (R6 explicit seam), assert exactly one `PACB` payload byte-identical to the fixture; load the extracted body with `PacerRt` (wasm loading mirrored from `rt.test.js:28-33`), assert `meta.scenes[0].name === "drop"` and the `evalBytes 152` pin (`:128`). The proof carries **only** the cartridge — never score text.
-- [ ] **Step 3: Run** on obs-dev — `cd pacer/npm/pacer && node --test test/bundle.test.js` → PASS (not skip); local ai-linux run may loudly skip the CLI legs (host constraint printed). Record the verify-node count 114 → 116 (O5).
-- [ ] **Step 4: Commit** (pacer) — `test(bundle): PACB rides the reserved pngine kind — pack → payloadsOf → source-free PacerRt`.
+- [x] **Step 1: pngine registration + gates.** Apply the two hunks; on obs-dev run `zig build drift_payload_kinds` (gate at `pngine/build.zig:1891`, script `scripts/check-payload-kinds.mjs` — tag set/status/owner compared both sides) and `node --test tests/npm/envelope.test.js tests/npm/bundle-closure.test.js` — green; count recorded (baseline 423; envelope.test.js is a byte-level mutation corpus with no v1_kinds enumeration, so a benign count drift is recorded both ways, never a spurious red — OP-3). Exit codes pre-pipe. Commit in pngine: `feat(payload): reserve PACB kind for pacer cartridges (pacer metadata wave)`. No push/publish.
+- [x] **Step 2: Write the bundle test.** `PACER_PNGINE` env, default `new URL("../../../../pngine", import.meta.url)` from `npm/pacer/test/` (B4: four levels; print the resolved absolute path in every skip/failure). CLI probe first: spawn `pngine version` (`cli.zig:151-156`); on exec failure skip loudly naming the host constraint (O6: the prebuilt binary is OpenBSD-only). Then: pack a fixed 1×1 PNG with `--add PACB=<rt-fixture.pacb>` (deflate and `,raw` variants), extract with the public `payloadsOf` (R6 explicit seam), assert exactly one `PACB` payload byte-identical to the fixture; load the extracted body with `PacerRt` (wasm loading mirrored from `rt.test.js:28-33`), assert `meta.scenes[0].name === "drop"` and the `evalBytes 152` pin (`:128`). The proof carries **only** the cartridge — never score text. *(Executed with the deviations recorded in the DONE note: a dedicated authored named score packed fresh by the test itself (the brief's real-producer requirement, stronger than reusing the pretest fixture), the public `pngine/viewer` seam, and the oracle literals derived from that score — `32 = 12 + 20×1` bytes replaces full-small's 152 pin.)*
+- [x] **Step 3: Run** on obs-dev — `cd pacer/npm/pacer && node --test test/bundle.test.js` → PASS (not skip); local ai-linux run may loudly skip the CLI legs (host constraint printed). Record the verify-node count 114 → 116 (O5). *(4/4 PASS, 0 skipped on obs; local 1 pass + 3 loud skips. O5 actual recorded from G3's real 131: node 131 → 135.)*
+- [x] **Step 4: Commit** (pacer) — `test(bundle): PACB rides the reserved pngine kind — pack → payloadsOf → source-free PacerRt`. *(Commit `b67c6f7`.)*
 
 ### Group 5: Browser proof — mandatory launched pass (no completion without it)
 
@@ -375,4 +404,4 @@ Also of record: Group 0 marked **DONE** (commit `77d8c11`, report + hashes linke
 
 ## Execution handoff
 
-Groups 0→6 execute in order, one green commit each, with an independent fresh-reviewer gate after every group and a whole-branch review at the end. **Groups 0-3 are DONE (Group 0 commit `77d8c11`; Group 1 commit `61c69a8`; Group 2 commit `d71d4d9`, corrections commit `55e1c4c`; Group 3 commit `418ea6a`, 2026-10-20 — JS `'SNAM'` decode green on all gates, parity unmasked, frozen old readers run new bytes). Next implementation group: Group 4 (pngine `PACB` reservation + node bundle gate).**
+Groups 0→6 execute in order, one green commit each, with an independent fresh-reviewer gate after every group and a whole-branch review at the end. **Groups 0-4 are DONE (Group 0 commit `77d8c11`; Group 1 commit `61c69a8`; Group 2 commit `d71d4d9`, corrections commit `55e1c4c`; Group 3 commit `418ea6a`, 2026-10-20 — JS `'SNAM'` decode green on all gates, parity unmasked, frozen old readers run new bytes; Group 4 commits pngine `e9aff0d5` + pacer `b67c6f7`, 2026-10-20 — `PACB` reserved per the dated-note rule with the drift gate green at 16 kinds, and the real producer→extractor→runtime bundle proof at 135/135 on obs, with the bounded G3 review follow-up executed first, commit `d576059`). Next implementation group: Group 5 (browser proof).**
