@@ -15,7 +15,12 @@ adds the npm gate.
 NOT ACCEPTED 2026-10-19 (missing source-free scene names break the
 approved identical-metadata / unmasked-harness parity; owner decision
 pending); P4 is blocked on the SJON-owner prerequisite; 03/04 remain
-pending.**
+pending.** *(2026-10-20, additive: the scene-name blocker above is now
+MET — the metadata wave, `plans/binary/05-source-free-scene-names.md`,
+landed `'SNAM'` with its acceptance gates green, closing the P3
+scene-name contract only; this does not mark Plan02 — or 03/04 —
+complete: P4 stays blocked on the SJON-owner prerequisite and the
+pattern/full-export work remains open.)*
 
 ## Why
 
@@ -648,6 +653,10 @@ _(created 2026-10-18; entries appended per phase)_
   P3 IMPLEMENTED — NOT ACCEPTED (metadata parity open; see the dated
   review correction below), pending P4 and 03/04. The wave is NOT
   complete.**
+  *(2026-10-20, additive: the metadata-parity blocker named here is now
+  MET by the source-free scene-name wave — `plans/binary/05` — with the
+  unmasked harness green; the P3 scene-name contract is closed, the rest
+  of this plan is not.)*
   `src/rt.js` adds `PacerRt`, the playback-runtime glue over the real
   `pacer-rt.wasm` `prt_*` surface: the same registries → canonical
   `'PACT'` flow through `pact.js`; `load(pacbBytes)` as the only load
@@ -734,3 +743,6 @@ _(created 2026-10-18; entries appended per phase)_
   Linux `node tools/smoke_rt.mjs` PASS (exit 0). `zig fmt --check`
   clean on the touched Zig paths. P3 remains NOT ACCEPTED; P4/03/04
   untouched.
+  *(2026-10-20, additive: the P3 scene-name contract is now MET by the
+  metadata wave — `plans/binary/05-source-free-scene-names.md` —; P4 and
+  03/04 remain untouched/open, and this plan is still not complete.)*

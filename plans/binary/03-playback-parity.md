@@ -13,6 +13,10 @@ compatibility and `zig build parity` green). P3 remains open: the
 production-loader negative suites, full pattern legs, binary wasm corpus
 and browser work are still pending. The two owner questions remain
 unanswered, binary02 P3 is not accepted, and no phase checkbox is claimed.**
+*(2026-10-20, additive: the binary02 P3 scene-name contract is now MET —
+the metadata wave, `plans/binary/05-source-free-scene-names.md`, is
+accepted with its gates green; the pattern legs and owner questions named
+above remain open and no phase checkbox of this plan is claimed.)*
 
 ## Why
 
@@ -288,6 +292,9 @@ _(created 2026-10-18; entries appended per phase)_
   T5b's lifecycle grammar/JS leg remains; P3 is not accepted and the two
   owner questions remain unanswered. Evidence:
   `.agent/control/binary03-t5a-report.md`.
+  *(2026-10-20, additive: the P3 scene-name contract referenced here is
+  now MET by the metadata wave — `plans/binary/05`; this entry's P2
+  status and the open owner questions are unchanged.)*
 - **2026-10-19 — T5b COMPLETE; P2 CLOSED (task/gate only; P3 open).**
   Commits `c1d5bfe` (shared lifecycle grammar + actual text/binary replay
   adapters), `48ed070` (the final two text-first anchors), `b0b2c4d` (the

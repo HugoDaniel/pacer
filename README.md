@@ -121,6 +121,12 @@ playback never ships source text — is planned and its artifact-preservation
 step is done (`77d8c11`); implementation is pending. Plan of record:
 [`plans/binary/05-source-free-scene-names.md`](./plans/binary/05-source-free-scene-names.md).
 
+*(2026-10-20: the wave's implementation and acceptance are complete —
+`'SNAM'` rides the compiled binary, the reserved `'PACB'` bundle carriage
+and the full gate set are green, and the plan's Group-6 record is landed;
+see [`docs/binary-score.md`](./docs/binary-score.md). Pattern tracks and
+the full production export remain separate, open work.)*
+
 ## License
 
 [CC0 1.0 Universal](./LICENSE) — a public-domain dedication. Do
