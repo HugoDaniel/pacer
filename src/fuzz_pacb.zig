@@ -393,6 +393,33 @@ pub fn spliceSnam(
     return total;
 }
 
+/// The arms 5–7 draw bundle, in `fuzzPacbDecode`'s exact consumption
+/// order: the hostile name (drawn length 1..=32, then that many drawn
+/// bytes), the flaw selected by arm (5 → `.none`; 6 → `.count_inflated`;
+/// 7 → the sub-draw: even → `.len_overrun`, odd → `.truncated`), then
+/// the count-inflation extra. Shared by the fuzz arm and the
+/// corpus-routing test below, so a draw-order change cannot desync the
+/// harness from the routes its corpus documents.
+const SnamSpliceDraws = struct {
+    name: []const u8,
+    flaw: SnamFlaw,
+    extra: u32,
+};
+
+fn snamSpliceDraws(cur: *Cursor, arm: u8, name_buf: *[32]u8) SnamSpliceDraws {
+    const nlen = 1 + cur.byte() % name_buf.len;
+    for (name_buf[0..nlen]) |*b| b.* = cur.byte();
+    const flaw: SnamFlaw = switch (arm) {
+        5 => .none,
+        6 => .count_inflated,
+        // Reads one byte past the name fill; a past-end draw yields 0
+        // (even → `.len_overrun`), so a seed intending the mid-entry
+        // cut must supply an odd byte IN RANGE here.
+        else => if (cur.byte() % 2 == 0) .len_overrun else .truncated,
+    };
+    return .{ .name = name_buf[0..nlen], .flaw = flaw, .extra = 1 + cur.byte() % 3 };
+}
+
 fn fuzzPacbDecode(ctx: *const Fixtures, smith: *Smith) anyerror!void {
     var buf: [MAX_INPUT]u8 = undefined;
     const len = smith.sliceWithHash(&buf, 0xB1C5_0A7);
@@ -437,16 +464,10 @@ fn fuzzPacbDecode(ctx: *const Fixtures, smith: *Smith) anyerror!void {
             // Hostile name bytes: arbitrary and drawn — the decoders
             // check bounds only, never content.
             var name_buf: [32]u8 = undefined;
-            const nlen = 1 + cur.byte() % name_buf.len;
-            for (name_buf[0..nlen]) |*b| b.* = cur.byte();
-            const names = [_][]const u8{name_buf[0..nlen]};
-            const flaw: SnamFlaw = switch (arm) {
-                5 => .none,
-                6 => .count_inflated,
-                else => if (cur.byte() % 2 == 0) .len_overrun else .truncated,
-            };
-            const extra: u32 = 1 + cur.byte() % 3;
-            const new_len = spliceSnam(&out, buf_in[0..ctx.full_small.len], &names, flaw, extra, 0xFFFF_FFF0) orelse
+            const draws = snamSpliceDraws(&cur, arm, &name_buf);
+            const names = [_][]const u8{draws.name};
+            const flaw: SnamFlaw = draws.flaw;
+            const new_len = spliceSnam(&out, buf_in[0..ctx.full_small.len], &names, flaw, draws.extra, 0xFFFF_FFF0) orelse
                 return checkDecode(buf_in[0..ctx.full_small.len]); // no seam: fall back to the total contract
 
             if (flaw == .none) {
@@ -482,6 +503,66 @@ fn fuzzPacbDecode(ctx: *const Fixtures, smith: *Smith) anyerror!void {
     return checkDecode(mut[0..mlen]);
 }
 
+/// The committed corpus — deterministic seeds run once before fuzzing
+/// (unit-test mode) and seeded into the engine (fuzz mode). Named so
+/// the corpus-routing test below pins the 'SNAM' entries' ACTUAL
+/// routes through the real consumption path.
+///
+/// Wire note (runtime-probe verified against this toolchain's corpus
+/// loop): `std.testing.fuzz` feeds each entry to the harness as a
+/// Smith input, and `Smith.sliceWithHash` consumes a leading `u32` LE
+/// length prefix before copying stream bytes — a seed without that
+/// prefix loses its first four bytes and never reaches the arm its
+/// comment names. The nine pre-G2 entries below are preserved
+/// byte-for-byte (frozen-corpus discipline) and predate this
+/// discovery; the four 'SNAM' entries carry the prefix explicitly.
+const fuzz_corpus = [_][]const u8{
+    // Raw: empty buffer; a valid-header zero-section container;
+    // dense garbage.
+    "",
+    "\x00PACB\x01\x00\x00\x00\x00\x00\x00\x00",
+    "\x00" ++ ("\xff" ** 64),
+    // Flips on keys-only: 4 sites (header/version region and
+    // deep payload bytes), one zeroing a byte.
+    "\x01\x00\x00\x04\x04\x00\x00\x00\xff\x10\x00\x00\x00\x00\x1f\x00\x00\x00\x7f\x40\x00\x00\x00\x01",
+    // Truncate full-small to a 64-byte prefix.
+    "\x01\x02\x01\x40\x00\x00\x00",
+    // Splice: keys-only[0..16] ++ full-small[32..].
+    "\x01\x00\x02\x10\x00\x00\x00\x02\x20\x00\x00\x00",
+    // Inflate a section count to 131073 (just past
+    // MAX_TICK_ENTRIES).
+    "\x01\x02\x03\x00\x01\x06",
+    // Inflate the header's section_count to u32 max.
+    "\x01\x01\x03\x01\x00",
+    // Compound: flip byte 0 to 0x0f, then inflate with a drawn
+    // u32 count.
+    "\x01\x02\x04\x01\x00\x00\x00\x00\x0f\x02\x01\x03",
+    // The four 'SNAM' entries are LENGTH-PREFIXED Smith streams —
+    // `[stream_len u32 LE][stream bytes]`, the protocol
+    // std.testing.fuzz actually speaks (Smith.sliceWithHash consumes
+    // the leading length; an unprefixed seed loses its first four
+    // bytes and never reaches the arm its comment names — the
+    // metadata-g2-corrections wave's MEDIUM-1, now fixed). Each
+    // stream draws, in fuzzPacbDecode's order: structured bit (odd),
+    // fixture 2 = full-small (the only scene carrier), arm, then the
+    // shared arms-5–7 bundle; every draw lands IN RANGE — no seed
+    // relies on past-end zero reads. Routes are pinned by the
+    // corpus-routing test below.
+    // Valid splice: "snam!" must land in the decoded score's own
+    // 'PACM' copy (arm 5, flaw .none, extra draw 1).
+    "\x0a\x00\x00\x00" ++ "\x01\x02\x05\x04snam!\x00",
+    // Count inflated (arm 6, extra 2 → count 3 vs the 'SCEN' 1):
+    // must refuse.
+    "\x08\x00\x00\x00" ++ "\x01\x02\x06\x02drp\x01",
+    // Name_len overrun (arm 7, EVEN flaw sub-draw): must refuse —
+    // the u32 field claims bytes that are not there.
+    "\x09\x00\x00\x00" ++ "\x01\x02\x07\x02drp\x00\x00",
+    // Mid-entry cut (arm 7, ODD flaw sub-draw — the byte the old
+    // unprefixed seed could never draw in range): must refuse — the
+    // container ends inside the entry.
+    "\x09\x00\x00\x00" ++ "\x01\x02\x07\x02xy\x01\x01\x00",
+};
+
 /// Load the fixtures, prove the budget covers the splice worst case,
 /// then run the corpus + Smith loop. Called from `src/fuzz.zig`'s
 /// delegating test — the discovery rider (G12: the harness lives in
@@ -503,41 +584,7 @@ pub fn run() !void {
     }
 
     try testing.fuzz(&fixtures, fuzzPacbDecode, .{
-        .corpus = &.{
-            // Raw: empty buffer; a valid-header zero-section container;
-            // dense garbage.
-            "",
-            "\x00PACB\x01\x00\x00\x00\x00\x00\x00\x00",
-            "\x00" ++ ("\xff" ** 64),
-            // Flips on keys-only: 4 sites (header/version region and
-            // deep payload bytes), one zeroing a byte.
-            "\x01\x00\x00\x04\x04\x00\x00\x00\xff\x10\x00\x00\x00\x00\x1f\x00\x00\x00\x7f\x40\x00\x00\x00\x01",
-            // Truncate full-small to a 64-byte prefix.
-            "\x01\x02\x01\x40\x00\x00\x00",
-            // Splice: keys-only[0..16] ++ full-small[32..].
-            "\x01\x00\x02\x10\x00\x00\x00\x02\x20\x00\x00\x00",
-            // Inflate a section count to 131073 (just past
-            // MAX_TICK_ENTRIES).
-            "\x01\x02\x03\x00\x01\x06",
-            // Inflate the header's section_count to u32 max.
-            "\x01\x01\x03\x01\x00",
-            // Compound: flip byte 0 to 0x0f, then inflate with a drawn
-            // u32 count.
-            "\x01\x02\x04\x01\x00\x00\x00\x00\x0f\x02\x01\x03",
-            // 'SNAM' splice, valid: names "snam!" land in the decoded
-            // score's own 'PACM' copy (draws: fixture full-small, arm
-            // 5, name_len 5, the bytes, the extra-count draw).
-            "\x01\x02\x05\x04snam!\x00",
-            // 'SNAM' splice, count inflated (extra 2 → count 3 vs the
-            // 'SCEN' 1): must refuse.
-            "\x01\x02\x06\x02drp\x01",
-            // 'SNAM' splice, name_len overrun (even sub-draw): must
-            // refuse — the u32 field claims bytes that are not there.
-            "\x01\x02\x07\x03drp\x00",
-            // 'SNAM' splice, mid-entry cut (odd sub-draw): must
-            // refuse — the container ends inside the entry.
-            "\x01\x02\x07\x02xy\x01",
-        },
+        .corpus = &fuzz_corpus,
     });
 }
 
@@ -613,4 +660,77 @@ test "fuzz Pacb.decode: the 'SNAM' splice repairs exactly and breaks one rule pe
             },
         }
     }
+}
+
+test "fuzz corpus: each 'SNAM' entry routes to its documented arm and flaw" {
+    // MEDIUM-1 regression (G2 review): the corpus comments CLAIM each
+    // 'SNAM' seed routes deterministically to one new arm — a claim a
+    // comment cannot carry. Pinned here against the REAL consumption
+    // path: std.testing.fuzz feeds each entry to the harness as a
+    // Smith input and Smith.sliceWithHash consumes a leading u32 LE
+    // length prefix before copying stream bytes (runtime-probe
+    // verified — an unprefixed seed loses its first four bytes and
+    // never reaches the arm its comment names). The check replays the
+    // exact draw order over the stream the harness will actually see,
+    // using the very selection code the fuzz arm runs, then drives
+    // fuzzPacbDecode itself so the routed branch's own behavioral
+    // assertions (positive control; per-flaw refusals) run end-to-end.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = @import("build_options").repo_root;
+    const fixtures: Fixtures = .{
+        .keys_only = try loadFixture(a, root, "keys-only"),
+        .expr_keys = try loadFixture(a, root, "expr-keys"),
+        .full_small = try loadFixture(a, root, "full-small"),
+    };
+    const fixture_draws = [_][]const u8{ fixtures.keys_only, fixtures.expr_keys, fixtures.full_small };
+
+    comptime std.debug.assert(fuzz_corpus.len == 13); // keep the indices honest
+    // (corpus index, arm, flaw) — the four 'SNAM' entries.
+    const snam_wants = [_]struct { idx: usize, arm: u8, flaw: SnamFlaw }{
+        .{ .idx = 9, .arm = 5, .flaw = .none },
+        .{ .idx = 10, .arm = 6, .flaw = .count_inflated },
+        .{ .idx = 11, .arm = 7, .flaw = .len_overrun },
+        .{ .idx = 12, .arm = 7, .flaw = .truncated },
+    };
+
+    var buf: [MAX_INPUT]u8 = undefined;
+    for (snam_wants) |want| {
+        snamRouteCheck(fuzz_corpus[want.idx], want.arm, want.flaw, &fixture_draws, &buf) catch |err| {
+            std.debug.print("corpus[{d}] = \"{x}\"\n", .{ want.idx, fuzz_corpus[want.idx] });
+            return err;
+        };
+        // End-to-end: the same entry through the REAL harness function
+        // in corpus mode — the routed branch's own assertions hold.
+        var smith = Smith{ .in = fuzz_corpus[want.idx] };
+        try fuzzPacbDecode(&fixtures, &smith);
+    }
+}
+
+fn snamRouteCheck(
+    entry: []const u8,
+    want_arm: u8,
+    want_flaw: SnamFlaw,
+    fixture_draws: *const [3][]const u8,
+    buf: []u8,
+) !void {
+    // The stream exactly as the harness consumes it (same call and
+    // hash constant as fuzzPacbDecode's own input read).
+    var smith = Smith{ .in = entry };
+    const len = smith.sliceWithHash(buf, 0xB1C5_0A7);
+    var cur = Cursor{ .bytes = buf[0..len] };
+
+    // fuzzPacbDecode's draw order: raw check, fixture, arm.
+    if (cur.byte() % 2 == 0) return error.CorpusEntryNotStructured;
+    const fixture = fixture_draws[cur.byte() % fixture_draws.len];
+    try testing.expectEqualStrings(fixture_draws[2], fixture); // full-small: the only scene carrier
+    const arm = cur.byte() % 8;
+    try testing.expectEqual(want_arm, arm);
+
+    // Then the shared arms-5–7 bundle — the REAL selection code.
+    var name_buf: [32]u8 = undefined;
+    const draws = snamSpliceDraws(&cur, arm, &name_buf);
+    try testing.expect(draws.name.len > 0);
+    try testing.expectEqual(want_flaw, draws.flaw);
 }
