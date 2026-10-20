@@ -327,7 +327,41 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 - [x] **Step 3: Run** on obs-dev — `cd pacer/npm/pacer && node --test test/bundle.test.js` → PASS (not skip); local ai-linux run may loudly skip the CLI legs (host constraint printed). Record the verify-node count 114 → 116 (O5). *(4/4 PASS, 0 skipped on obs; local 1 pass + 3 loud skips. O5 actual recorded from G3's real 131: node 131 → 135.)*
 - [x] **Step 4: Commit** (pacer) — `test(bundle): PACB rides the reserved pngine kind — pack → payloadsOf → source-free PacerRt`. *(Commit `b67c6f7`.)*
 
-### Group 5: Browser proof — mandatory launched pass (no completion without it) — **IN PROGRESS 2026-10-20** (fixture built + verified node/runtime + browser readiness; the mandatory independent browser-tester pass + design review are still pending; report `.agent/control/metadata-g5-report.md`)
+### Group 5: Browser proof — mandatory launched pass (no completion without it) — **IN PROGRESS 2026-10-20** (fixture built + verified node/runtime + browser readiness; review-corrections wave executed — H1 load-race guard RED→GREEN + L1–L6 + design O-A/O-B, fresh prepared webroot manifest `db4f964c…`; the mandatory independent browser-tester pass + design review on the FIXED page are still pending — do NOT mark DONE; reports `.agent/control/metadata-g5-report.md` + `.agent/control/metadata-g5-corrections-report.md`)
+
+> **Corrections wave (2026-10-20, per metadata-g5-corrections-brief.md):** the
+> G5 review's H-1 (async load race) was real and missing — proven by a recorded
+> RED on the unfixed page (preserved pre-fix webroot copy served on an
+> ephemeral port; 4 new cases failed for the exact defect reasons, 6 existing
+> stayed green) and GREEN after the one-batch fix (10/10 playwright). The fix:
+> monotonic `loadEpoch` last-intent-wins across `loadVariant` AND
+> `loadMalformed`, staleness checked after every `await`, stale
+> catch/finally never clears newer state, driver armed as a LOCAL candidate
+> committed only when current (metadata+variant+digests together), eval
+> disabled through pending on all async paths. Also folded: L-1 (DS
+> 'deflate-raw' constructed inside the guard — curated message), L-2 (rawGet
+> comment accuracy), L-3 (request-log fetch wrapped; evalAt glue-bug throws
+> surface via showError), L-4 (server/prepare CLI missing-value refusals, exit
+> 2 + usage, spawn-tested), L-5 (blank time input refused with a native
+> validity hint — no write, no count advance), L-6 (biome scope extended to
+> `playwright.config.js` — 29 files clean; tsconfig notes browser/ is
+> lint-covered but NOT type-claimed), favicon data-URL (cold console clean),
+> design O-A (request log bounded scroll, keyboard-reachable), design O-B
+> (short error status copy — the alert carries the full message). Webroot
+> regenerated on obs AFTER all source edits: manifest sha256
+> `db4f964c7eca51746b928840436dc22bbfcceb3b39299956e9a8833611b1af7b`
+> (pre-fix `1d3be10f…` superseded; pre-fix manifest snapshotted at
+> `.agent/control/metadata-g5-prefix-manifest.json`); G4 bundle/cartridge pins
+> byte-identical (`5b158d22…`/`9dfd0614…`/`ab743d36…`/`6390c037…`), frozen
+> artifacts untouched. Gates: obs g5 node specs 10/10 0-skip (was 5+3, now
+> 6+4 with the CLI-refusal tests), obs `npm test` 135/135 0-skip, obs
+> `zig build verify` 32/32 steps 699/699 Zig + node 135/135, local suite
+> 135/131/4-legit-skips unchanged, biome 29 files clean, tsc clean,
+> playwright 10/10 (races included). M-2 executed: post-final-prepare
+> 13-route byte-hash transport smoke PASS over a real ephemeral server
+> instance — exact digests saved at
+> `.agent/control/metadata-g5-final-transport.log`. M-1 report correction
+> annotated in place in `metadata-g5-report.md` §1.
 
 > Executed per the G5 brief (metadata-g5-brief.md), which supersedes the
 > plan text below where they differ: the served root is an ISOLATED
@@ -428,4 +462,4 @@ Also of record: Group 0 marked **DONE** (commit `77d8c11`, report + hashes linke
 
 ## Execution handoff
 
-Groups 0→6 execute in order, one green commit each, with an independent fresh-reviewer gate after every group and a whole-branch review at the end. **Groups 0-4 are DONE (Group 0 commit `77d8c11`; Group 1 commit `61c69a8`; Group 2 commit `d71d4d9`, corrections commit `55e1c4c`; Group 3 commit `418ea6a`, 2026-10-20 — JS `'SNAM'` decode green on all gates, parity unmasked, frozen old readers run new bytes; Group 4 commits pngine `e9aff0d5` + pacer `b67c6f7`, 2026-10-20 — `PACB` reserved per the dated-note rule with the drift gate green at 16 kinds, and the real producer→extractor→runtime bundle proof at 135/135 on obs, with the bounded G3 review follow-up executed first, commit `d576059`; the G4 review's three report-accuracy corrections are folded into `metadata-g4-report.md`). Group 5 is IN PROGRESS: the isolated browser-proof fixture is built and verified (node/runtime + launched-browser readiness — 6/6 playwright PASS locally), but Group 5 is NOT DONE: the mandatory independent browser-tester pass on the running page (parent QA, port 8046) and the design review are still owed, plus Step 5/6 closure. Next implementation work: the parent's browser-tester + design-reviewer QA on `http://127.0.0.1:8046/`, then Group 6 (record).**
+Groups 0→6 execute in order, one green commit each, with an independent fresh-reviewer gate after every group and a whole-branch review at the end. **Groups 0-4 are DONE (Group 0 commit `77d8c11`; Group 1 commit `61c69a8`; Group 2 commit `d71d4d9`, corrections commit `55e1c4c`; Group 3 commit `418ea6a`, 2026-10-20 — JS `'SNAM'` decode green on all gates, parity unmasked, frozen old readers run new bytes; Group 4 commits pngine `e9aff0d5` + pacer `b67c6f7`, 2026-10-20 — `PACB` reserved per the dated-note rule with the drift gate green at 16 kinds, and the real producer→extractor→runtime bundle proof at 135/135 on obs, with the bounded G3 review follow-up executed first, commit `d576059`; the G4 review's three report-accuracy corrections are folded into `metadata-g4-report.md`). Group 5 is IN PROGRESS: the isolated browser-proof fixture is built and verified (node/runtime + launched-browser readiness — now 10/10 playwright incl. the race cases after the G5 review-corrections wave: H1 load-race guard RED→GREEN, L1–L6, design O-A/O-B, fresh webroot manifest `db4f964c…`), but Group 5 is NOT DONE: the mandatory independent browser-tester pass and design review on the FIXED page (parent QA — parent will start the fresh origin on 8047 for confirmation) are still owed, plus Step 5/6 closure. Next implementation work: the parent's browser-tester + design-reviewer re-observation, then Group 6 (record).**
