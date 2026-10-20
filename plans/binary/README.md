@@ -178,4 +178,5 @@ servers; no plan here claims a browser result.
 | 02 | [binary-runtime](02-binary-runtime.md) — Eval layering, `pacer-rt.wasm`, closure gate, `pacer/rt` | pacer | 01; SJON prerequisite for P4 only |
 | 03 | [playback-parity](03-playback-parity.md) — parity runner, anchors, negatives, fuzz | pacer | 01, 02 |
 | 04 | [measurement-acceptance](04-measurement-acceptance.md) — measurement procedure, user checkpoint, local smoke, consumer handoff | pacer | 02 (P2), 03 |
+| 05 | [source-free-scene-names](05-source-free-scene-names.md) — `'SNAM'` source-free scene names + reserved-`PACB` bundle carriage (IN PROGRESS: Group 0 done `77d8c11`, implementation pending) | pacer (+ pngine local reservation) | 01, 02, 03 |
 | — | [handoff-binary-pattern-query-env](handoff-binary-pattern-query-env.md) — the unfiled SJON prerequisite | pacer (SJON decides later) | — |

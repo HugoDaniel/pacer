@@ -114,6 +114,13 @@ section 4-CC is a breaking release — a major once 1.0 is tagged, a 0.x minor
 until then (the SemVer pre-1.0 convention). The golden corpus + `zig build
 verify` gate both kinds.
 
+## In progress: source-free scene names
+
+The metadata wave — exact scene names carried inside the compiled binary so
+playback never ships source text — is planned and its artifact-preservation
+step is done (`77d8c11`); implementation is pending. Plan of record:
+[`plans/binary/05-source-free-scene-names.md`](./plans/binary/05-source-free-scene-names.md).
+
 ## License
 
 [CC0 1.0 Universal](./LICENSE) — a public-domain dedication. Do
