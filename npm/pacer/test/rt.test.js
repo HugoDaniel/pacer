@@ -4,17 +4,20 @@
 // tools/testdata/pacb/full-small.score.sjon). No mocks: every assertion
 // crosses the wasm boundary.
 //
-// The binary score carries no source text. Spans in `meta` are the
-// original compile-time source coordinates, but values the text driver
-// slices from source are not recoverable by the runtime: scene `name` is
-// '' (its nameSpan stays authoritative), and declared-only target names
-// are null because 'DECL' carries registry/ncomp only (names never cross
-// the wire). Tests characterize the gap explicitly instead of
-// manufacturing names. That characterization is NOT acceptance of the
-// approved identical-metadata requirement — the owner decision is open.
+// The binary score carries no source text, yet it is not nameless: scene
+// names ride the blob's 'SNAM' section and decode exactly, while spans
+// stay the original compile-time source coordinates. Declared-only target
+// names are still null because 'DECL' carries registry/ncomp only (names
+// never cross the wire for targets). Pre-SNAM cartridges keep the
+// source-free '' name with the span as the authoritative anchor — the
+// compat tests pin both reader generations.
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Pacer } from '../src/index.js';
@@ -114,10 +117,10 @@ test('load: the real full-small pack is armed; metadata is exact', async () => {
   assert.equal(meta.scenes.length, 1);
   assert.equal(meta.scenes[0].startTick, 8n * BEAT);
   assert.equal(meta.scenes[0].durTicks, 8n * BEAT);
-  // The scene's name behaves exactly like every other source-sliced value
-  // on the binary path: the span survives, the text does not.
+  // The name travels IN the blob ('SNAM', source-free) and decodes
+  // exactly; the span keeps its provenance as the commit anchor.
   assert.equal(sourceAt(meta.scenes[0].nameSpan), 'drop');
-  assert.equal(meta.scenes[0].name, '');
+  assert.equal(meta.scenes[0].name, 'drop');
 
   assert.deepEqual(
     meta.easePrograms.map((p) => p.stages[0].ops[0].code),
@@ -156,35 +159,72 @@ test('parity: text Pacer and binary PacerRt run the same harness byte-for-byte',
     assert.deepEqual(rt.evalBytes(seconds), text.evalBytes(seconds), `t=${seconds}`);
   }
 
-  // The same script through the ONE shared renderer. Raw eval bytes are
-  // the determinism claim above; here everything — load, diagnostics,
-  // meta, every write, control acceptance, bpm acceptance — is compared
-  // as bounded output characterization. One scene-name line differs
-  // because PACM stores a span and the binary has no source text. The
-  // mask below is NOT acceptance of the approved identical-metadata /
-  // unmasked-harness parity; that requirement remains unmet pending an
-  // owner decision. The assertions are unchanged.
+  // The same script through the ONE shared renderer — compared EXACTLY.
+  // Raw eval bytes are the determinism claim above; here everything —
+  // load, diagnostics, meta, every write, control acceptance, bpm
+  // acceptance, and the scene-name line — is identical, because 'SNAM'
+  // carries the name in the blob. The former name-line diff exemption
+  // is retired: the owner-decided exact-parity requirement is met by
+  // the source-free metadata itself.
   const textRendered = await renderCase(fullSmallDoc, harness, text);
   const rtRendered = await renderCase(fullSmallDoc, harness, rt);
-  const textLines = textRendered.split('\n');
-  const rtLines = rtRendered.split('\n');
-  assert.equal(textLines.length, rtLines.length);
-  const differences = [];
-  for (let i = 0; i < textLines.length; i++) {
-    if (textLines[i] !== rtLines[i]) differences.push([i, textLines[i], rtLines[i]]);
+  assert.equal(rtRendered, textRendered);
+});
+
+test('SNAM carries exact 300-byte and 66000-byte names from a real CLI pack', async (t) => {
+  // The wire name length is u32 on purpose (R4): a 66,000-byte name is
+  // one byte past what any u16 length could express. The names come from
+  // an ACTUAL fresh compile + pack — the exact pretest/`build:rt-fixture`
+  // invocation (`zig build run -- pack … --out …`, the freshly built
+  // CLI, not the possibly-stale installed zig-out copy) — not from a
+  // synthetic wire blob. zig is host-native: present on the wave host,
+  // absent elsewhere, where this test skips loudly (never silently).
+  const probe = spawnSync('zig', ['version'], { encoding: 'utf8' });
+  if (probe.error) {
+    return t.skip(
+      `zig toolchain unavailable on this host (${probe.error.code ?? probe.error.message}); the real-CLI pack legs run on the wave host`,
+    );
   }
-  assert.equal(differences.length, 1, `unexpected differences: ${JSON.stringify(differences)}`);
-  const [line, textLine, rtLine] = differences[0];
-  assert.match(textLines[line], /^\s+\(mscene :name drop /);
-  assert.match(rtLines[line], /^\s+\(mscene :name {2}/);
-  // The span — the part the binary DOES carry — is identical.
-  assert.match(textLine, /:name-span \[1335 1339\]/);
-  assert.match(rtLine, /:name-span \[1335 1339\]/);
-  const masked = (rendered) => rendered.replace('(mscene :name drop ', '(mscene :name ');
-  assert.equal(
-    masked(textRendered),
-    masked(rtRendered.replace('(mscene :name  ', '(mscene :name ')),
-  );
+  const name300 = 'a'.repeat(300);
+  const name66000 = 'b'.repeat(66000);
+  const dir = await mkdtemp(path.join(tmpdir(), 'pacer-snam-long-'));
+  try {
+    const scorePath = path.join(dir, 'long-names.score.sjon');
+    const pacbPath = path.join(dir, 'long-names.pacb');
+    await writeFile(
+      scorePath,
+      [
+        '(target :name glow :arity 1 :registry 0)',
+        '(transport :bpm 120 :meter [4 4] :dur 4bar :end loop)',
+        `(scene :name ${name300} :at 0b :dur 8b`,
+        '  (track :target glow (key :at 0b :value 0.5)))',
+        `(scene :name ${name66000} :at 8b :dur 8b`,
+        '  (track :target glow (key :at 8b :value 0.8)))',
+        '',
+      ].join('\n'),
+    );
+    const packed = spawnSync('zig', ['build', 'run', '--', 'pack', scorePath, '--out', pacbPath], {
+      encoding: 'utf8',
+      cwd: fileURLToPath(new URL('../../../', import.meta.url)),
+    });
+    assert.equal(packed.error, undefined, `pacer pack failed to run: ${packed.error}`);
+    assert.equal(packed.status, 0, `pacer pack refused the score: ${packed.stderr}`);
+
+    const driver = await PacerRt.load(rtWasmModule, readFileSync(pacbPath));
+    assert.equal(driver.ok, true);
+    const meta = driver.meta;
+    assert.equal(meta.scenes.length, 2);
+    // Exact: no truncation, no drop, no degrade — at either length.
+    assert.equal(meta.scenes[0].name, name300);
+    assert.equal(meta.scenes[1].name, name66000);
+    // nameSpan provenance unchanged: the spans anchor the source symbols.
+    assert.equal(meta.scenes[0].nameSpan.end - meta.scenes[0].nameSpan.start, 300);
+    assert.equal(meta.scenes[1].nameSpan.end - meta.scenes[1].nameSpan.start, 66000);
+    // The runtime stays fully live over the big-name score.
+    assert.ok((driver.evalBytes(0.5)?.length ?? 0) > 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('registry mismatch: status 1 + reason 9, never a fabricated diagnostic', async () => {

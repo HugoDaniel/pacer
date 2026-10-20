@@ -7,6 +7,9 @@
 // before serving it (01's `Pacm` reader cross-checks it against the
 // PACB sections — 00 decision 6), so this decode is not the trust
 // boundary. Zero behavior change: this is a pure move of the decode.
+// Scene names: blobs carrying the 'SNAM' section own their names
+// (decoded exactly, strict Zig-mirror refusals as TypeError); blobs
+// without it fall back to slicing docBytes at each nameSpan.
 
 const PACM_MAGIC = 0x4d434150;
 const PACM_VERSION = 1;
@@ -25,6 +28,7 @@ const PACM_EASE_STAGE_LEN = 96;
 const PACM_EASE_OP_LEN = 20;
 const PACM_TEMPO_ID = 0x4f504d54; // 'TMPO' read little-endian
 const PACM_TEMPO_REC_LEN = 16;
+const PACM_SNAM_ID = 0x4d414e53; // 'SNAM' read little-endian
 /** Mirror of `Easing.Op` (array index = wire op code). */
 const EASE_OPS = /** @type {const} */ ([
   'linear',
@@ -68,12 +72,24 @@ const decoder = new TextDecoder();
  * call — wasm memory growth detaches older buffers, so a stale view is
  * never held (callers re-fetch `exports.memory.buffer` per call).
  *
+ * Scene names: a blob carrying the `'SNAM'` section carries the names
+ * themselves — verbatim source-symbol bytes, decoded exactly (no
+ * truncation, no drop, no empty fallback). The strict Zig contracts
+ * hold here too: one `'SNAM'`, only after `'SCEN'`, count parallel to
+ * the scene records, per-entry u32 lengths bounded against what
+ * remains, entries accounting for the payload exactly — every refusal
+ * is a TypeError thrown by a bounds check BEFORE the offending read.
+ * A blob WITHOUT `'SNAM'` (every pre-SNAM blob) falls back to slicing
+ * `docBytes` at each scene's `nameSpan`.
+ *
  * @param {ArrayBufferLike} buffer - the driver's CURRENT memory buffer.
  * @param {number} ptr - byte offset of the 'PACM' blob.
  * @param {number} len - blob length in bytes.
- * @param {Uint8Array} docBytes - the current score's UTF-8 bytes; scene
- *   names ride 'PACM' as spans (not inline bytes) and are sliced from
- *   here. Spans are USER coordinates, matching these bytes.
+ * @param {Uint8Array} docBytes - the current score's UTF-8 bytes, used
+ *   ONLY for the pre-'SNAM' fallback: when the blob carries no 'SNAM'
+ *   section, scene names are sliced from here at each `nameSpan`
+ *   (spans are USER coordinates, matching these bytes). A caller with
+ *   no source passes an empty buffer and pre-SNAM names decode ''.
  * @param {(targetId: number) => string | null} targetName - resolves a
  *   wire `target_id` through the host's joined registry list (null for
  *   a compose-mode declared-only target the host never registered).
@@ -163,11 +179,15 @@ export function decodeMeta(buffer, ptr, len, docBytes, targetName) {
   const easePrograms = [];
   /** @type {import('./types.js').MetaTempoSeg[]} */
   const tempoMap = [];
+  let scenSeen = false;
+  /** @type {string[] | null} Scene names from 'SNAM', in scene order. */
+  let snamNames = null;
   while (off < len) {
     const id = dv.getUint32(off, true);
     const plen = dv.getUint32(off + 4, true);
     const body = off + PACM_SECTION_HEADER_LEN;
     if (id === PACM_SCENES_ID) {
+      scenSeen = true;
       const count = dv.getUint32(body, true);
       let s = body + 4;
       for (let i = 0; i < count; i++, s += PACM_SCENE_REC_LEN) {
@@ -230,8 +250,66 @@ export function decodeMeta(buffer, ptr, len, docBytes, targetName) {
       for (let i = 0; i < count; i++, s += PACM_TEMPO_REC_LEN) {
         tempoMap.push({ tick: dv.getBigInt64(s, true), bpm: dv.getFloat64(s + 8, true) });
       }
+    } else if (id === PACM_SNAM_ID) {
+      // Scene names, carried in-blob (source-free metadata). The same
+      // strict contracts as the Zig decoders (Pacm.zig / Abi.decodeMeta):
+      // one 'SNAM', only after 'SCEN' (names parallelize the scene
+      // records), count equal to the scene count, per-entry lengths
+      // compared against what remains BEFORE being added, entries
+      // accounting for the payload exactly. Every refusal is a TypeError
+      // from a bounds check — never an accidental DataView RangeError.
+      if (snamNames !== null) {
+        throw new TypeError("pacer: duplicate 'SNAM' section in meta blob");
+      }
+      if (!scenSeen) {
+        throw new TypeError("pacer: 'SNAM' section without a preceding 'SCEN' section");
+      }
+      if (plen < 4) {
+        throw new TypeError("pacer: 'SNAM' payload too short for the count field");
+      }
+      if (body + plen > len) {
+        throw new TypeError("pacer: 'SNAM' section payload overruns the meta blob");
+      }
+      const count = dv.getUint32(body, true);
+      if (count !== scenes.length) {
+        throw new TypeError(
+          `pacer: 'SNAM' count ${count} does not match the 'SCEN' count ${scenes.length}`,
+        );
+      }
+      const names = [];
+      let s = body + 4;
+      const end = body + plen;
+      while (s < end) {
+        if (end - s < 4) {
+          throw new TypeError("pacer: 'SNAM' entry length field overruns the section payload");
+        }
+        const nameLen = dv.getUint32(s, true);
+        s += 4;
+        if (nameLen > end - s) {
+          throw new TypeError("pacer: 'SNAM' name length overruns the section payload");
+        }
+        names.push(decoder.decode(bytes.subarray(s, s + nameLen)));
+        s += nameLen;
+      }
+      if (names.length !== count) {
+        throw new TypeError(
+          `pacer: 'SNAM' carries ${names.length} entries for a count of ${count}`,
+        );
+      }
+      snamNames = names;
     }
     off = body + plen;
+  }
+
+  // C6 decode chain, present-keyed: a blob that carries 'SNAM' owns the
+  // names (a present-but-empty entry is a TRUE empty name — the span
+  // never shines through a falsy fallback); a blob without 'SNAM' falls
+  // back to the source span each scene record already carries.
+  if (snamNames !== null) {
+    snamNames.forEach((name, i) => {
+      const scene = scenes[i];
+      if (scene) scene.name = name;
+    });
   }
 
   return {

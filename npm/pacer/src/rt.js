@@ -37,10 +37,12 @@ const LOAD_REFUSED = 1;
 // rather than a trap.
 const IMPORTS = { env: { sjon_host_invoke_plugin: () => 0 } };
 
-// Binary scores carry no source text. `decodeMeta` preserves every span
-// but slices source-derived values (scene names) from this empty buffer,
-// so they decode as '' — never a fabricated name and never a text
-// fallback.
+// Binary scores carry no source text, but since the 'SNAM' section the
+// scene NAMES ride the blob itself — `decodeMeta` reads them from the
+// served 'PACM' exactly. `decodeMeta` slices source-derived values from
+// this empty buffer only for the pre-'SNAM' FALLBACK: a blob without
+// 'SNAM' (every old cartridge) decodes its scene names as '' — never a
+// fabricated name and never a text fallback.
 const EMPTY_DOC_BYTES = new Uint8Array(0);
 
 /** @typedef {import('./types.js').Registries} Registries */
@@ -203,12 +205,14 @@ export class PacerRt {
    * controls, scenes, easePrograms, tempoMap }` with key ticks (BigInt)
    * and spans in the ORIGINAL compile-time source coordinates.
    *
-   * The binary carries no source text, so values the text driver slices
-   * from source cannot be recovered here: a scene's `name` is `''` (its
-   * `nameSpan` is still authoritative), and declared-only target names
-   * are null because `'DECL'` carries registry/ncomp, never names (the
-   * same null the text driver reports for an unhosted declared target).
-   * Host-registered names resolve from `registries`.
+   * Scene names travel in the blob's 'SNAM' section and decode exactly —
+   * no source text needed. A blob without 'SNAM' (pre-SNAM cartridges)
+   * falls back to the source slice each nameSpan anchors, so with no
+   * source held its names are '' (the span stays authoritative).
+   * Declared-only target names are null because 'DECL' carries
+   * registry/ncomp, never names (the same null the text driver reports
+   * for an unhosted declared target). Host-registered names resolve
+   * from `registries`.
    *
    * Null when nothing is loaded.
    *

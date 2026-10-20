@@ -106,10 +106,12 @@ is the only load verb, and a refused load is transactional: the old score and
 its held control/BPM state stay live, so inspect `status` / `reason` for the
 load outcome instead of dropping playback.
 
-Binary metadata preserves the `'PACM'` spans but the runtime has no source
-text: a scene's `name` is `''` (its `nameSpan` is still authoritative), and
-declared-only target names are `null` because `'DECL'` carries registry/ncomp,
-never names. Route those writes by `registry`.
+Binary metadata preserves the `'PACM'` spans, and scene names ride the
+blob's `'SNAM'` section — they decode exactly, no source text needed.
+A blob without `'SNAM'` (pre-SNAM cartridges) falls back to the source
+slice each `nameSpan` anchors, so its names are `''`. Declared-only
+target names are `null` because `'DECL'` carries registry/ncomp, never
+names. Route those writes by `registry`.
 
 ## Exports
 

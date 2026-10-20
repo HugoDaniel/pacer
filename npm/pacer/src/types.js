@@ -123,12 +123,16 @@ export {};
  */
 
 /**
- * A scene (named window) in score metadata. Its name is sliced from the
- * score source via `nameSpan` — scenes carry no target, so the name is
- * their identity. The binary runtime (`PacerRt`) has no source text: it
- * preserves `nameSpan` but reports `name: ''` rather than inventing one.
+ * A scene (named window) in score metadata. Its name rides the blob's
+ * `'SNAM'` section — the verbatim source-symbol bytes, decoded exactly —
+ * and falls back to slicing the score source via `nameSpan` only when
+ * the blob carries no `'SNAM'` (pre-SNAM blobs). Scenes carry no target,
+ * so the name is their identity. The binary runtime (`PacerRt`) needs no
+ * source text for a 'SNAM' blob; for older cartridges it preserves
+ * `nameSpan` and reports `name: ''` rather than inventing one.
  * @typedef {object} MetaScene
- * @property {string} name The scene's `:name` symbol, sliced from source.
+ * @property {string} name The scene's `:name` symbol — from the blob's
+ *   `'SNAM'` section when present, else sliced from source.
  * @property {bigint} startTick Window start on the PPC tick grid.
  * @property {bigint} durTicks Window length; the scene plays over
  *   `[startTick, startTick + durTicks)`.
