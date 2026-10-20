@@ -307,6 +307,16 @@ with score-coordinate spans:
   explicit prototype state**: the binary runtime's leaf schema stays
   core-only until the SJON pattern-query handoff resolves (plan 02 P4),
   so pattern tracks refuse loudly rather than silently losing behavior.
+  *(Dated record clarification, 2026-10-20 — record accuracy only, no
+  behavior change: the SJON side of that handoff is delivered and
+  review-closed. Ask29's env-carrying binary query is independently
+  review READY with SJON review-closure docs at `bad5cddf`, and the
+  tree-trailing `BinaryCursor` drain is closed at SJON `8b8a38ee`; see
+  `plans/binary/handoff-binary-pattern-query-env.md`. What remains is
+  **pacer consumer adoption** — wiring the delivered query into
+  pack/runtime — not an SJON owner decision. Until that adoption lands
+  the text above stands: `pacer pack` still refuses `:pattern` scores,
+  and pattern tracks remain unimplemented on the binary runtime.)*
 * `pack_cap_exceeded` — a measured cap breach (payload bytes, `'PAYL'`
   total, global explicit-tick count).
 
