@@ -348,6 +348,67 @@ Adding a core function widens the capability set with no format
 change; a user plugin's names remain text-path-only until a later
 version says otherwise.
 
+## Bundling — cartridges ride pngine's reserved `'PACB'` kind
+
+A compiled cartridge ships as the payload of a PNG bundle, under the
+`'PACB'` kind pngine **reserves** for pacer (dated note 2026-10-20 in
+pngine's `docs/payload-kinds.md`). Reserved, not registered: pngine
+neither parses nor dispatches the body, no handler and no autoplay claim
+exist, and extraction happens only through pngine's public seam. The
+**registered** `'PACR'` row stays what it always was — SJON score TEXT —
+and is untouched by the reservation; score text is never rewritten into
+a `'PACB'` body, and binary bytes are never carried under `'PACR'`.
+
+**Bundle usage (as the G4/G5 proofs actually execute it).** Wrap with
+the pngine CLI:
+
+    pngine pack base.png --add PACB=cartridge.pacb -o bundle.png
+
+The body is stored **raw-DEFLATE compressed** (envelope flags bit0 set).
+Appending the lowercase `,raw` modifier — `--add PACB=cartridge.pacb,raw`
+— stores the body uncompressed (bit0 clear) for cases that must read the
+identical cartridge bytes straight out of the carrier. The G5 fixture
+packs both forms of the same `'drop'` cartridge and pins that both decode
+to the same names.
+
+**Extraction seam.** The public pngine viewer bundle
+(`npm/pngine/dist/viewer.mjs`) exports `payloadsOf(bytes)` — a generator
+yielding `{ kind, version, flags, body, carrier }` per payload, with
+`body` the STORED bytes (`flags & 1` ⇒ raw-DEFLATE; inflating is the
+consumer's job, after any concatenation) and one `{ skip: … }` yield per
+listed skip, so nothing a PNG carries is silently dropped. A CRC mismatch
+or a declared length past the buffer throws before the first yield.
+
+**Decompression, both hosts.** The compressed body is raw-DEFLATE —
+`DecompressionStream('deflate-raw')` in the browser (the G5 page wraps
+exactly this and refuses loudly where the global is missing);
+`zlib.inflateRawSync` in Node. `flags & 1` clear means the stored bytes
+are already the cartridge — no inflation step.
+
+**Runtime hand-off.** The inflated cartridge goes to `PacerRt.load` —
+the class's exact signature is
+`static async load(wasmSource, pacbBytes, { registries = [] } = {})`
+returning a loaded driver (check `.ok` / `.status`; statuses 0 ok /
+1 refused / 2 bad call / 3 oom), with `driver.load(pacbBytes)` the
+instance verb. There is no `reload(text)` and no text path **by design**
+— the runtime has no parser — and a refused load is transactional (the
+previously armed score stays live). Scene names arrive only inside the
+cartridge, via the embedded `'PACM'`'s `'SNAM'` section above — never
+from co-carried source, and the served tree of the G5 proof contains no
+`.sjon` at all (13 allowlisted routes, digest-pinned by its manifest).
+
+**Resource envelope (2026-10-20, exact).** The `'SNAM'` term grows the
+static runtime zones: `META_CAP` 274,512 → 536,924 B (replacing the
+hand-picked 320 × 1024 = 327,680 static with the derived
+`metaWorstCase(256)`), `PACB_CAP` 6,049,576 → 6,311,988 B (the 262,412-B
+SNAM term), and the rt wasm builds 171,667 → 171,852 B. These are
+**uncompressed byte trends**, not a compressed production bill. Names
+are carried exactly — no per-name cap (the old >255-byte
+truncate/degrade policy is ruled out — B2), no truncation, no silent
+drop; a compile whose names exceed the wasm zone meets the
+pre-existing loud over-cap refusal (`prt_load` status 2), never a
+degraded name.
+
 ## Versioning
 
 `VERSION = 1`. Appending a section kind or a refusal code rides a minor
