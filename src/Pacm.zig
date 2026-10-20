@@ -41,6 +41,17 @@
 //!              4 × 20 { code u8, pad×3, params f32×4 } } }
 //!            [key_ref_count u32] key_ref_count × { ease_ref u16 }
 //!     'TMPO' [count u32] count × 16 { tick i64, bpm f64 }
+//!     'SNAM' [count u32] count × { name_len u32, name bytes }
+//!
+//! 'SNAM' (plan 05) rides the stream's tail, parallel to 'SCEN': same
+//! count, same order, names the verbatim source bytes of each scene's
+//! `:name` symbol — carried EXACTLY, so a binary consumer reports names
+//! with no source text. Omitted when the scene count is 0 (a sceneless
+//! blob stays byte-stable); the decoder requires it AFTER 'SCEN', count-
+//! parallel, entries accounting exactly, name content never validated
+//! (bounds only — symbol bodies are ASCII-permissive). A pre-SNAM blob
+//! decodes with every scene name ABSENT (null), the spelling a source-
+//! holding consumer keys its `'SCEN'`-span fallback on.
 //!
 //! Role and invariants:
 //!
@@ -88,6 +99,11 @@ pub const SCENE_REC_LEN: usize = 24;
 pub const EASE_SECTION_ID: u32 = 0x45534145;
 /// `"TMPO"` read LE — the tempo-map section id.
 pub const TEMPO_SECTION_ID: u32 = 0x4f504d54;
+/// `"SNAM"` read LE — the scene-name section id (frozen copy of
+/// `Abi.SNAM_SECTION_ID`; the byte spelling is `"SNAM"`, 0x53 0x4E
+/// 0x41 0x4D, read as one little-endian u32). Rides the section
+/// stream's tail, parallel to `'SCEN'`.
+pub const SNAM_SECTION_ID: u32 = 0x4D414E53;
 /// Bytes per tempo-segment record inside the `'TMPO'` payload.
 pub const TEMPO_REC_LEN: usize = 16;
 /// Bytes per compiled-op record inside an `'EASE'` program.
@@ -168,6 +184,14 @@ pub const MetaScene = struct {
     start_tick: i64,
     dur_ticks: i64,
     name_span: Span,
+    /// The decoded `'SNAM'` name — the exact wire bytes, aliasing the
+    /// blob. NULL when the blob predates `'SNAM'` (absence); a present
+    /// entry is non-null even when EMPTY (`name_len = 0` spells a
+    /// genuinely empty name). The consumer's C6 fallback is keyed on
+    /// this null — `name orelse source[name_span]` — never on
+    /// emptiness, so a present-empty name can never fall through to
+    /// the span (the IM-3 precedence).
+    name: ?[]const u8 = null,
 };
 
 /// One decoded `'TMPO'` record — an authored tempo segment.
@@ -223,6 +247,8 @@ pub const MetaView = struct {
     scen: ?[]const u8 = null,
     ease: ?[]const u8 = null,
     tmpo: ?[]const u8 = null,
+    /// The `'SNAM'` payload when present (names parallel to `'SCEN'`).
+    snam: ?[]const u8 = null,
 
     pub fn trackCount(self: *const MetaView) usize {
         return self.tracks.len / META_TRACK_LEN;
@@ -320,7 +346,25 @@ pub const MetaView = struct {
                 .start = std.mem.readInt(u32, r[16..20], .little),
                 .end = std.mem.readInt(u32, r[20..24], .little),
             },
+            .name = self.sceneName(i),
         };
+    }
+
+    /// The decoded `'SNAM'` name for scene `i` — the exact wire bytes,
+    /// aliasing the blob; null when the blob predates `'SNAM'`. The
+    /// walk cannot go out of bounds because `decode` validated every
+    /// entry (and the parallel count) before this view escaped —
+    /// accessors are assert-based, the house discipline.
+    fn sceneName(self: *const MetaView, i: usize) ?[]const u8 {
+        const p = self.snam orelse return null;
+        std.debug.assert(i < self.sceneCount());
+        var epos: usize = 4;
+        var left = i;
+        while (left > 0) : (left -= 1) {
+            epos += 4 + @as(usize, std.mem.readInt(u32, p[epos..][0..4], .little));
+        }
+        const name_len = std.mem.readInt(u32, p[epos..][0..4], .little);
+        return p[epos + 4 ..][0..name_len];
     }
 
     pub fn tempoCount(self: *const MetaView) usize {
@@ -408,7 +452,11 @@ fn readLanes(b: *const [16]u8) [4]f32 {
 /// that does not account exactly for its records. An UNKNOWN section id
 /// is skipped by its length — that tolerance is the whole point of the
 /// TLV stream, so a reader predating a section still reads everything
-/// before it.
+/// before it. A `'SNAM'` frame additionally refuses when it repeats,
+/// when no `'SCEN'` has been seen yet (names ride after the scenes
+/// they parallelize — the fixed encoder order), when its count breaks
+/// parallelism with `'SCEN'`, when an entry's `name_len` overruns the
+/// payload, or when its entries leave trailing payload bytes.
 pub fn decode(blob: []const u8) ?MetaView {
     if (blob.len < META_HEADER_LEN) return null;
     if (std.mem.readInt(u32, blob[0..4], .little) != META_MAGIC) return null;
@@ -528,6 +576,32 @@ pub fn decode(blob: []const u8) ?MetaView {
                 const n = std.mem.readInt(u32, payload[0..4], .little);
                 if (4 + @as(u64, n) * TEMPO_REC_LEN != plen) return null;
                 view.tmpo = payload;
+            },
+            SNAM_SECTION_ID => {
+                if (view.snam != null) return null; // a repeat is a defect
+                // Names are parallel to 'SCEN' — same count, same
+                // order, AFTER it (the fixed encoder order). A names
+                // frame before the scenes it parallelizes, or without
+                // any, has nothing to be parallel to.
+                if (view.scen == null) return null;
+                if (plen < 4) return null;
+                const n = std.mem.readInt(u32, payload[0..4], .little);
+                if (n != view.sceneCount()) return null;
+                // Each entry: [name_len u32][name bytes]. Every length
+                // is compared against what remains BEFORE it is added,
+                // so a u32-max length never wraps into acceptance.
+                var epos: usize = 4;
+                for (0..n) |_| {
+                    if (payload.len - epos < 4) return null;
+                    const name_len = std.mem.readInt(u32, payload[epos..][0..4], .little);
+                    epos += 4;
+                    if (payload.len - epos < name_len) return null;
+                    epos += name_len;
+                }
+                // The entries account for the payload EXACTLY, like
+                // every other section — trailing slack is a defect.
+                if (epos != payload.len) return null;
+                view.snam = payload;
             },
             else => {}, // unknown id — skipped by length, the TLV contract
         }
@@ -933,4 +1007,223 @@ test "Pacm: key ranges past the key stream are refused" {
     std.mem.writeInt(u32, buf[48..52], std.math.maxInt(u32), .little);
     std.mem.writeInt(u32, buf[52..56], std.math.maxInt(u32), .little);
     try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+}
+
+// ---------------------------------------------------------------------------
+// 'SNAM' — the scene-name section (plan 05 Group 2). The wire shape is
+// the encoder's (G1): [count u32] count × { name_len u32, name bytes },
+// count parallel to 'SCEN', names the exact source bytes. Hand-built
+// per the house rule: a malformed-input test per refusal.
+// ---------------------------------------------------------------------------
+
+/// Hand-built `'SNAM'` payload: [count] then one { name_len, name } per
+/// given name, byte for byte as the encoder spells it.
+fn snamPayload(dest: []u8, names: []const []const u8) []const u8 {
+    std.mem.writeInt(u32, dest[0..4], @intCast(names.len), .little);
+    var pos: usize = 4;
+    for (names) |name| {
+        std.mem.writeInt(u32, dest[pos..][0..4], @intCast(name.len), .little);
+        pos += 4;
+        @memcpy(dest[pos..][0..name.len], name);
+        pos += name.len;
+    }
+    return dest[0..pos];
+}
+
+/// Hand-built `'SCEN'` payload for an arbitrary scene count: records
+/// {start 0, dur 720720·i, name span [3, 3+i)} — spans point INTO the
+/// (hypothetical) source, exactly like the encoder's.
+fn scenPayloadN(dest: []u8, n: usize) []const u8 {
+    @memset(dest[0 .. 4 + n * SCENE_REC_LEN], 0);
+    std.mem.writeInt(u32, dest[0..4], @intCast(n), .little);
+    for (0..n) |i| {
+        const r = dest[4 + i * SCENE_REC_LEN ..][0..SCENE_REC_LEN];
+        std.mem.writeInt(i64, r[0..8], @intCast(720720 * i), .little);
+        std.mem.writeInt(i64, r[8..16], @intCast(720720), .little);
+        std.mem.writeInt(u32, r[16..20], 3, .little);
+        std.mem.writeInt(u32, r[20..24], @intCast(3 + i), .little);
+    }
+    return dest[0 .. 4 + n * SCENE_REC_LEN];
+}
+
+test "Pacm: an 'SNAM' count that breaks parallelism with 'SCEN' is refused" {
+    var scratch: [2048]u8 = undefined;
+
+    // 'SCEN' says 1, 'SNAM' says 2 — payload accounting is internally
+    // consistent (two well-formed entries), so ONLY the parallelism
+    // rule can refuse this blob.
+    {
+        var buf: [2048]u8 = undefined;
+        const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 1));
+        const len = appendSection(&buf, with_scen, SNAM_SECTION_ID, snamPayload(scratch[512..], &.{ "alpha", "omega" }));
+        try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+    }
+    // The inverse lie: 'SCEN' says 2, 'SNAM' carries 1.
+    {
+        var buf: [2048]u8 = undefined;
+        const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 2));
+        const len = appendSection(&buf, with_scen, SNAM_SECTION_ID, snamPayload(scratch[512..], &.{"drop"}));
+        try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+    }
+    // 'SNAM' with no 'SCEN' at all has nothing to be parallel to — the
+    // fixed encoder order puts names after scenes; this blob has no
+    // scenes section, so a names section is out of order by definition.
+    {
+        var buf: [2048]u8 = undefined;
+        const len = appendSection(&buf, minimalBlob(&buf), SNAM_SECTION_ID, snamPayload(&scratch, &.{ "alpha", "omega" }));
+        try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+    }
+}
+
+test "Pacm: an 'SNAM' frame before the 'SCEN' frame is refused (fixed encoder order)" {
+    var scratch: [2048]u8 = undefined;
+    var buf: [2048]u8 = undefined;
+
+    // Both sections present with PARALLEL counts — the only defect is
+    // the order: names arrived before the scenes they parallelize.
+    const with_snam = appendSection(&buf, minimalBlob(&buf), SNAM_SECTION_ID, snamPayload(&scratch, &.{"drop"}));
+    const len = appendSection(&buf, with_snam, SCENES_SECTION_ID, scenPayloadN(scratch[512..], 1));
+    try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+}
+
+test "Pacm: a duplicate 'SNAM' id is refused" {
+    var scratch: [2048]u8 = undefined;
+    var buf: [2048]u8 = undefined;
+
+    const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 1));
+    const with_snam = appendSection(&buf, with_scen, SNAM_SECTION_ID, snamPayload(scratch[512..], &.{"drop"}));
+    const len = appendSection(&buf, with_snam, SNAM_SECTION_ID, snamPayload(scratch[1024..], &.{"drop"}));
+    try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+}
+
+test "Pacm: an 'SNAM' name_len that overruns its payload is refused (u32 extremes never wrap)" {
+    var scratch: [2048]u8 = undefined;
+
+    // The length field says 10; the payload carries nothing behind it.
+    // Internally consistent count + accounting, so only the overrun
+    // rule can refuse.
+    {
+        var buf: [2048]u8 = undefined;
+        const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 1));
+        var snam: [64]u8 = undefined;
+        std.mem.writeInt(u32, snam[0..4], 1, .little); // count
+        std.mem.writeInt(u32, snam[4..8], 10, .little); // name_len: a lie
+        // ...and no name bytes follow.
+        const len = appendSection(&buf, with_scen, SNAM_SECTION_ID, snam[0..8]);
+        try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+    }
+    // u32-max length: compared against the remaining bytes in widened
+    // arithmetic, never wrapped into acceptance.
+    {
+        var buf: [2048]u8 = undefined;
+        const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 1));
+        var snam: [64]u8 = undefined;
+        std.mem.writeInt(u32, snam[0..4], 1, .little);
+        std.mem.writeInt(u32, snam[4..8], std.math.maxInt(u32), .little);
+        snam[8] = 'd';
+        const len = appendSection(&buf, with_scen, SNAM_SECTION_ID, snam[0..9]);
+        try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+    }
+    // A mid-array overrun: entry 0 fits, entry 1's length runs past the
+    // payload end — the walk must refuse at the lying entry.
+    {
+        var buf: [2048]u8 = undefined;
+        const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 2));
+        var snam: [64]u8 = undefined;
+        std.mem.writeInt(u32, snam[0..4], 2, .little);
+        std.mem.writeInt(u32, snam[4..8], 1, .little);
+        snam[8] = 'a';
+        std.mem.writeInt(u32, snam[9..13], 8, .little); // entry 1 claims 8 bytes…
+        snam[13] = 'b'; // …and carries 1.
+        const len = appendSection(&buf, with_scen, SNAM_SECTION_ID, snam[0..14]);
+        try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+    }
+}
+
+test "Pacm: 'SNAM' payload bytes that trail the last entry are refused" {
+    var scratch: [2048]u8 = undefined;
+    var buf: [2048]u8 = undefined;
+
+    // One entry, exactly accounted — then one slack byte inside the
+    // payload. The entries must account for the payload EXACTLY, the
+    // same rule every other section obeys.
+    const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 1));
+    var snam: [64]u8 = undefined;
+    std.mem.writeInt(u32, snam[0..4], 1, .little);
+    std.mem.writeInt(u32, snam[4..8], 4, .little);
+    @memcpy(snam[8..12], "drop");
+    snam[12] = 0xde; // trailing slack inside the payload
+    const len = appendSection(&buf, with_scen, SNAM_SECTION_ID, snam[0..13]);
+    try t.expectEqual(@as(?MetaView, null), decode(buf[0..len]));
+}
+
+test "Pacm: an 'SNAM' section lands names parallel to 'SCEN'" {
+    var scratch: [2048]u8 = undefined;
+    var buf: [2048]u8 = undefined;
+
+    // Two scenes, two names, one order — entry i is scene i's name.
+    const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 2));
+    const len = appendSection(&buf, with_scen, SNAM_SECTION_ID, snamPayload(scratch[512..], &.{ "alpha", "omega" }));
+
+    const v = decode(buf[0..len]) orelse return error.TestExpectedDecode;
+    try t.expectEqual(@as(usize, 2), v.sceneCount());
+    try t.expectEqualStrings("alpha", v.scene(0).name orelse return error.TestExpectedName);
+    try t.expectEqualStrings("omega", v.scene(1).name orelse return error.TestExpectedName);
+
+    // The names alias the caller's blob — the view borrows, never
+    // owns: patching the input is visible through the decoded view.
+    const n0 = v.scene(0).name orelse return error.TestExpectedName;
+    const off = @intFromPtr(n0.ptr) - @intFromPtr(&buf);
+    buf[off] = 'A';
+    try t.expectEqualStrings("Alpha", v.scene(0).name orelse return error.TestExpectedName);
+}
+
+test "Pacm: an unknown section after 'SNAM' is skipped by length (old direction unchanged)" {
+    // The skip arm IS the old-code-on-new-blob guarantee; the decoded
+    // names must survive a strange frame riding behind them.
+    var scratch: [2048]u8 = undefined;
+    var buf: [2048]u8 = undefined;
+    const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 1));
+    const with_snam = appendSection(&buf, with_scen, SNAM_SECTION_ID, snamPayload(scratch[512..], &.{"drop"}));
+    const len = appendSection(&buf, with_snam, 0x5a5a5a5a, &[_]u8{ 0xde, 0xad, 0xbe, 0xef });
+
+    const v = decode(buf[0..len]) orelse return error.TestExpectedDecode;
+    try t.expectEqualStrings("drop", v.scene(0).name orelse return error.TestExpectedName);
+}
+
+test "Pacm: a present-empty 'SNAM' entry wins over the name span (IM-3 precedence)" {
+    // 'SCEN' carries name span [3,8); 'SNAM' is present with one
+    // zero-length entry. The name is PRESENT and EMPTY — a consumer's
+    // fallback is keyed on null (absence), never on emptiness, so the
+    // span slice must NOT shine through. Spelled with the C6 chain a
+    // consumer actually writes: `name orelse source[span]`.
+    var scratch: [2048]u8 = undefined;
+    var buf: [2048]u8 = undefined;
+    const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayload(&scratch)); // span [3,8)
+    const len = appendSection(&buf, with_scen, SNAM_SECTION_ID, snamPayload(scratch[512..], &.{""}));
+
+    const v = decode(buf[0..len]) orelse return error.TestExpectedDecode;
+    // Presence-keyed: a present entry reads as the exact (empty) name,
+    // never null — there is no third "absent" spelling for it to hide in.
+    const present = v.scene(0).name;
+    try t.expect(present != null); // presence, keyed on the optional
+    try t.expectEqualStrings("", present.?); // …and the bytes are empty
+    const held_source = "xxdropy"; // any non-empty target behind the span
+    const resolved = v.scene(0).name orelse held_source[3..7];
+    try t.expectEqualStrings("", resolved);
+}
+
+test "Pacm: 'SNAM' name bytes are carried verbatim (bounds checked, content never)" {
+    // Symbol bodies are ASCII-permissive and the decoder re-validates
+    // nothing: hostile bytes — UTF-8, control bytes, HTML-ish
+    // punctuation — ride byte-for-byte to the renderer, which owns
+    // escaping.
+    var scratch: [2048]u8 = undefined;
+    var buf: [2048]u8 = undefined;
+    const hostile = [_]u8{ 0xff, 0x00, '\n', '<', '&', 0xc3, 0xa9 };
+    const with_scen = appendSection(&buf, minimalBlob(&buf), SCENES_SECTION_ID, scenPayloadN(&scratch, 1));
+    const len = appendSection(&buf, with_scen, SNAM_SECTION_ID, snamPayload(scratch[512..], &.{&hostile}));
+
+    const v = decode(buf[0..len]) orelse return error.TestExpectedDecode;
+    try t.expectEqualSlices(u8, &hostile, v.scene(0).name orelse return error.TestExpectedName);
 }

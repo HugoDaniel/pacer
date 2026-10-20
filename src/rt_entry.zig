@@ -371,8 +371,14 @@ fn materialize(shell: *RtScore) bool {
         scene.* = .{
             .name_span = .{ .start = 0, .end = 0 },
             // The binary shell's spans are inert zeros — no source to
-            // borrow — so the name is explicitly empty (the wire's
-            // name_len = 0 spelling), never a borrowed garbage slice.
+            // borrow. Scene NAMES likewise never materialize here (the
+            // plan 05 G2 ruling): the container's scene records carry
+            // window fields only, nothing in the frame path reads
+            // `.name`, and names reach hosts through `prt_metaPtr`'s
+            // served 'PACM' copy decoded by the host glue (plan 05
+            // G3). The explicit empty is the honest inert value —
+            // never a false native-exact-name claim, never a borrowed
+            // garbage slice.
             .name = "",
             .start_tick = ds.start_tick,
             .dur_ticks = ds.dur_ticks,
@@ -1018,6 +1024,75 @@ test "rt_entry: control/bpm exports mirror the drv_* contract (2^53 gate, range 
         }
     }
     try t.expect(found);
+}
+
+test "rt_entry (i): a malformed spliced 'SNAM' is refused at load, the live score untouched" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fuzz_pacb = @import("fuzz_pacb.zig");
+
+    const fx = try readFixture(a, "full-small");
+    try t.expectEqual(@as(u32, 0), loadPacB(fx.pacb));
+    defer unload();
+    const frame_before = try captureTicks(a, 96);
+    const meta_before = try a.dupe(u8, prt_metaPtr()[0..prt_metaLen()]);
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+
+    // Splice a count-inflated 'SNAM' frame into the embedded 'PACM' of
+    // the REAL frozen pack and repair the container around the growth
+    // (directory len + TRAN pacm_fnv — v1 has no container checksum),
+    // so the bytes reach metadata validation instead of dying at the
+    // checksum. The reader must refuse (reason 10, meta_malformed)
+    // BEFORE any state is committed — the transactional contract for
+    // the new SNAM arm: prior live metadata, output, and counters all
+    // survive byte-for-byte.
+    var dest: [8192]u8 = undefined;
+    const names = [_][]const u8{"drop"};
+    const len = fuzz_pacb.spliceSnam(&dest, fx.pacb, &names, .count_inflated, 2, 0) orelse
+        return error.SpliceSeamMissing;
+    @memcpy(pacb_buffer[0..len], dest[0..len]);
+    try t.expectEqual(@as(u32, 1), prt_load(@intCast(len), emptyPactLen()));
+    try t.expectEqual(@as(u32, 10), prt_loadError()); // meta_malformed
+    try t.expectEqualSlices(u8, frame_before, try captureTicks(a, 96));
+    try t.expectEqualSlices(u8, meta_before, prt_metaPtr()[0..prt_metaLen()]);
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+}
+
+test "rt_entry (j): the pre-SNAM pin decodes nameless at both unit readers; the legacy cartridge still loads" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sjon = @import("sjon");
+    const Pacm = @import("Pacm.zig");
+    const Abi = @import("Abi.zig");
+    const root = @import("build_options").repo_root;
+
+    // Group 0's committed pre-SNAM 'PACM' pin: a BARE 'PACM' blob, so
+    // this is a UNIT-level proof at `Pacm.decode`/`Abi.decodeMeta` —
+    // `prt_load` consumes 'PACB' containers only (a bare PACM is a
+    // bad_magic refusal there, by design, never a test subject). The
+    // old blob decodes clean and every scene name is ABSENT — the C6
+    // old-blob-on-new-code pin, spelled as null (absence), which is
+    // what lets a source-holding consumer fall back to the span.
+    const pin_path = try std.fmt.allocPrint(a, "{s}/src/testdata/pacm/scenes-tempo-ease.pre-snam.pacm", .{root});
+    const pin = try sjon.CappedRead.readFile(t.io, pin_path, a, 1 << 20);
+    const pv = Pacm.decode(pin) orelse return error.TestExpectedDecode;
+    try t.expectEqual(@as(usize, 1), pv.sceneCount());
+    try t.expectEqual(@as(?[]const u8, null), pv.scene(0).name);
+    const av = Abi.decodeMeta(pin) orelse return error.TestExpectedDecode;
+    try t.expectEqual(@as(usize, 1), av.sceneCount());
+    try t.expectEqual(@as(?[]const u8, null), av.scene(0).name);
+
+    // The real-path twin: the legacy full-small cartridge (pre-SNAM
+    // bytes, frozen forever) still LOADS, and the meta it serves
+    // decodes nameless — the prt_load-path C6 proof.
+    const fx = try readFixture(a, "full-small");
+    try t.expectEqual(@as(u32, 0), loadPacB(fx.pacb));
+    defer unload();
+    const served = Pacm.decode(prt_metaPtr()[0..prt_metaLen()]) orelse return error.TestExpectedDecode;
+    try t.expectEqual(@as(usize, 1), served.sceneCount());
+    try t.expectEqual(@as(?[]const u8, null), served.scene(0).name);
 }
 
 test "rt_entry: ownership — repeated reloads, eval-after-reload, no stale pointers" {

@@ -381,6 +381,10 @@ fn pacmExpectSameView(want: *const Abi.MetaView, got: *const Pacm.MetaView) !voi
         try t_.expectEqual(w.dur_ticks, g.dur_ticks);
         try t_.expectEqual(w.name_span.start, g.name_span.start);
         try t_.expectEqual(w.name_span.end, g.name_span.end);
+        // The decoded 'SNAM' names agree — presence AND bytes (both
+        // null over a pre-SNAM blob, both exact over a new one).
+        if ((w.name == null) != (g.name == null)) return error.TestNamePresenceMismatch;
+        if (w.name) |wn| try t_.expectEqualStrings(wn, g.name.?);
     }
     try t_.expectEqual(want.tempoCount(), got.tempoCount());
     for (0..want.tempoCount()) |i| {
@@ -447,6 +451,7 @@ test "Pacm: frozen ordinal families match their source enums" {
     );
     try t_.expectEqual(@as(usize, Easing.MAX_STAGES), Pacm.EASE_STAGE_COUNT);
     try t_.expectEqual(@as(usize, Easing.MAX_OPS), Pacm.EASE_OPS_PER_STAGE);
+    try t_.expectEqual(Abi.SNAM_SECTION_ID, Pacm.SNAM_SECTION_ID);
 }
 
 test "Pacm: the frozen oracle blobs are the real producer's bytes" {
@@ -537,6 +542,9 @@ test "Pacm: scenes-tempo-ease oracle decodes field-for-field like Abi.decodeMeta
     try t_.expectEqual(@as(i64, 2 * sjon.Pattern.PPC), scene.start_tick);
     try t_.expectEqual(@as(i64, 2 * sjon.Pattern.PPC), scene.dur_ticks);
     try t_.expectEqualStrings("drop", pacm_oracle_scenes_tempo_ease[scene.name_span.start..scene.name_span.end]);
+    // And the section carries the name directly — the blob is source-
+    // free on the reading side too (plan 05, C1/C6).
+    try t_.expectEqualStrings("drop", scene.name orelse return error.TestExpectedName);
 
     try t_.expectEqual(@as(usize, 2), got.tempoCount());
     const seg0 = got.tempoSeg(0);

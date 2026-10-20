@@ -760,6 +760,14 @@ pub const MetaScene = struct {
     start_tick: i64,
     dur_ticks: i64,
     name_span: Ast.Span,
+    /// The decoded `'SNAM'` name — the exact wire bytes, aliasing the
+    /// blob. NULL when the blob predates `'SNAM'` (absence); a present
+    /// entry is non-null even when EMPTY (`name_len = 0` spells a
+    /// genuinely empty name). The consumer's C6 fallback is keyed on
+    /// this null — `name orelse source[name_span]` — never on
+    /// emptiness, so a present-empty name can never fall through to
+    /// the span (the IM-3 precedence).
+    name: ?[]const u8 = null,
 };
 
 /// One decoded `'TMPO'` record — an authored `(tempo …)` segment.
@@ -787,6 +795,8 @@ pub const MetaView = struct {
     scen: ?[]const u8 = null,
     ease: ?[]const u8 = null,
     tmpo: ?[]const u8 = null,
+    /// The `'SNAM'` payload when present (names parallel to `'SCEN'`).
+    snam: ?[]const u8 = null,
 
     fn keysOff(self: *const MetaView) usize {
         return META_HEADER_LEN + @as(usize, self.track_count) * META_TRACK_LEN;
@@ -876,7 +886,25 @@ pub const MetaView = struct {
                 .start = std.mem.readInt(u32, r[16..20], .little),
                 .end = std.mem.readInt(u32, r[20..24], .little),
             },
+            .name = self.sceneName(i),
         };
+    }
+
+    /// The decoded `'SNAM'` name for scene `i` — the exact wire bytes,
+    /// aliasing the blob; null when the blob predates `'SNAM'`. The
+    /// walk cannot go out of bounds because `decodeMeta` validated
+    /// every entry (and the parallel count) before this view escaped —
+    /// accessors are assert-based, the house discipline.
+    fn sceneName(self: *const MetaView, i: usize) ?[]const u8 {
+        const p = self.snam orelse return null;
+        std.debug.assert(i < self.sceneCount());
+        var epos: usize = 4;
+        var left = i;
+        while (left > 0) : (left -= 1) {
+            epos += 4 + @as(usize, std.mem.readInt(u32, p[epos..][0..4], .little));
+        }
+        const name_len = std.mem.readInt(u32, p[epos..][0..4], .little);
+        return p[epos + 4 ..][0..name_len];
     }
 
     pub fn tempoCount(self: *const MetaView) usize {
@@ -960,7 +988,11 @@ fn readLanes(b: *const [16]u8) [4]f32 {
 /// outside `TrackSourceKind` / `ControlType` / `Easing.Op`, a key range
 /// running past the key stream, a section frame whose payload does not
 /// account exactly for its records, a repeated section id, or bytes left
-/// over after the last frame.
+/// over after the last frame. A `'SNAM'` frame additionally refuses when
+/// it repeats, when no `'SCEN'` has been seen yet (names ride after the
+/// scenes they parallelize — the fixed encoder order), when its count
+/// breaks parallelism with `'SCEN'`, when an entry's `name_len` overruns
+/// the payload, or when its entries leave trailing payload bytes.
 ///
 /// An UNKNOWN section id is skipped by its length — that tolerance is the
 /// whole point of the TLV stream, so a decoder predating a section still
@@ -1056,6 +1088,32 @@ pub fn decodeMeta(blob: []const u8) ?MetaView {
                 const n = std.mem.readInt(u32, payload[0..4], .little);
                 if (4 + @as(u64, n) * TEMPO_REC_LEN != plen) return null;
                 view.tmpo = payload;
+            },
+            SNAM_SECTION_ID => {
+                if (view.snam != null) return null; // a repeat is a defect
+                // Names are parallel to 'SCEN' — same count, same
+                // order, AFTER it (the fixed encoder order). A names
+                // frame before the scenes it parallelizes, or without
+                // any, has nothing to be parallel to.
+                if (view.scen == null) return null;
+                if (plen < 4) return null;
+                const n = std.mem.readInt(u32, payload[0..4], .little);
+                if (n != view.sceneCount()) return null;
+                // Each entry: [name_len u32][name bytes]. Every length
+                // is compared against what remains BEFORE it is added,
+                // so a u32-max length never wraps into acceptance.
+                var epos: usize = 4;
+                for (0..n) |_| {
+                    if (payload.len - epos < 4) return null;
+                    const name_len = std.mem.readInt(u32, payload[epos..][0..4], .little);
+                    epos += 4;
+                    if (payload.len - epos < name_len) return null;
+                    epos += name_len;
+                }
+                // The entries account for the payload EXACTLY, like
+                // every other section — trailing slack is a defect.
+                if (epos != payload.len) return null;
+                view.snam = payload;
             },
             else => {}, // unknown id — skipped by length, the TLV contract
         }
@@ -1993,6 +2051,226 @@ test "decodeMeta rejects every malformed shape" {
     @memcpy(bad, good);
     bad[META_HEADER_LEN + 4] = 9; // a control kind outside ControlType
     try t.expectEqual(@as(?MetaView, null), decodeMeta(bad));
+}
+
+// ---------------------------------------------------------------------------
+// 'SNAM' — decode-side (plan 05 Group 2). The reader twin lives in
+// `Pacm.zig` (std-only); these pin the SAME contracts on the encoder
+// module's own decoder, mutating a real producer blob so the refusals
+// fire on the wire shapes the encoder actually spells.
+// ---------------------------------------------------------------------------
+
+/// One-scene score whose blob is 1 track + 1 key + 0 controls, then
+/// 'SCEN' then the 'SNAM' tail — the smallest scene-carrying shape, so
+/// tests can locate the tail by arithmetic (the `snamTailOff` twin).
+const snam_scene_source: [:0]const u8 =
+    \\(transport :bpm 120)
+    \\(scene :name drop :at 0b :dur 4b
+    \\  (track :target circle-radius (key :at 0b :value 0.5)))
+;
+
+/// Encode `snam_scene_source` and return the offset of its 'SNAM' tail
+/// frame (the byte after the 'SCEN' frame).
+fn encodeSnamScene(m: []u8) !usize {
+    var r = try Compile.compile(t.allocator, test_support.schema(), snam_scene_source, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+    _ = try encodeMeta(&r, m);
+    var off: usize = META_HEADER_LEN + META_TRACK_LEN + META_KEY_LEN;
+    std.debug.assert(std.mem.readInt(u32, m[off..][0..4], .little) == SCENES_SECTION_ID);
+    off += META_SECTION_HEADER_LEN + std.mem.readInt(u32, m[off + 4 ..][0..4], .little);
+    std.debug.assert(std.mem.readInt(u32, m[off..][0..4], .little) == SNAM_SECTION_ID);
+    return off;
+}
+
+/// Write one TLV frame at `pos`, returning the new end.
+fn writeTlvFrame(dest: []u8, pos: usize, id: u32, payload: []const u8) usize {
+    std.mem.writeInt(u32, dest[pos..][0..4], id, .little);
+    std.mem.writeInt(u32, dest[pos + 4 ..][0..4], @intCast(payload.len), .little);
+    @memcpy(dest[pos + META_SECTION_HEADER_LEN ..][0..payload.len], payload);
+    return pos + META_SECTION_HEADER_LEN + payload.len;
+}
+
+/// Hand-built 'SNAM' payload: [count] then { name_len, name } entries.
+fn writeSnamPayload(dest: []u8, names: []const []const u8) []const u8 {
+    std.mem.writeInt(u32, dest[0..4], @intCast(names.len), .little);
+    var pos: usize = 4;
+    for (names) |name| {
+        std.mem.writeInt(u32, dest[pos..][0..4], @intCast(name.len), .little);
+        pos += 4;
+        @memcpy(dest[pos..][0..name.len], name);
+        pos += name.len;
+    }
+    return dest[0..pos];
+}
+
+test "decodeMeta rejects 'SNAM' shapes that break the reader contract" {
+    var good: [1024]u8 = undefined;
+    const tail = try encodeSnamScene(&good);
+    const tail_frame_len = META_SECTION_HEADER_LEN + std.mem.readInt(u32, good[tail + 4 ..][0..4], .little);
+
+    // Count inflation: 'SCEN' says 1, the rebuilt tail says 2 with two
+    // well-formed entries — internally consistent, so ONLY the
+    // parallelism rule refuses.
+    {
+        var payload: [64]u8 = undefined;
+        const p = writeSnamPayload(&payload, &.{ "alpha", "omega" });
+        var blob: [1024]u8 = undefined;
+        @memcpy(blob[0..tail], good[0..tail]);
+        const len = writeTlvFrame(&blob, tail, SNAM_SECTION_ID, p);
+        try t.expectEqual(@as(?MetaView, null), decodeMeta(blob[0..len]));
+    }
+    // name_len overrun: the length field claims 10, nothing follows.
+    {
+        var payload: [64]u8 = undefined;
+        std.mem.writeInt(u32, payload[0..4], 1, .little);
+        std.mem.writeInt(u32, payload[4..8], 10, .little);
+        var blob: [1024]u8 = undefined;
+        @memcpy(blob[0..tail], good[0..tail]);
+        const len = writeTlvFrame(&blob, tail, SNAM_SECTION_ID, payload[0..8]);
+        try t.expectEqual(@as(?MetaView, null), decodeMeta(blob[0..len]));
+    }
+    // u32-max name_len: widened arithmetic, never a wrap into acceptance.
+    {
+        var payload: [64]u8 = undefined;
+        std.mem.writeInt(u32, payload[0..4], 1, .little);
+        std.mem.writeInt(u32, payload[4..8], std.math.maxInt(u32), .little);
+        payload[8] = 'd';
+        var blob: [1024]u8 = undefined;
+        @memcpy(blob[0..tail], good[0..tail]);
+        const len = writeTlvFrame(&blob, tail, SNAM_SECTION_ID, payload[0..9]);
+        try t.expectEqual(@as(?MetaView, null), decodeMeta(blob[0..len]));
+    }
+    // Trailing payload bytes: one well-formed entry plus one slack byte
+    // the entries do not account for.
+    {
+        var payload: [64]u8 = undefined;
+        std.mem.writeInt(u32, payload[0..4], 1, .little);
+        std.mem.writeInt(u32, payload[4..8], 4, .little);
+        @memcpy(payload[8..12], "drop");
+        payload[12] = 0xde;
+        var blob: [1024]u8 = undefined;
+        @memcpy(blob[0..tail], good[0..tail]);
+        const len = writeTlvFrame(&blob, tail, SNAM_SECTION_ID, payload[0..13]);
+        try t.expectEqual(@as(?MetaView, null), decodeMeta(blob[0..len]));
+    }
+    // 'SNAM' before 'SCEN': a sceneless prefix, then the names frame,
+    // then the scenes frame it was supposed to be parallel to. Counts
+    // are parallel; the order alone is the defect.
+    {
+        var sceneless: [1024]u8 = undefined;
+        var r = try Compile.compile(t.allocator, test_support.schema(),
+            \\(transport :bpm 120)
+            \\(control :id sway :value 0.12)
+        , &sample_targets);
+        defer r.deinit();
+        try t.expect(r.ok());
+        const base = metaEncodedLen(&r);
+        _ = try encodeMeta(&r, sceneless[0..base]);
+        // The whole 'SCEN' frame, lifted verbatim out of the scene blob
+        // (its own stream starts at header+1 track+1 key).
+        const scen_off = META_HEADER_LEN + META_TRACK_LEN + META_KEY_LEN;
+        const scen_frame = good[scen_off..tail];
+        var payload: [64]u8 = undefined;
+        const p = writeSnamPayload(&payload, &.{"drop"});
+        var blob: [1024]u8 = undefined;
+        @memcpy(blob[0..base], sceneless[0..base]);
+        var len = writeTlvFrame(&blob, base, SNAM_SECTION_ID, p);
+        @memcpy(blob[len..][0..scen_frame.len], scen_frame);
+        len += scen_frame.len;
+        try t.expectEqual(@as(?MetaView, null), decodeMeta(blob[0..len]));
+    }
+    // Duplicate 'SNAM': the tail, then a second names frame after it.
+    {
+        var payload: [64]u8 = undefined;
+        const p = writeSnamPayload(&payload, &.{"drop"});
+        var blob: [1024]u8 = undefined;
+        @memcpy(blob[0..tail], good[0..tail]);
+        var len = writeTlvFrame(&blob, tail, SNAM_SECTION_ID, p);
+        len = writeTlvFrame(&blob, len, SNAM_SECTION_ID, p);
+        try t.expectEqual(@as(?MetaView, null), decodeMeta(blob[0..len]));
+    }
+    // A truncated tail frame: the blob ends inside the 'SNAM' payload —
+    // the frame-level length check refuses before any entry is read.
+    try t.expectEqual(@as(?MetaView, null), decodeMeta(good[0 .. tail + tail_frame_len - 1]));
+}
+
+test "decodeMeta: 'SNAM' names land exact, parallel, and in scene order" {
+    // Two scenes through the real producer; the decode hands back the
+    // exact source-symbol bytes, entry i for scene i.
+    const source: [:0]const u8 =
+        \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+        \\(scene :name alpha :at 0b :dur 4b
+        \\  (track :target circle-radius (key :at 0b :value 0.5)))
+        \\(scene :name omega :at 4b :dur 4b
+        \\  (track :target cutoff (key :at 0b :value 0.5)))
+    ;
+    var r = try Compile.compile(t.allocator, test_support.schema(), source, &sample_targets);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t.expect(r.ok());
+
+    var buf: [1024]u8 = undefined;
+    const m = try encodeMeta(&r, &buf);
+    const v = decodeMeta(m) orelse return error.TestExpectedDecode;
+    try t.expectEqual(@as(usize, 2), v.sceneCount());
+    try t.expectEqualStrings("alpha", v.scene(0).name orelse return error.TestExpectedName);
+    try t.expectEqualStrings("omega", v.scene(1).name orelse return error.TestExpectedName);
+    // Both spellings agree: the span still points at the same source
+    // bytes the section carries.
+    for (0..2) |i| {
+        const got = v.scene(i);
+        try t.expectEqualStrings(source[got.name_span.start..got.name_span.end], got.name.?);
+    }
+}
+
+test "decodeMeta: a present-empty 'SNAM' entry wins over the name span (IM-3 precedence)" {
+    var good: [1024]u8 = undefined;
+    const tail = try encodeSnamScene(&good);
+
+    // Rebuild the tail with one zero-length entry: present, empty.
+    var payload: [64]u8 = undefined;
+    std.mem.writeInt(u32, payload[0..4], 1, .little);
+    std.mem.writeInt(u32, payload[4..8], 0, .little);
+    var blob: [1024]u8 = undefined;
+    @memcpy(blob[0..tail], good[0..tail]);
+    const len = writeTlvFrame(&blob, tail, SNAM_SECTION_ID, payload[0..8]);
+
+    const v = decodeMeta(blob[0..len]) orelse return error.TestExpectedDecode;
+    // Presence-keyed: a present entry reads as the exact (empty) name,
+    // never null.
+    const present = v.scene(0).name;
+    try t.expect(present != null); // presence, keyed on the optional
+    try t.expectEqualStrings("", present.?); // …and the bytes are empty
+    // The C6 chain, spelled as a consumer writes it: the span slice is
+    // non-empty here (the SCEN record points at the "drop" symbol), and
+    // it must NOT shine through a present-empty name.
+    const scene = v.scene(0);
+    const resolved = scene.name orelse snam_scene_source[scene.name_span.start..scene.name_span.end];
+    try t.expectEqualStrings("", resolved);
+}
+
+test "decodeMeta: a 300-byte scene name round-trips encode→decode exactly" {
+    // R3 through the reading half: no truncation, no drop, no empty
+    // fallback — decode hands back the 300 bytes the encoder carried.
+    const name = "a" ** 300;
+    const src = try std.fmt.allocPrintSentinel(
+        t.allocator,
+        "(transport :bpm 120)\n(scene :name {s} :at 0b :dur 4b\n  (track :target circle-radius (key :at 0b :value 0.5)))\n",
+        .{name},
+        0,
+    );
+    defer t.allocator.free(src);
+    var r = try Compile.compile(t.allocator, test_support.schema(), src, &sample_targets);
+    defer r.deinit();
+    try t.expect(r.ok());
+
+    const m = try t.allocator.alloc(u8, metaEncodedLen(&r));
+    defer t.allocator.free(m);
+    _ = try encodeMeta(&r, m);
+    const v = decodeMeta(m) orelse return error.TestExpectedDecode;
+    try t.expectEqualStrings(name, v.scene(0).name orelse return error.TestExpectedName);
 }
 
 test "decodeDiags: source, severity, code, span and message round-trip" {
