@@ -248,6 +248,20 @@ Compensating committed evidence additionally cited: `src/Pacm.zig:761-766`, `src
 > name-span regex asserts were retired with the differences loop —
 > exact equality is strictly stronger.
 
+> **Review follow-up (2026-10-20, executed at the start of G4):**
+> MEDIUM-1 — `npm run build:types` actually run (exit=0), the three
+> review-named files (`types/meta.d.ts`, `types/rt.d.ts`,
+> `types/types.d.ts`) read back carrying the post-SNAM docs (evidence:
+> `metadata-g4-g3followup-buildtypes.log`,
+> `metadata-g4-g3followup-types-readback.log`); the inaccurate §1
+> report sentence corrected in place. LOW-1/LOW-2 — `meta.test.js`
+> header narrowed to the SNAM arm (the generic TLV header-walk
+> RangeError class is now named as pre-existing scope, wasm-validated
+> away on the served path), `test/harness.js` scene comment names
+> SNAM-else-legacy. Comment-only: no JS behavior change; local biome
+> (19 files) + `tsc --noEmit` clean, local node suite 131/131 with the
+> one legitimate zig-absent skip — counts unchanged.
+
 **Files:**
 - Modify: `npm/pacer/src/meta.js` (`PACM_SNAM_ID` arm after `'TMPO'`; u32 count/length reads; count mismatch → `TypeError`; bounds overrun → `TypeError`; `TextDecoder` verbatim fill; C6 precedence; `docBytes` param doc `:74-76` becomes fallback-only per O1)
 - Modify: `npm/pacer/src/types.js` (`MetaScene.name` doc: carried in-blob, source slice is fallback)

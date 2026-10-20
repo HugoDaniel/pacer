@@ -3,10 +3,14 @@
 // SAME strict contracts the Zig decoders pinned in Group 2
 // (src/Pacm.zig / src/Abi.zig): one 'SNAM', only after 'SCEN', count
 // parallel to the scene records, per-entry u32 lengths bounded against
-// what remains, entries accounting for the payload exactly. Every
+// what remains, entries accounting for the payload exactly. Every 'SNAM'
 // refusal is a TypeError thrown by a bounds check BEFORE the offending
-// read — a malformed blob handed straight to this exported utility must
-// never surface as a surprise DataView RangeError.
+// read — no malformed 'SNAM' section surfaces as a surprise DataView
+// RangeError. (Scope note: that guarantee is the SNAM arm's. The generic
+// TLV walk's 8-byte section-header read predates SNAM and keeps its
+// pre-existing behavior — a blob ending mid-header of ANY id can still
+// throw a RangeError, which is why served blobs are wasm-validated
+// before this decoder ever sees them.)
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';

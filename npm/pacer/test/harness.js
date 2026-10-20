@@ -244,8 +244,10 @@ function renderMeta(meta, names) {
     out += ` :registry ${c.registry} :ncomp ${c.ncomp} :type ${c.type} :value [${laneHex(c.value)}]`;
     out += ` :min ${rail(c.min)} :max ${rail(c.max)} :value-span [${c.valueSpan.start} ${c.valueSpan.end}])`;
   }
-  // The 'SCEN' section (post-controls TLV): named windows, name sliced
-  // from source via nameSpan. The native runner walks the same section.
+  // The 'SCEN' section (post-controls TLV): named windows; the name is
+  // the blob's own — decoded from the 'SNAM' section when the blob
+  // carries one, else sliced from source via nameSpan (legacy blobs).
+  // The native runner walks the same section.
   for (const s of meta.scenes) {
     out += `\n  (mscene :name ${s.name} :at ${s.startTick} :dur ${s.durTicks}`;
     out += ` :name-span [${s.nameSpan.start} ${s.nameSpan.end}])`;
