@@ -746,3 +746,19 @@ _(created 2026-10-18; entries appended per phase)_
   *(2026-10-20, additive: the P3 scene-name contract is now MET by the
   metadata wave — `plans/binary/05-source-free-scene-names.md` —; P4 and
   03/04 remain untouched/open, and this plan is still not complete.)*
+
+*(2026-10-21, P4 dated append: the SJON prerequisite was delivered
+(`bad5cddf`; handoff status updated) and pacer ADOPTED it — plan 06
+Group A task A2, commit `f76267d`. `PatternTrack.queryCycleBinary`
+routes through the delivered env-carrying `queryBinaryWithEnv`; the
+load-time `required_features` bit0 refusal is lifted; the binary
+pattern dry-run runs at load (scene start/cycle 0, reason 11); the
+EvalCore binary pattern arm is live (shared window/sample/coerce); the
+runtime schema carries core ⊕ pattern and the audit-rt-imports
+allowlist carries `plugins/pattern.zig` (12 pacer + 17 SJON; artifact
+contract unchanged). Pack still refuses `:pattern` (the A3+A4 atomic
+commit lifts it) and plan-03's four pattern replays still skip. The
+phase-table P4 gate "pattern-env green via the binary path" is proven
+at the production-loader level (`rt_entry (n)`: the corpus document,
+byte parity with the text oracle); the plan-03 parity leg itself
+remains A3+A4's scope.)*

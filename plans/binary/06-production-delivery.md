@@ -724,3 +724,33 @@ with the 4 pinned skips, negatives 3738/0 skipped, node 135/135,
 audit closure 12+16 frozen). Commands, logs and the diff:
 `.agent/control/prod-four-a1-corrections-report.md`. The report's
 "both tail shapes" coverage claim is corrected in place, dated.
+
+## A2 status append (dated — not plan prose)
+
+2026-10-21 — A2 executed as ONE atomic commit `f76267d` on top of A1
+(`33750f0`); A3+A4/A5 not started. The full runtime path landed:
+`PatternTrack.queryCycleBinary` through the delivered
+`queryBinaryWithEnv` (retention/ownership = SJON's delivered
+semantics; no re-derived owner API), the `required_features` bit0
+load gate lifted at `rt_entry.zig`, the EvalCore binary `.pattern`
+`unreachable` arm replaced (shared window/sample/coerce — no second
+interpreter), `RtSjon` `plugins.pattern` row + the frozen core⊕pattern
+runtime schema, the load-time pattern dry-run (`dryRunPatterns`:
+scene start/cycle 0, document `:value` controls, `PatternTrack.
+SCRATCH_BYTES` FBA, acceptance = text dry-run's gates) refusing
+through the exact reason-11 reserve, and the audit-rt-imports named
+delta (12 pacer + **17** SJON visited; artifact contract unchanged —
+exactly 17 `prt_*` + memory, 1 import, compiler markers absent;
+`pacer-rt.wasm` 188,442 B). RED first: the four new production-loader
+tests fail at the pre-lift gate (`reason 2`) —
+`.agent/control/prod-four-a2-red-6.log`. GREEN: `zig build test`
+829/829; `zig build fuzz parity audit-rt-imports verify` exit 0 —
+fuzz/corpus 43/0, parity 43/0 **with the 4 pattern skips unchanged**
+(A3+A4 scope), negatives 3738/0, node included in verify's 1101/1101;
+post-commit re-run green. The RED fixture producer is the test-side
+lower-level bypass (`Compile` + `PacbEncode.encode` — T3.1's uniform
+path that already serializes patterns), NOT a production backdoor:
+`pacer pack` still refuses `:pattern` scores until A3+A4. Logs and
+report: `prod-four-a2-red-6.log`, `prod-four-a2-green-3.log`,
+`prod-four-a2-green-gates.log`, `prod-four-a2-green-4-postcommit.log`,
+`prod-four-a2-report.md`.
