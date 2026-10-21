@@ -95,6 +95,7 @@ const FRAME_SECONDS: f64 = 0.3;
 const FRAME_TICKS: i64 = 7;
 
 pub const Error = error{
+    CounterMismatch,
     DuplicateMutationName,
     FixtureInvalid,
     FixtureMissingSection,
@@ -307,9 +308,11 @@ const Family = struct {
 /// never derived from a fixture length or from the names list (B1).
 const Counters = struct {
     /// Every expected-under-test production call: named mutations, bad
-    /// calls, prefix attempts. The three fixture setup loads and the
-    /// bad-call family's prior-reason re-eval are setup/probe loads, not
-    /// attempts, and stay uncounted.
+    /// calls, prefix attempts. The setup/probe loads stay uncounted, and
+    /// the enumeration is exact: the three step-1 fixture loads, the
+    /// three Family.begin baseline loads (one per family), and the
+    /// bad-call family's prior-reason re-eval — seven uncounted loads in
+    /// all, none of them attempts.
     attempted: usize = 0,
     named: usize = 0,
     bad_calls: usize = 0,
