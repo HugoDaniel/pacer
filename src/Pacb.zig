@@ -6384,22 +6384,28 @@ test "Pacb: tree-trailing comments payloads walk and copy (gap closed)" {
     // null-producing exhaustion call consumes the
     // [tree trailing comments] block the encoder appends after the
     // roots, so the payload walk drains the root iterator through
-    // null BEFORE the exact-end check. Both tail shapes accept and
-    // copy byte-identically: the comment-only NONEMPTY tail (flag on),
-    // and the empty tail (same tree, flag off — the drain then consumes
-    // nothing). The with-flag buffer is strictly longer, proving the
-    // fixture really carries the block — never a vacuous pass. (The
-    // historical KNOWN-GAP refusal this replaces pinned the interim
-    // state; the gap is closed, not accepted.)
+    // null BEFORE the exact-end check. All THREE tail shapes accept
+    // and copy byte-identically: the comment-only NONEMPTY tail
+    // (flag on), the no-block tail (same tree, flag off — the drain
+    // consumes nothing, `consumeTreeTrailingComments` gates on the
+    // flag), and the EMPTY count-0 tail (flag on, comment-free tree —
+    // the writer's `emitCommentsByRange` writes the count varint even
+    // when count == 0, so the payload ends in exactly `[0x00]` and the
+    // drain must still read it). The with-flag buffers are strictly
+    // longer than their compact twins, proving the fixtures really
+    // carry the block — never a vacuous pass. (The historical
+    // KNOWN-GAP refusal this replaces pinned the interim state; the
+    // gap is closed, not accepted.)
     const sjon = @import("sjon"); // write side: indented test-only
-    var tree = try sjon.parse(t.allocator, "(+ 1 t) ; tail");
-    defer tree.deinit();
-    const with_tail = try sjon.Binary.toBinary(t.allocator, tree, .{
+    const tail_opts: sjon.Binary.ToBinaryOptions = .{
         .with_spans = false,
         .with_head_spans = false,
         .with_kvpair_key_spans = false,
         .with_tree_trailing_comments = true,
-    });
+    };
+    var tree = try sjon.parse(t.allocator, "(+ 1 t) ; tail");
+    defer tree.deinit();
+    const with_tail = try sjon.Binary.toBinary(t.allocator, tree, tail_opts);
     defer with_tail.deinit();
     const without_tail = try sjon.Binary.toBinary(
         t.allocator,
@@ -6410,7 +6416,29 @@ test "Pacb: tree-trailing comments payloads walk and copy (gap closed)" {
     // Non-vacuity: the flag really adds the tree-trailing block.
     try t.expect(with_tail.data.len > without_tail.data.len);
 
-    for ([_][]const u8{ with_tail.data, without_tail.data }) |bytes| {
+    // Shape 3 (review HIGH): the flag-ON + EMPTY count-0 tail — the
+    // same options over a tree with NO tree-trailing comment. Pins:
+    // the flags byte really carries the flag, the last byte is the
+    // count-0 varint itself, and the length difference against the
+    // compact twin is exactly the flag's three bytes: +2 for the empty
+    // comment pool (anyCommentsFlag gates the pool, so the flag alone
+    // writes `[0 entries][0 bytes]` where compact writes none) and +1
+    // for the `[count 0]` tail varint.
+    var bare = try sjon.parse(t.allocator, "(+ 1 t)");
+    defer bare.deinit();
+    const with_empty0 = try sjon.Binary.toBinary(t.allocator, bare, tail_opts);
+    defer with_empty0.deinit();
+    const bare_compact = try sjon.Binary.toBinary(
+        t.allocator,
+        bare,
+        sjon.Binary.ToBinaryOptions.forMode(.compact),
+    );
+    defer bare_compact.deinit();
+    try t.expectEqual(@as(u8, 0x20), with_empty0.data[5]); // flags byte
+    try t.expectEqual(bare_compact.data.len + 3, with_empty0.data.len);
+    try t.expectEqual(@as(u8, 0x00), with_empty0.data[with_empty0.data.len - 1]);
+
+    for ([_][]const u8{ with_tail.data, without_tail.data, with_empty0.data }) |bytes| {
         const payload = try t.allocator.dupe(u8, bytes);
         defer t.allocator.free(payload);
         try t.expect(payload.len > 0);
@@ -6476,6 +6504,43 @@ test "Pacb: hand-spelled tree-trailing comment tail walks (independent wire fixt
     defer arena.deinit();
     var refusal: Refusal = .{ .code = .bad_magic, .offset = 0 };
     try walkPayloadStructurally(arena.allocator(), &payload, &refusal, 0);
+}
+
+/// The EMPTY tree-trailing block: `[count 0]` — the one byte the writer
+/// appends after the roots when the flag is set on a tree with no
+/// tree-level trailing comment (`emitCommentsByRange` writes the count
+/// varint even when count == 0). It references no pool entry (the
+/// cursor skips comments count-only, never cross-validating pool use),
+/// so the fixture's one-entry pool staying unreferenced is the real
+/// shape.
+const hand_spelled_tail_empty: [1]u8 = .{0x00};
+
+test "Pacb: hand-spelled EMPTY count-0 tree-trailing block walks (independent wire fixture)" {
+    // The third acceptance shape, spelled at the wire level like its
+    // nonempty sibling above: flag on, roots end at 37, and exactly one
+    // `[count 0]` byte follows. The drain must read that one varint and
+    // land exactly at the buffer end — acceptance, no refusal. This is
+    // the review-HIGH shape: without this fixture its acceptance was
+    // proven by code-reading only.
+    comptime std.debug.assert(hand_spelled_tree.len + hand_spelled_tail_empty.len == 38);
+    var payload: [38]u8 = undefined;
+    @memcpy(payload[0..hand_spelled_tree.len], &hand_spelled_tree);
+    @memcpy(payload[hand_spelled_tree.len..], &hand_spelled_tail_empty);
+
+    // The walk arena-allocates its pool index (the stage-arena
+    // discipline), so the direct call gets an arena like production.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var refusal: Refusal = .{ .code = .bad_magic, .offset = 0 };
+    walkPayloadStructurally(arena.allocator(), &payload, &refusal, 0) catch |err| {
+        // Diagnostic for the pre-drain refusal: the walk stops at 37
+        // and the tail byte reads as leftover (8 = payload_malformed).
+        std.debug.print(
+            "hand-spelled count-0 tail refused: {any} at {d} (8 = payload_malformed, the pre-drain refusal)\n",
+            .{ refusal.code, refusal.offset },
+        );
+        return err;
+    };
 }
 
 test "Pacb: residual junk after the drained tail refuses (exact class and offset)" {

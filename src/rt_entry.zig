@@ -1139,8 +1139,12 @@ fn soleExprSpan(blob: []const u8) !ExprSpan {
 /// `new_body`, repairing the container around the size delta: the
 /// section's `[byte_size u32]`, the one nonzero 'TRAK' payload span,
 /// the 'PAYL' directory length, and every section offset at/after the
-/// old 'PAYL' end (they all shift by the delta — no canonical-order
-/// assumption). 'TRAN''s two checksums hash section CONTENTS
+/// old 'PAYL' end (they all shift by the delta). 'TRAK' sections are
+/// patched IN PLACE, which is correct only while each lies BEFORE the
+/// payload region (asserted below) — a 'TRAK' at/after 'PAYL' would
+/// shift with the delta and be patched at its pre-shift address, and
+/// its directory offset never moved. The committed fixtures all order
+/// 'TRAK' before 'PAYL'. 'TRAN''s two checksums hash section CONTENTS
 /// (`pact_fnv` over the 'PACT' bytes, `pacm_fnv` over the 'PACM'
 /// bytes) — never offsets or lengths — so neither moves. Returns the
 /// grown/shrunk blob.
@@ -1153,7 +1157,13 @@ fn splicePayloadRecord(a: std.mem.Allocator, blob: []const u8, new_body: []const
 
     const new_payl_len = 4 + new_body.len;
     const delta: isize = @as(isize, @intCast(new_payl_len)) - @as(isize, @intCast(payl.len));
-    const out = try a.alloc(u8, blob.len + @as(usize, @intCast(delta)));
+    // The spliced body may SHRINK the region (an empty count-0 tail
+    // body is smaller than the committed fixture's), so the signed
+    // delta must reach the allocation both ways — @intCast on a
+    // negative isize panics (the shrink direction was first exercised
+    // by test (m); the memcpy + offset repairs below are already
+    // signed-delta correct).
+    const out = try a.alloc(u8, @intCast(@as(isize, @intCast(blob.len)) + delta));
     const payl_end = payl.off + payl.len;
     @memcpy(out[0..payl.off], blob[0..payl.off]);
     std.mem.writeInt(u32, out[payl.off..][0..4], @intCast(new_body.len), .little);
@@ -1173,6 +1183,11 @@ fn splicePayloadRecord(a: std.mem.Allocator, blob: []const u8, new_body: []const
                 const trak_len = std.mem.readInt(u32, out[at + 8 ..][0..4], .little);
                 const tcount = std.mem.readInt(u32, out[trak_off..][0..4], .little);
                 try t.expectEqual((trak_len - 4) / Pacb.TRAK_REC_LEN, tcount);
+                // Precondition (review LOW): the span patch below writes
+                // at the section's OLD address, so every 'TRAK' must
+                // precede the payload region — one at/after 'PAYL' would
+                // have shifted with the delta.
+                try t.expect(trak_off < payl.off);
                 var k: usize = 0;
                 while (k < tcount) : (k += 1) {
                     const rec = trak_off + 4 + k * Pacb.TRAK_REC_LEN;
@@ -1288,6 +1303,54 @@ test "rt_entry (l): residual junk after the payload walk refuses reason 8, prior
     try t.expectEqualSlices(u8, ticks_before, try captureTicks(a, 7));
     try t.expectEqual(meta_ptr_before, prt_metaPtr());
     try t.expectEqual(@as(u32, 0), prt_exprFailures());
+}
+
+test "rt_entry (m): a flag-on EMPTY count-0 tail loads through the production loader" {
+    // Review-HIGH mirror of (k) through the REAL load path, third
+    // shape: the writer emits the tree-trailing COUNT varint even when
+    // the tree has no tree-level trailing comment, so a flag-on encode
+    // of a comment-free tree ends in exactly `[0x00]` after the roots.
+    // Before the drain this refused payload_malformed at the roots'
+    // end; the drained walk reads the one varint byte and loads.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sjon = @import("sjon");
+
+    const fx = try readFixture(a, "expr-keys");
+    try t.expectEqual(@as(u32, 0), loadPacB(fx.pacb));
+    defer unload();
+
+    var tree = try sjon.parse(a, "1");
+    defer tree.deinit();
+    const with_empty0 = try sjon.Binary.toBinary(a, tree, .{
+        .with_spans = false,
+        .with_head_spans = false,
+        .with_kvpair_key_spans = false,
+        .with_tree_trailing_comments = true,
+    });
+    defer with_empty0.deinit();
+    const plain = try sjon.Binary.toBinary(a, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer plain.deinit();
+    // Non-vacuity: the spliced body really carries the flag and the
+    // empty block — flags byte 0x20, the last byte is the count-0
+    // varint, and the length difference against the same tree's
+    // compact encode is exactly the flag's three bytes: +2 for the
+    // empty comment pool (anyCommentsFlag gates the pool, so the flag
+    // alone writes `[0 entries][0 bytes]` where compact writes none)
+    // and +1 for the `[count 0]` tail varint.
+    try t.expectEqual(@as(u8, 0x20), with_empty0.data[5]);
+    try t.expectEqual(plain.data.len + 3, with_empty0.data.len);
+    try t.expectEqual(@as(u8, 0x00), with_empty0.data[with_empty0.data.len - 1]);
+
+    const grown = try splicePayloadRecord(a, fx.pacb, with_empty0.data);
+    const status = loadPacB(grown);
+    if (status != 0) {
+        std.debug.print("rt_entry (m): load refused — status={d} reason={d} (8 = payload_malformed, the pre-drain refusal)\n", .{ status, prt_loadError() });
+    }
+    try t.expectEqual(@as(u32, 0), status);
+    // The new score is live: a nonempty frame at tick 7.
+    try t.expect(prt_evalTicks(7) > 0);
 }
 
 test "rt_entry: ownership — repeated reloads, eval-after-reload, no stale pointers" {

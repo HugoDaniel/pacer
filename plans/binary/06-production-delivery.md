@@ -686,3 +686,41 @@ evidence — confirmed present in this worktree's gitdir
 `info/exclude:7`). A1 independently startable per the review's "A1
 independent start" section. Full verdict and finding-by-finding
 verification: control-plane `.agent/control/prod-four-plan-final-review.log`.
+
+---
+
+## A1 status append (dated — not plan prose)
+
+2026-10-21 — A1 executed and review-corrected; A2–A5 not started. The
+drain + KNOWN-GAP flip landed as `89b562d`. The independent A1 review
+(verdict "With fixes", `.agent/control/prod-four-a1-review.log`) found
+one HIGH and one LOW; both are closed test-only:
+
+- **HIGH — flag-ON + empty count-0 tail accepted, uncovered** (a
+  writer-produced shape: `emitCommentsByRange` writes the count varint
+  even at count 0): closed at all three levels — third shape added to
+  the flipped Pacb test (flags byte `0x20` pinned; length pinned at
+  compact + 3: the flag-alone empty comment pool's 2 bytes + the 1
+  count-0 varint; last byte `0x00`), an independent hand-spelled
+  `[count 0]` wire fixture accepted by the walk, and a real-loader
+  mirror `rt_entry (m)` through `loadPacB` (status 0, live score).
+  Original fixtures/oracles untouched.
+- **LOW — `splicePayloadRecord` "no canonical-order assumption" was
+  false for 'TRAK' after 'PAYL'**: closed with the true precondition
+  asserted in the helper (`trak_off < payl.off`) and a corrected
+  comment; no helper redesign. The wave also fixed a latent test-helper
+  size-computation panic in the shrink direction, first exercised by
+  (m) (test-only file, one line).
+
+Teeth proven per the correction brief: the new tests run against the
+PRE-FIX drain in an isolated scratch worktree (`f9164b7` checkout,
+sibling `../SJON` root preserved) refuse with the actual reason —
+walk-level `.payload_malformed at 37`, loader-level `status=1
+reason=8` — 813/819 (6 failed); source restored byte-identical (md5
+verified), scratch GREEN 819/819, then all five gates green on the
+restored tree (`zig build test` 819/819; `zig build fuzz parity
+audit-rt-imports verify` exit 0 — fuzz 383, corpus 43/0, parity 43/0
+with the 4 pinned skips, negatives 3738/0 skipped, node 135/135,
+audit closure 12+16 frozen). Commands, logs and the diff:
+`.agent/control/prod-four-a1-corrections-report.md`. The report's
+"both tail shapes" coverage claim is corrected in place, dated.
