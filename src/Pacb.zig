@@ -2063,8 +2063,14 @@ pub fn decodePayloads(
 /// `MultipleRoots` rule — zero is the same defect class here); and a
 /// full depth-first walk through the cursor's own child/vector
 /// iterators consumes EVERY node kind at its exact wire width, covering
-/// branches an evaluation would never visit. The walk must end exactly
-/// at `payload.len`. Iterative, like `PatternQuery.compileBinary`'s
+/// branches an evaluation would never visit. The walk then drains the
+/// root iterator through its null — the null-producing exhaustion call
+/// consumes the [tree trailing comments] block the encoder appends
+/// after the roots (SJON `8b8a38ee`, the same exhaustion contract as
+/// the child/vector iterators below) — BEFORE the exact-end check, so
+/// a comment-only nonempty tail is consumed, not refused. The walk
+/// must end exactly at `payload.len` (residual junk after the drained
+/// tail refuses). Iterative, like `PatternQuery.compileBinary`'s
 /// frame machine — the cursor is single-pass and monotonic, so a frame
 /// pushed mid-iteration runs to completion and the parent resumes at
 /// the next child. Depth is capped at the wire format's own
@@ -2183,8 +2189,22 @@ fn walkPayloadStructurally(
         break;
     }
 
-    // The walk consumed every node it could reach: the payload must
-    // end exactly here — trailing slack inside a payload refuses.
+    // The walk consumed every node it could reach. Drain the root
+    // iterator through its null BEFORE the exact-end check: the
+    // null-producing exhaustion call consumes the [tree trailing
+    // comments] block the encoder appends after the roots (SJON
+    // `8b8a38ee` — the tree-level mirror of the child/vector
+    // iterators' trailing consumption above). Exactly one call:
+    // `remaining` hit zero when the single root was taken. A drain
+    // error is a refusal — a null observed after an ignored drain
+    // error is not clean exhaustion (the cursor's own contract).
+    std.debug.assert(roots.remaining == 0);
+    _ = roots.next() catch {
+        return fail(refusal, .payload_malformed, payload_at + cursor.pos);
+    };
+
+    // The payload must end exactly here — trailing slack inside a
+    // payload refuses (residual junk after the drained tail included).
     if (@as(usize, cursor.pos) != payload.len) {
         return fail(refusal, .payload_malformed, payload_at + cursor.pos);
     }
@@ -6331,7 +6351,7 @@ test "Pacb: node comments and spans payloads walk (positive fixture)" {
     // comment, an element leading comment, and a vector trailing
     // comment — the comment sites the cursor's own iterators consume
     // (leading inside `nextNodeView`, trailing on iterator exhaustion).
-    // NOT covered: the tree-trailing block (the known gap below).
+    // The tree-trailing block is the acceptance test below's subject.
     const sjon = @import("sjon"); // write side: indented test-only
     var tree = try sjon.parse(t.allocator, "; lead\n[; inner\n1 2 ; vtail]");
     defer tree.deinit();
@@ -6356,35 +6376,173 @@ test "Pacb: node comments and spans payloads walk (positive fixture)" {
     try t.expectEqualSlices(u8, payload, stage.payloads[0]);
 }
 
-test "Pacb: KNOWN GAP — tree-trailing comments payloads currently refuse" {
+test "Pacb: tree-trailing comments payloads walk and copy (gap closed)" {
     const regs = try encodePact(t.allocator, &host_two);
     defer t.allocator.free(regs);
 
-    // DEFERRED, explicitly (interim review finding 3 / focused ruling
-    // 3): SJON's RootIter has no exhaustion-consume for the
-    // [tree trailing comments] block the encoder writes after the
-    // roots when with_tree_trailing_comments is set, so the exact-end
-    // check refuses every such payload as payload_malformed. This test
-    // pins the CURRENT refusal so the gap is visible and deliberate —
-    // it is NOT an accepted contract. When the owner-approved SJON-side
-    // cursor capability lands, the expectation flips to acceptance;
-    // refusing the flag combination as non_canonical was ruled out as a
-    // unilateral narrowing.
+    // The SJON `RootIter` drain is delivered (8b8a38ee): the
+    // null-producing exhaustion call consumes the
+    // [tree trailing comments] block the encoder appends after the
+    // roots, so the payload walk drains the root iterator through
+    // null BEFORE the exact-end check. Both tail shapes accept and
+    // copy byte-identically: the comment-only NONEMPTY tail (flag on),
+    // and the empty tail (same tree, flag off — the drain then consumes
+    // nothing). The with-flag buffer is strictly longer, proving the
+    // fixture really carries the block — never a vacuous pass. (The
+    // historical KNOWN-GAP refusal this replaces pinned the interim
+    // state; the gap is closed, not accepted.)
     const sjon = @import("sjon"); // write side: indented test-only
     var tree = try sjon.parse(t.allocator, "(+ 1 t) ; tail");
     defer tree.deinit();
-    const bin = try sjon.Binary.toBinary(t.allocator, tree, .{
+    const with_tail = try sjon.Binary.toBinary(t.allocator, tree, .{
         .with_spans = false,
         .with_head_spans = false,
         .with_kvpair_key_spans = false,
         .with_tree_trailing_comments = true,
     });
-    defer bin.deinit();
-    const payload = try t.allocator.dupe(u8, bin.data);
-    defer t.allocator.free(payload);
-    try t.expect(payload.len > 0);
+    defer with_tail.deinit();
+    const without_tail = try sjon.Binary.toBinary(
+        t.allocator,
+        tree,
+        sjon.Binary.ToBinaryOptions.forMode(.compact),
+    );
+    defer without_tail.deinit();
+    // Non-vacuity: the flag really adds the tree-trailing block.
+    try t.expect(with_tail.data.len > without_tail.data.len);
 
-    const built = try buildPayloadFixture(t.allocator, payload, regs);
+    for ([_][]const u8{ with_tail.data, without_tail.data }) |bytes| {
+        const payload = try t.allocator.dupe(u8, bytes);
+        defer t.allocator.free(payload);
+        try t.expect(payload.len > 0);
+
+        const built = try buildPayloadFixture(t.allocator, payload, regs);
+        defer t.allocator.free(built.buf);
+
+        const directory = try parseDirectory(built.buf, null);
+        var registry = try decodeRegistry(t.allocator, built.buf, &directory, null);
+        defer registry.deinit();
+        var records = try decodeRecords(t.allocator, built.buf, &directory, &registry, null);
+        defer records.deinit();
+        var stage = try decodePayloads(t.allocator, built.buf, &directory, &records, null);
+        defer stage.deinit();
+
+        try t.expectEqual(@as(usize, 1), stage.payloads.len);
+        try t.expectEqualSlices(u8, payload, stage.payloads[0]);
+    }
+}
+
+/// The tree-level half of a hand-spelled binary-IR payload: header +
+/// empty string pool + one-entry comment pool + one number root (42),
+/// spelled at the WIRE level per SJON's BinaryFormat v5 (spans off) —
+/// NOT an encoder roundtrip, so the decoder under test reads it
+/// against the format, not against a writer sharing its author. Layout:
+/// pool_offset 16, string pool `[0 entries][0 bytes]`, comment pool
+/// `[1 entry][7 bytes]` = `[len 6]["; tail"]`, roots_offset 27, roots
+/// `[1 root][tag number][f64 LE 42]` ending at 37.
+const hand_spelled_tree: [37]u8 = .{
+    'S',  'J',  '1',  '\n', // magic
+    0x05, // wire version
+    0x20, // flags: with_tree_trailing_comments
+    0x00, 0x00, // reserved
+    16,   0,    0,    0, // pool_offset
+    27,   0,    0,    0, // roots_offset
+    0x00, 0x00, // string pool: 0 entries, 0 bytes
+    0x01, 0x07, // comment pool: 1 entry, 7 bytes
+    0x06, ';',  ' ',  't', 'a', 'i', 'l', // entry: [len 6]["; tail"]
+    0x01, // roots: 1 root
+    0x03, // tag: number
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x45, 0x40, // f64 LE 42.0
+};
+
+/// One-entry tree-trailing comment block: `[count 1][kind 0 line]
+/// [comment-pool index 0]` — the bytes the root iterator's
+/// null-producing exhaustion call must consume (SJON 8b8a38ee).
+const hand_spelled_tail: [3]u8 = .{ 0x01, 0x00, 0x00 };
+
+test "Pacb: hand-spelled tree-trailing comment tail walks (independent wire fixture)" {
+    // Independence: the acceptance fixture is spelled from the wire
+    // format, not produced by the SJON writer whose cursor the walk
+    // runs — writer and reader cannot co-drift past it. The walk must
+    // drain the root iterator through its null (the trailing block)
+    // and end exactly at the buffer end: acceptance, no refusal.
+    comptime std.debug.assert(hand_spelled_tree.len + hand_spelled_tail.len == 40);
+    var payload: [40]u8 = undefined;
+    @memcpy(payload[0..hand_spelled_tree.len], &hand_spelled_tree);
+    @memcpy(payload[hand_spelled_tree.len..], &hand_spelled_tail);
+
+    // The walk arena-allocates its pool index (the stage-arena
+    // discipline), so the direct call gets an arena like production.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var refusal: Refusal = .{ .code = .bad_magic, .offset = 0 };
+    try walkPayloadStructurally(arena.allocator(), &payload, &refusal, 0);
+}
+
+test "Pacb: residual junk after the drained tail refuses (exact class and offset)" {
+    // The drain consumes the tree-trailing block and NOTHING else:
+    // leftover bytes after the block still refuse — exact class
+    // `payload_malformed`, offset at the walk's end position resolved
+    // through the caller-supplied payload base (the same arithmetic
+    // decodePayloads' refusal sites use). Both shapes: junk after a
+    // comment tail (the drain must not swallow past the block), and
+    // junk after a comment-free payload (the pre-existing leftover
+    // class, unchanged by the flip). This is the over-acceptance guard
+    // for the gap closure: class and offsets pin today's-leftover
+    // semantics against tomorrow's walk.
+    const junk = [_]u8{ 0xAA, 0xBB };
+
+    // (1) Residual junk AFTER the drained comment tail: the walk ends
+    // at 37 (tree) + 3 (block) = 40, so the first junk byte is at 40.
+    {
+        comptime std.debug.assert(hand_spelled_tree.len + hand_spelled_tail.len + junk.len == 42);
+        var payload: [42]u8 = undefined;
+        var off: usize = 0;
+        @memcpy(payload[off..][0..hand_spelled_tree.len], &hand_spelled_tree);
+        off += hand_spelled_tree.len;
+        @memcpy(payload[off..][0..hand_spelled_tail.len], &hand_spelled_tail);
+        off += hand_spelled_tail.len;
+        @memcpy(payload[off..], &junk);
+
+        var arena = std.heap.ArenaAllocator.init(t.allocator);
+        defer arena.deinit();
+        var refusal: Refusal = .{ .code = .bad_magic, .offset = 0 };
+        try t.expectError(
+            error.Refused,
+            walkPayloadStructurally(arena.allocator(), &payload, &refusal, 7000),
+        );
+        try t.expectEqual(RefusalCode.payload_malformed, refusal.code);
+        try t.expectEqual(@as(usize, 7000 + 40), refusal.offset);
+    }
+    // (2) Leftover junk after a comment-free payload: the walk ends at
+    // 37; the junk byte refuses at 37 regardless of the drain.
+    {
+        comptime std.debug.assert(hand_spelled_tree.len + junk.len == 39);
+        var payload: [39]u8 = undefined;
+        @memcpy(payload[0..hand_spelled_tree.len], &hand_spelled_tree);
+        @memcpy(payload[hand_spelled_tree.len..], &junk);
+
+        var arena = std.heap.ArenaAllocator.init(t.allocator);
+        defer arena.deinit();
+        var refusal: Refusal = .{ .code = .bad_magic, .offset = 0 };
+        try t.expectError(
+            error.Refused,
+            walkPayloadStructurally(arena.allocator(), &payload, &refusal, 0),
+        );
+        try t.expectEqual(RefusalCode.payload_malformed, refusal.code);
+        try t.expectEqual(@as(usize, 37), refusal.offset);
+    }
+    // (3) Container level: junk appended to a REAL encoder payload
+    // refuses through decodePayloads — the walk is the payload stage's
+    // consumption rule, not a standalone probe.
+    const regs = try encodePact(t.allocator, &host_two);
+    defer t.allocator.free(regs);
+    const expr_bin = try toBinaryCompact(t.allocator, "(+ 1 (* 2 t))");
+    defer t.allocator.free(expr_bin);
+    const region = try t.allocator.alloc(u8, expr_bin.len + junk.len);
+    defer t.allocator.free(region);
+    @memcpy(region[0..expr_bin.len], expr_bin);
+    @memcpy(region[expr_bin.len..], &junk);
+    const built = try buildPayloadFixture(t.allocator, region, regs);
     defer t.allocator.free(built.buf);
     try expectPayloadRefusal(built.buf, .payload_malformed);
 }

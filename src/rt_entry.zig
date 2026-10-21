@@ -1095,6 +1095,201 @@ test "rt_entry (j): the pre-SNAM pin decodes nameless at both unit readers; the 
     try t.expectEqual(@as(?[]const u8, null), served.scene(0).name);
 }
 
+/// The single payload body of a committed fixture: its absolute offset
+/// and length. 'PAYL' is `[byte_size u32]` + the bodies the 'TRAK'
+/// spans address region-relatively (no per-record length prefixes —
+/// the per-body lengths live only in 'TRAK'); these fixtures carry
+/// exactly one nonzero span (the expr track's).
+const ExprSpan = struct { at: usize, len: usize };
+
+fn soleExprSpan(blob: []const u8) !ExprSpan {
+    const dir = try Pacb.parseDirectory(blob, null);
+    const payl = dir.find(.payl).?;
+    const byte_size = std.mem.readInt(u32, blob[payl.off..][0..4], .little);
+    try t.expectEqual(payl.len, 4 + @as(usize, byte_size));
+    const count = std.mem.readInt(u32, blob[12..16], .little);
+    try t.expect(count > 0 and count <= Pacb.MAX_SECTIONS);
+    var found: ?ExprSpan = null;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const at = Pacb.HEADER_LEN + Pacb.DIRECTORY_ENTRY_LEN * i;
+        if (std.mem.readInt(u32, blob[at..][0..4], .little) != Pacb.TRAK_ID) continue;
+        const trak_off = std.mem.readInt(u32, blob[at + 4 ..][0..4], .little);
+        const trak_len = std.mem.readInt(u32, blob[at + 8 ..][0..4], .little);
+        const tcount = std.mem.readInt(u32, blob[trak_off..][0..4], .little);
+        try t.expectEqual((trak_len - 4) / Pacb.TRAK_REC_LEN, tcount);
+        var k: usize = 0;
+        while (k < tcount) : (k += 1) {
+            const rec = trak_off + 4 + k * Pacb.TRAK_REC_LEN;
+            const plen = std.mem.readInt(u32, blob[rec + 20 ..][0..4], .little);
+            if (plen != 0) {
+                try t.expect(found == null); // single payload fixture
+                found = .{
+                    .at = payl.off + 4 + std.mem.readInt(u32, blob[rec + 16 ..][0..4], .little),
+                    .len = plen,
+                };
+            }
+        }
+    }
+    if (found) |f| return f;
+    return error.NoPayloadSpan;
+}
+
+/// Replace a committed fixture's single expr payload body with
+/// `new_body`, repairing the container around the size delta: the
+/// section's `[byte_size u32]`, the one nonzero 'TRAK' payload span,
+/// the 'PAYL' directory length, and every section offset at/after the
+/// old 'PAYL' end (they all shift by the delta — no canonical-order
+/// assumption). 'TRAN''s two checksums hash section CONTENTS
+/// (`pact_fnv` over the 'PACT' bytes, `pacm_fnv` over the 'PACM'
+/// bytes) — never offsets or lengths — so neither moves. Returns the
+/// grown/shrunk blob.
+fn splicePayloadRecord(a: std.mem.Allocator, blob: []const u8, new_body: []const u8) ![]u8 {
+    const dir = try Pacb.parseDirectory(blob, null);
+    const payl = dir.find(.payl).?;
+    const span = try soleExprSpan(blob);
+    try t.expectEqual(@as(usize, payl.len - 4), span.len); // one body fills the region
+    try t.expectEqual(payl.off + 4, span.at); // region-relative offset 0
+
+    const new_payl_len = 4 + new_body.len;
+    const delta: isize = @as(isize, @intCast(new_payl_len)) - @as(isize, @intCast(payl.len));
+    const out = try a.alloc(u8, blob.len + @as(usize, @intCast(delta)));
+    const payl_end = payl.off + payl.len;
+    @memcpy(out[0..payl.off], blob[0..payl.off]);
+    std.mem.writeInt(u32, out[payl.off..][0..4], @intCast(new_body.len), .little);
+    @memcpy(out[payl.off + 4 ..][0..new_body.len], new_body);
+    @memcpy(out[payl.off + new_payl_len ..], blob[payl_end..]);
+
+    // Directory + span repairs over the EDITED bytes (soleExprSpan
+    // already proved exactly one nonzero span exists).
+    const count = std.mem.readInt(u32, out[12..16], .little);
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const at = Pacb.HEADER_LEN + Pacb.DIRECTORY_ENTRY_LEN * i;
+        switch (std.mem.readInt(u32, out[at..][0..4], .little)) {
+            Pacb.PAYL_ID => std.mem.writeInt(u32, out[at + 8 ..][0..4], @intCast(new_payl_len), .little),
+            Pacb.TRAK_ID => {
+                const trak_off = std.mem.readInt(u32, out[at + 4 ..][0..4], .little);
+                const trak_len = std.mem.readInt(u32, out[at + 8 ..][0..4], .little);
+                const tcount = std.mem.readInt(u32, out[trak_off..][0..4], .little);
+                try t.expectEqual((trak_len - 4) / Pacb.TRAK_REC_LEN, tcount);
+                var k: usize = 0;
+                while (k < tcount) : (k += 1) {
+                    const rec = trak_off + 4 + k * Pacb.TRAK_REC_LEN;
+                    if (std.mem.readInt(u32, out[rec + 20 ..][0..4], .little) != 0) {
+                        std.mem.writeInt(u32, out[rec + 20 ..][0..4], @intCast(new_body.len), .little);
+                    }
+                }
+            },
+            else => {
+                const off = std.mem.readInt(u32, out[at + 4 ..][0..4], .little);
+                if (off >= payl_end) {
+                    const moved = @as(isize, @intCast(off)) + delta;
+                    std.mem.writeInt(u32, out[at + 4 ..][0..4], @intCast(moved), .little);
+                }
+            },
+        }
+    }
+    return out;
+}
+
+test "rt_entry (k): a tree-trailing-comment expr payload loads through the production loader" {
+    // The decode-level RootIter drain (Pacb A1) proven through the REAL
+    // load path: the committed expr-keys blob has its payload record
+    // replaced with the same-shaped tree PLUS a tree-trailing comment
+    // block (the payload's own header carries the flag — real packs
+    // never emit it; the compact encode is comment-free). Before the
+    // drain this refused payload_malformed; the drained walk loads it.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sjon = @import("sjon");
+
+    const fx = try readFixture(a, "expr-keys");
+    try t.expectEqual(@as(u32, 0), loadPacB(fx.pacb));
+    defer unload();
+
+    // Same tree with and without the tail: the with-tail body is
+    // strictly longer — the spliced record really carries the block
+    // (never a vacuous pass).
+    var tree = try sjon.parse(a, "1 ; drained");
+    defer tree.deinit();
+    const with_tail = try sjon.Binary.toBinary(a, tree, .{
+        .with_spans = false,
+        .with_head_spans = false,
+        .with_kvpair_key_spans = false,
+        .with_tree_trailing_comments = true,
+    });
+    defer with_tail.deinit();
+    const plain = try sjon.Binary.toBinary(a, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer plain.deinit();
+    try t.expect(with_tail.data.len > plain.data.len);
+
+    const grown = try splicePayloadRecord(a, fx.pacb, with_tail.data);
+    const status = loadPacB(grown);
+    if (status != 0) {
+        std.debug.print("rt_entry (k): load refused — status={d} reason={d} (8 = payload_malformed, the pre-drain refusal)\n", .{ status, prt_loadError() });
+    }
+    try t.expectEqual(@as(u32, 0), status);
+    // The new score is live: a nonempty frame at tick 7.
+    try t.expect(prt_evalTicks(7) > 0);
+}
+
+test "rt_entry (l): residual junk after the payload walk refuses reason 8, prior score live" {
+    // The drain must not over-accept: junk INSIDE the payload record —
+    // a short valid tree padded to the record's exact body length —
+    // leaves the walk short of the payload end. Status 1, exact reason
+    // 8 (payload_malformed), and the transactional contract: the old
+    // score, its held control, bpm nudge, meta and counters stay live.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sjon = @import("sjon");
+
+    // A document control, so a held widget AND a live bpm nudge are
+    // both evaluator state worth proving (test (a)'s shape).
+    const src =
+        \\(target :name glow :arity 1 :registry 0)
+        \\(target :name level :arity 1 :registry 1)
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(control :id depth :target level :min 0 :max 1 :value 0.25)
+        \\(track :target glow (key :at 0b :value 0.2) (key :at 4b :value 0.8 :ease in-out-quad))
+        \\(track :target level :expr (* depth beat))
+        \\
+    ;
+    const pacb = try packForTest(a, src);
+    try t.expectEqual(@as(u32, 0), loadPacB(pacb));
+    defer unload();
+    try t.expectEqual(@as(u32, 0), prt_setControl(0, 0.9, 0, 0, 0));
+    try t.expectEqual(@as(u32, 0), prt_setBpm(240));
+    const frame_before = try captureFrame(a, 0.3);
+    const ticks_before = try captureTicks(a, 7);
+    const meta_ptr_before = prt_metaPtr();
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+
+    // The in-place rewrite: constant `1` compact binary, junk fill to
+    // the body's exact length (no container repair needed).
+    var tree = try sjon.parse(a, "1");
+    defer tree.deinit();
+    const plain = try sjon.Binary.toBinary(a, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer plain.deinit();
+    const span = try soleExprSpan(pacb);
+    try t.expect(plain.data.len < span.len); // the junk fill is nonempty
+
+    const junked = try a.dupe(u8, pacb);
+    @memcpy(junked[span.at..][0..plain.data.len], plain.data);
+    @memset(junked[span.at + plain.data.len ..][0 .. span.len - plain.data.len], 0xAA);
+
+    try t.expectEqual(@as(u32, 1), loadPacB(junked));
+    try t.expectEqual(@as(u32, 8), prt_loadError()); // payload_malformed
+    // The OLD score is still live: byte-identical frames (held 0.9 and
+    // the ×2 tempo inside them), meta pointer unmoved, counter intact.
+    try t.expectEqualSlices(u8, frame_before, try captureFrame(a, 0.3));
+    try t.expectEqualSlices(u8, ticks_before, try captureTicks(a, 7));
+    try t.expectEqual(meta_ptr_before, prt_metaPtr());
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+}
+
 test "rt_entry: ownership — repeated reloads, eval-after-reload, no stale pointers" {
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();

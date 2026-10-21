@@ -48,10 +48,18 @@
 //!   * no panic anywhere, and no leak on any path (the testing
 //!     allocator leak-checks both the refused and the success legs).
 //!
-//! A tree-trailing-comments payload refusing `payload_malformed` (the
-//! KNOWN SJON `RootIter` gap, owner decision pending) is one legal
-//! refusal outcome like any other — this harness asserts nothing about
-//! WHICH code fires, so the known gap does not weaken it.
+//! Status note (A1, 2026-10-21): the historical remark that a
+//! tree-trailing-comments payload refusing `payload_malformed` was "one
+//! legal refusal outcome like any other — the KNOWN SJON `RootIter`
+//! gap" no longer describes a gap. The drain is delivered (SJON
+//! `8b8a38ee`) and pacer's payload walk drains the root iterator
+//! through null before its exact-end check, so a well-formed comment
+//! tail now DECODES. No seed routing moved: the harness still asserts
+//! total invariants only — whichever code fires — and none of the
+//! committed seeds routes into a payload tail (the structured arms
+//! mutate the three comment-free real-CLI fixtures; the corpus-routing
+//! test below keeps pinning the four 'SNAM' entries' actual routes
+//! through the real Smith leading-length protocol).
 
 const std = @import("std");
 const sjon = @import("sjon");
