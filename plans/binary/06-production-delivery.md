@@ -754,3 +754,41 @@ path that already serializes patterns), NOT a production backdoor:
 report: `prod-four-a2-red-6.log`, `prod-four-a2-green-3.log`,
 `prod-four-a2-green-gates.log`, `prod-four-a2-green-4-postcommit.log`,
 `prod-four-a2-report.md`.
+
+## B1 status append (dated — not plan prose)
+
+2026-10-21 — B1 executed as ONE atomic commit `fd2e289` on top of A2
+(`a7a3c78`); B2 not started (the "T6a only / T6b incomplete" qualifiers are
+intentionally untouched until B2 lands). The negatives summary now prints
+the actual category partition from execution counters: `35 named + 3
+bad-call + 3700 prefix = 3738 attempted; 39 names = 35 mutation name(s) +
+3 bad-call name(s) + 1 family label(s)`. Each term is its own counter
+incremented where the operation executes (`Counters` in
+`parity_negatives.zig`): the prefix term is the loop's own increment
+(asserted equal to the loop counter — never the `fixtures.keys_only.len`
+shorthand, OP-3), the `"prefixes"` label is counted as a label and never an
+attempt, the three fixture setup loads and the bad-call family's
+prior-reason re-eval stay uncounted (setup/probe loads, not attempts), and
+the hardcoded `skipped 0` claim is deleted as unsupported. Internal
+consistency asserts the exact arithmetic before printing (attempted ==
+named + bad-call + prefix; names == mutations + bad-calls + labels), else
+`error.CounterMismatch`. The ParityTests report gate no longer self-derives
+its expectation: it pins a literal expected inventory (independent of the
+counters) and requires every name's success line exactly once, so a removed
+or double-counted run call fails per name. No mutation, reason, oracle,
+fixture, or try count changed; no runtime behavior or reason-map change.
+
+RED first (prod-four-b1-red-1.log, 828/829): the partition gate failed on
+today's summary — "39 named mutation(s) + 3700 prefix case(s) = 3738
+attempted; skipped 0" (39 + 3700 = 3739 ≠ 3738). Teeth proven in an
+isolated scratch worktree (HEAD + the fix; main tree md5-verified
+untouched): removing the `ease-op-padding` runNamed call — internally
+consistent at 34+3+3700 = 3737 — is caught per name (expected 1, found 0;
+prod-four-b1-red-2-scratch-removal.log); misclassifying the label as a
+named mutation trips the production partition assert itself
+(`error.CounterMismatch`; prod-four-b1-red-3-scratch-miscount.log). GREEN,
+same real loader: `zig build test` 829/829 (prod-four-b1-green-1.log); all
+five gates green (prod-four-b1-green-gates.log) — fuzz 386, corpus 43/0,
+parity printing the new partition line, audit-rt-imports, verify 1101/1101;
+post-commit re-run green (prod-four-b1-green-postcommit.log). Report:
+`.agent/control/prod-four-b1-report.md`.
