@@ -792,3 +792,35 @@ five gates green (prod-four-b1-green-gates.log) — fuzz 386, corpus 43/0,
 parity printing the new partition line, audit-rt-imports, verify 1101/1101;
 post-commit re-run green (prod-four-b1-green-postcommit.log). Report:
 `.agent/control/prod-four-b1-report.md`.
+
+## B1 low-note cleanup status append (dated — not plan prose)
+
+2026-10-21 — B1 low-note cleanup executed as ONE atomic source commit
+`b89da3f` on top of `da42921`. Independent B1 review (2026-10-21,
+prod-four-b1-review.log): **READY — B1 accepted as delivered**, no
+Critical/High/Medium findings; the three LOW notes were documentation
+accuracy only, and all three are now closed. LOW 1: the declared
+`parity_negatives.Error` set in `b89da3f` now lists `CounterMismatch`
+(the declaration was unreferenced and `run`'s inferred set already
+carried it — no behavior change). LOW 2: the B1 report's test-caller
+citation is corrected to the actual `ParityTests.zig:82` (was `:61`;
+report-side, verified against source). LOW 3: the uncounted setup/probe
+loads are enumerated in-source under `Counters` — the three step-1
+fixture loads, the three `Family.begin` baseline loads (one per family),
+and the bad-call family's prior-reason re-eval: **seven uncounted loads
+in all (3+3+1), none of them attempts**. The enumeration was re-traced
+from source independently of the review before adoption; the review's
+"8 uncounted setup/probe loads" is a miscount and is not adopted.
+
+This append records review acceptance and the cleanup — it is NOT
+completion of the pattern work: the pattern hold stands. The four
+pattern skips remain (`examples-starter`, `pattern-basic`,
+`pattern-env`, `rig-studio`, all skipped-pending-SJON); the original
+full-parity contract still excludes pack-time narrowing; no SJON
+edits or asks are filed (the earlier clarify prompt timed out with a
+blank response — not approval); the measured pattern binary blocker
+stands as recorded in prod-four-a2-boundary-report.md and
+prod-four-pattern-budget-decision.md. Gates for the cleanup itself:
+parent OBS run on the exact cleanup diff — `zig build test` 829/829 +
+`zig build parity` green, exit0 (prod-four-parent-b1-low.log); no
+additional tests required beyond that log, and none run here.
