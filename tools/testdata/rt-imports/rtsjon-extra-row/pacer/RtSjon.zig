@@ -1,4 +1,4 @@
-// Fixture window — the strict-grammar nine rows (the one legal sjon import).
+// Fixture window — the strict-grammar ten rows (the one legal sjon import).
 const sjon = @import("sjon");
 
 pub const Ast = sjon.Ast;
@@ -11,6 +11,7 @@ pub const Plugin = sjon.Plugin;
 pub const trig = sjon.trig;
 pub const plugins = struct {
     pub const core = sjon.plugins.core;
+    pub const pattern = sjon.plugins.pattern;
 };
 
 // MUTATION: an extra row re-exporting a write-side namespace (rule b).

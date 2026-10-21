@@ -111,6 +111,51 @@ pub fn queryCycle(
     return PatternQuery.queryTreeWithEnv(gpa, tree, node, schema, window, SEED, outer_env);
 }
 
+/// The binary query entry's error set: `PatternQuery.BinaryError` — the
+/// engine's own error set plus the cursor's wire classes and
+/// `MultipleRoots`. A decode-validated single-root payload cannot reach
+/// the latter two through the production loader (01's structural walk is
+/// the preceding proof), but on any input they propagate rather than
+/// trap — `ExprTrack.evalAtBinary`'s totality doctrine, pattern side.
+pub const BinaryError = PatternQuery.BinaryError;
+
+/// Query the enclosing cycle of `tick` over a compact single-root
+/// pattern payload — the binary parallel of `queryCycle` (02:345, P4).
+/// The SAME `cycleWindowOf` window, the SAME `SEED`, the SAME
+/// result contract (`sampleAt`/`coerce` stay shared — no second pattern
+/// interpreter), routed through SJON's delivered env-carrying binary
+/// entry `queryBinaryWithEnv`: the ENTRY selects eval semantics, so a
+/// `(pure <form>)` leaf is captured, dry-run at cycle 0, and evaluated
+/// per cycle under the pattern-locals (`cycle`/`tick`/`seed` shadow the
+/// outer env's same-named bindings). `outer_env` is pacer's evaluation
+/// scope (`ExprTrack.buildEnv` at this tick — time names + live control
+/// values), chained UNDER the pattern-locals exactly as the tree arm
+/// does; the legacy frozen `queryBinary`/`queryBinaryWithBudget` (a
+/// `(pure …)` leaf is silence there) are never adopted.
+///
+/// `schema` must carry the core vocabulary the payload's expr leaves
+/// evaluate under — the runtime's frozen core ⊕ pattern aggregate.
+///
+/// Ownership is the delivered SJON retention semantics, unchanged: the
+/// returned `Result` owns its arena — deinit it. When the pattern
+/// carries expr leaves, the engine retains a layout-identical copy of
+/// `payload` INSIDE the result (one cursor over the copy), so the result
+/// is self-contained — the caller's bytes and env may be freed after the
+/// call; no retained cursor escapes into pacer. Collection over abort:
+/// static leaf defects surface as `result.diagnostics` (the leaf
+/// degrades to silence), later-cycle eval failures as `result.dropped`
+/// — the tree path's three disjoint channels, binary side.
+pub fn queryCycleBinary(
+    gpa: std.mem.Allocator,
+    schema: RtSjon.Schema.Schema,
+    payload: []const u8,
+    tick: Tick,
+    outer_env: ?*const RtSjon.Expr.Env,
+) BinaryError!PatternQuery.Result {
+    const window = try cycleWindowOf(tick);
+    return PatternQuery.queryBinaryWithEnv(gpa, payload, schema, window, SEED, outer_env);
+}
+
 /// Point-sample the queried cycle at tick `t`: the hap whose PART span
 /// contains `t` (half-open `[begin, end)`, so an exact onset lands on the
 /// hap STARTING there — structural, like a keyframe on its key) with the
@@ -262,4 +307,84 @@ test "coerce: finite numbers pass, everything else is null" {
     try t_.expectEqual(@as(?[4]f32, null), coerce(.{ .keyword = "k" }));
     try t_.expectEqual(@as(?[4]f32, null), coerce(.{ .boolean = true }));
     try t_.expectEqual(@as(?[4]f32, null), coerce(.nil));
+}
+
+// ---------------------------------------------------------------------------
+// P4 — `queryCycleBinary`: the binary arm of the same query. Payloads
+// come from `sjon.parse` + `Binary.toBinary` (write side, indented
+// test-only imports — never closure); the schema is the runtime's frozen
+// core ⊕ pattern aggregate.
+// ---------------------------------------------------------------------------
+
+const t_bin = std.testing;
+
+const rt_plugins = [_]RtSjon.Plugin.Plugin{ RtSjon.plugins.core.plugin, RtSjon.plugins.pattern.plugin };
+const rt_schema: RtSjon.Schema.Schema = .{ .plugins = &rt_plugins };
+
+/// Parse `src` and compact-encode it to a single-root payload (the test
+/// twin of what a pack payload carries).
+fn binaryPayload(gpa: std.mem.Allocator, src: [:0]const u8) ![]u8 {
+    const sjon = @import("sjon"); // write side (parse + encode): indented test-only
+    var tree = try sjon.parse(gpa, src);
+    defer tree.deinit();
+    try t_bin.expectEqual(@as(usize, 1), tree.root.len);
+    const bin = try sjon.Binary.toBinary(gpa, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer bin.deinit();
+    return gpa.dupe(u8, bin.data);
+}
+
+test "queryCycleBinary: the window is the tick's enclosing cycle (slowcat alternation), tree ≡ binary" {
+    const gpa = t_bin.allocator;
+    const payload = try binaryPayload(gpa, "(slowcat 0.1 0.2)");
+    defer gpa.free(payload);
+
+    // Cycle 1 returns the SECOND child — the same window derivation as
+    // the tree arm's test, through the binary entry.
+    var result = try queryCycleBinary(gpa, rt_schema, payload, Pattern.PPC + 1, null);
+    defer result.deinit();
+    try t_bin.expectEqual(@as(usize, 0), result.diagnostics.len);
+    try t_bin.expectEqual(@as(usize, 1), result.haps.len);
+    try t_bin.expect(result.haps[0].value.eql(.{ .number = 0.2 }));
+
+    // Tree ≡ binary over the SAME pattern source: identical hap count
+    // and values (the delivered equivalence, pinned through pacer's
+    // entries).
+    const sjon = @import("sjon"); // write side (parse): indented test-only
+    var tree = try sjon.parse(gpa, "(slowcat 0.1 0.2)");
+    defer tree.deinit();
+    var tree_result = try queryCycle(gpa, &tree, rt_schema, tree.root[0], Pattern.PPC + 1, null);
+    defer tree_result.deinit();
+    try t_bin.expectEqual(tree_result.haps.len, result.haps.len);
+    for (tree_result.haps, result.haps) |th, bh| try t_bin.expect(th.value.eql(bh.value));
+}
+
+test "queryCycleBinary: pacer env threads under the pattern-locals — shadow rule preserved" {
+    // `(stack (pure (* base 2)) (pure (+ tick 0)))` with an outer env
+    // carrying `base = 3` AND a decoy `tick = 999`: the hap values are
+    // {6, 0} — the outer `base` resolves through the parent scope while
+    // the pattern-local `tick` (the cycle onset, 0 in cycle 0) SHADOWS
+    // the outer decoy — the frozen rule, binary side.
+    const gpa = t_bin.allocator;
+    const payload = try binaryPayload(gpa, "(stack (pure (* base 2)) (pure (+ tick 0)))");
+    defer gpa.free(payload);
+
+    const bindings = [_]RtSjon.Expr.Env.Binding{
+        .{ .name = "base", .value = .{ .number = 3 } },
+        .{ .name = "tick", .value = .{ .number = 999 } },
+    };
+    const outer: RtSjon.Expr.Env = .{ .bindings = &bindings };
+
+    var result = try queryCycleBinary(gpa, rt_schema, payload, 0, &outer);
+    defer result.deinit();
+    try t_bin.expectEqual(@as(usize, 0), result.diagnostics.len);
+    try t_bin.expectEqual(@as(usize, 0), result.dropped);
+    try t_bin.expectEqual(@as(usize, 2), result.haps.len);
+    var saw_six = false;
+    var saw_zero = false;
+    for (result.haps) |h| {
+        if (h.value.eql(.{ .number = 6 })) saw_six = true; // base × 2 through the parent scope
+        if (h.value.eql(.{ .number = 0 })) saw_zero = true; // the SHADOW won, not 999
+    }
+    try t_bin.expect(saw_six);
+    try t_bin.expect(saw_zero);
 }

@@ -15,13 +15,13 @@
 //!
 //!   (a) `@import("sjon")` is legal ONLY inside `RtSjon.zig` — a direct
 //!       module import anywhere else in the closure fails by name.
-//!   (b) `RtSjon.zig` must match the strict alias grammar: exactly the nine
-//!       frozen rows (`pub const X = sjon.X;`, with `plugins.core` nested
-//!       under `pub const plugins = struct { … }` — Zig has no dotted decl
-//!       names) plus the one `const sjon = @import("sjon");` line, and no
-//!       other `sjon` token in any code line (comments are stripped
-//!       before the scan) — closing alias and `@field` laundering at the
-//!       one crossing.
+//!   (b) `RtSjon.zig` must match the strict alias grammar: exactly the ten
+//!       frozen rows (`pub const X = sjon.X;`, with `plugins.core` and
+//!       `plugins.pattern` nested under `pub const plugins = struct { … }`
+//!       — Zig has no dotted decl names) plus the one
+//!       `const sjon = @import("sjon");` line, and no other `sjon` token
+//!       in any code line (comments are stripped before the scan) — closing
+//!       alias and `@field` laundering at the one crossing.
 //!   (c) `.zig` imports resolve against the pacer allowlist (the frozen
 //!       02:234-236 twelve); anything else fails by absence. A relative
 //!       `..` that walks ABOVE the leg root is refused BY NAME — never
@@ -35,7 +35,7 @@
 //! The namespace→file map (`Expr` → `Expr.zig`, `plugins.core` →
 //! `plugins/core.zig`, …) is asserted against `../SJON/src/root.zig`'s
 //! export table on EVERY run, so it cannot drift — `root.zig` is read for
-//! the map but never traversed (it is the kitchen sink). From the nine
+//! the map but never traversed (it is the kitchen sink). From the ten
 //! mapped files the same BFS continues inside the SJON tree under the SJON
 //! allowlist — the true transitive closure, with SJON's own ALLOWED as the
 //! evidence base (`SJON/tools/audit_wasm_imports.zig:84-108`). `Binary.zig`
@@ -45,7 +45,9 @@
 //! same audited `comptime_excluded` mechanism SJON uses — textually present
 //! through `wasm_plugin_invoker.zig`'s comptime-gated import, never linked
 //! on wasm32. A stale entry fails BOTH lists in BOTH directions, exactly as
-//! in SJON's tool.
+//! in SJON's tool. The `plugins/pattern.zig` row is the P4/A2 named,
+//! pre-authorized delta (02:345-353): the runtime schema carries the
+//! pattern plugin for the adopted env-carrying binary pattern query.
 //!
 //! ## Blind spot (acceptable, named)
 //!
@@ -102,7 +104,7 @@ const PACER_ALLOWED = [_]Allowed{
     .{ .path = "Pacm.zig", .why = "the 'PACM' meta reader (std-only)" },
     .{ .path = "EvalCore.zig", .why = "the one engine (tree|binary leaf source)" },
     .{ .path = "ExprTrack.zig", .why = "expr tracks (evalAt / evalAtBinary)" },
-    .{ .path = "PatternTrack.zig", .why = "pattern tracks (tree arm; the binary arm is P4)" },
+    .{ .path = "PatternTrack.zig", .why = "pattern tracks (queryCycle tree arm; queryCycleBinary since P4/A2)" },
     .{ .path = "TrackTable.zig", .why = "the compiled tick-grid table" },
     .{ .path = "TimeMap.zig", .why = "seconds↔tick conversions" },
     .{ .path = "Easing.zig", .why = "easing programs" },
@@ -128,6 +130,10 @@ const SJON_ALLOWED = [_]Allowed{
     // plugins.core row's own file, AND column-0-reached from Schema.zig's
     // test region (SJON/src/Schema.zig:2407). Required by the stale rule.
     .{ .path = "plugins/core.zig", .why = "the core expression vocabulary — the plugins.core row's file" },
+    // The P4/A2 named delta (02:345-353): the plugins.pattern row's own
+    // file — the pattern combinator vocabulary the runtime schema now
+    // carries for the adopted env-carrying binary pattern query.
+    .{ .path = "plugins/pattern.zig", .why = "the pattern combinator vocabulary — the plugins.pattern row's file" },
     .{ .path = "wasm_plugin_invoker.zig", .why = "host-invoke bridge; declarative-only with plugin-exec=false" },
     .{ .path = "PluginValueCodec.zig", .why = "plugin value encoding across the ABI" },
     .{ .path = "PluginRuntime.zig", .why = COMPTIME_NOTE, .comptime_excluded = true },
@@ -146,6 +152,8 @@ const NS_MAP = [_]struct { ns: []const u8, file: []const u8 }{
     .{ .ns = "Plugin", .file = "Plugin.zig" },
     .{ .ns = "trig", .file = "trig.zig" },
     .{ .ns = "plugins.core", .file = "plugins/core.zig" },
+    // The P4/A2 named delta (02:345-353).
+    .{ .ns = "plugins.pattern", .file = "plugins/pattern.zig" },
 };
 
 /// The strict alias grammar (rule b): the only lines of `RtSjon.zig` that
@@ -164,6 +172,9 @@ const RTSJON_ROWS = [_][]const u8{
     "pub const Plugin = sjon.Plugin;",
     "pub const trig = sjon.trig;",
     "pub const core = sjon.plugins.core;",
+    // The P4/A2 named delta (02:345-353): the runtime schema carries the
+    // pattern plugin for the adopted env-carrying binary pattern query.
+    "pub const pattern = sjon.plugins.pattern;",
 };
 const RTSJON_PLUGINS_OPEN = "pub const plugins = struct {";
 
@@ -689,7 +700,7 @@ fn checkWindowGrammar(arena: Allocator, bytes: []const u8) ?GrammarViolation {
 /// Parse SJON root.zig's export table: `pub const X = @import("Y");` rows,
 /// plus the nested `pub const plugins = struct { … }` block (recorded as
 /// `plugins.<name>`). Anything else is ignored — the map assert only ever
-/// looks the nine frozen namespaces up.
+/// looks the ten frozen namespaces up.
 fn parseRootExports(
     arena: Allocator,
     bytes: []const u8,
@@ -893,6 +904,7 @@ test "strict grammar: the real spellings pass; laundering fails by name" {
         "pub const trig = sjon.trig;\n" ++
         "pub const plugins = struct {\n" ++
         "    pub const core = sjon.plugins.core;\n" ++
+        "    pub const pattern = sjon.plugins.pattern;\n" ++
         "};\n";
     try testing.expect(checkWindowGrammar(arena, good) == null);
 
@@ -909,10 +921,14 @@ test "strict grammar: the real spellings pass; laundering fails by name" {
     const field = good ++ "const P = @field(sjon, \"Parser\");\n";
     try testing.expect(checkWindowGrammar(arena, field) != null);
 
-    // A missing row fails the exact-set rule.
+    // A missing row fails the exact-set rule — the P4/A2 pattern row
+    // removed.
     const missing = try std.mem.replaceOwned(u8, arena, good, "pub const trig = sjon.trig;\n", "");
     const v4 = checkWindowGrammar(arena, missing).?;
     try testing.expect(std.mem.indexOf(u8, v4.detail, "trig") != null);
+    const missing_pattern = try std.mem.replaceOwned(u8, arena, good, "    pub const pattern = sjon.plugins.pattern;\n", "");
+    const v5 = checkWindowGrammar(arena, missing_pattern).?;
+    try testing.expect(std.mem.indexOf(u8, v5.detail, "pattern") != null);
 }
 
 test "parseRootExports: flat rows and the nested plugins block" {
@@ -1061,7 +1077,9 @@ test "the REAL tree passes layer 1 (the gate's own green pin inside `zig build t
         std.debug.print("real tree FAIL:\n{s}\n", .{aw.written()});
         return error.TestUnexpectedResult;
     }
-    // The closure sizes are pinned: 12 pacer + 16 SJON.
+    // The closure sizes are pinned: 12 pacer + 17 SJON (the pattern
+    // plugin row's file joined at P4/A2 — the named, pre-authorized
+    // 02:345-353 delta).
     try testing.expectEqual(@as(usize, 12), report.visited_pacer);
-    try testing.expectEqual(@as(usize, 16), report.visited_sjon);
+    try testing.expectEqual(@as(usize, 17), report.visited_sjon);
 }

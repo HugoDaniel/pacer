@@ -9,4 +9,5 @@ pub const Plugin = @import("Plugin.zig");
 pub const trig = @import("trig.zig");
 pub const plugins = struct {
     pub const core = @import("plugins/core.zig");
+    pub const pattern = @import("plugins/pattern.zig");
 };

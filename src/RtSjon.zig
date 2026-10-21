@@ -6,7 +6,7 @@
 //! host, manifest loader, all exported from one file. Traversing that
 //! root would drag the whole write side into the runtime, so the
 //! boundary is fixed HERE: this file holds the closure's only import of
-//! the module, behind a frozen re-export table of exactly the nine
+//! the module, behind a frozen re-export table of exactly the ten
 //! runtime namespaces. Every other runtime-closure file imports
 //! `RtSjon.zig`, never the module.
 //!
@@ -20,8 +20,10 @@
 //! by a test in `src/root.zig`'s frozen-copy family.
 //!
 //! The table is frozen and minimal (the stale-entry rule): every row is
-//! reached by the closure files, and nothing else joins — in particular
-//! `plugins.pattern` waits for P4's binary pattern query. Write-side
+//! reached by the closure files, and nothing else joins. The
+//! `plugins.pattern` row joined 2026-10-21 at P4/A2 — the delivered
+//! env-carrying binary pattern query (`PatternQuery.queryBinaryWithEnv`)
+//! is adopted and the runtime schema carries core ⊕ pattern. Write-side
 //! surfaces (the parser, the binary encoder, document validation, the
 //! host) are reachable in closure files ONLY through indented
 //! test-block imports, never through this window.
@@ -38,4 +40,5 @@ pub const Plugin = sjon.Plugin;
 pub const trig = sjon.trig;
 pub const plugins = struct {
     pub const core = sjon.plugins.core;
+    pub const pattern = sjon.plugins.pattern;
 };

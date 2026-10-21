@@ -9,7 +9,8 @@
 //! `prt_eval(seconds)` per frame and reads the `'PACW'` write buffer
 //! back. Blob formats live in `Pacb` / `PactCodec` / `Writes`; this
 //! file is zone plumbing, the transactional lifecycle, and the C4/C5
-//! load-time work (table materialization + expr dry-runs).
+//! load-time work (table materialization + expr dry-runs, joined since
+//! P4/A2 by the pattern dry-run).
 //!
 //! ## Memory zones
 //!
@@ -76,6 +77,7 @@ const PactCodec = @import("PactCodec.zig");
 const Pacb = @import("Pacb.zig");
 const EvalCore = @import("EvalCore.zig");
 const ExprTrack = @import("ExprTrack.zig");
+const PatternTrack = @import("PatternTrack.zig");
 const TrackTable = @import("TrackTable.zig");
 const Writes = @import("Writes.zig");
 
@@ -142,6 +144,11 @@ const RtScore = struct {
     /// non-expr track) — the binary arm's leaf (C4): the table's
     /// `.expr` node index is the inert `.invalid` sentinel, never read.
     expr_payloads: []?[]const u8,
+    /// Compact pattern payloads, PARALLEL to `table.tracks` (null on
+    /// every non-pattern track) — the binary pattern arm's leaf
+    /// (P4/A2): the table's `.pattern` node index is the inert
+    /// `.invalid` sentinel, never read.
+    pattern_payloads: []?[]const u8,
     evaluator: EvalCore.Evaluator,
 };
 
@@ -177,12 +184,13 @@ fn refusalReason(code: Pacb.RefusalCode) u16 {
     };
 }
 
-/// The binary arm's per-arm schema contract: the frozen core-only
-/// schema — user heads never enter a binary because pack refuses them
-/// (01, decision 8). File-scope so the slice's pointee outlives every
+/// The binary arm's per-arm schema contract: the frozen core ⊕ pattern
+/// aggregate (the pattern row joined at P4/A2 per 02:345-353's named
+/// delta; user heads never enter a binary because pack refuses them —
+/// 01, decision 8). File-scope so the slice's pointee outlives every
 /// evaluator built against it.
-const core_plugins = [_]RtSjon.Plugin.Plugin{RtSjon.plugins.core.plugin};
-const core_only_schema: RtSjon.Schema.Schema = .{ .plugins = &core_plugins };
+const core_plugins = [_]RtSjon.Plugin.Plugin{ RtSjon.plugins.core.plugin, RtSjon.plugins.pattern.plugin };
+const rt_schema: RtSjon.Schema.Schema = .{ .plugins = &core_plugins };
 
 // ---------------------------------------------------------------------------
 // Exports — zone access
@@ -251,17 +259,12 @@ export fn prt_load(pacb_len: u32, targets_len: u32) u32 {
         error.OutOfMemory => return @intFromEnum(LoadStatus.oom),
     };
 
-    // Pattern gate (P4 owner-pending): a blob requiring pattern tracks
-    // is refused before any evaluator exists — the binary arm's pattern
-    // payload slice stays empty by construction.
-    if (score.required_features & Pacb.FEATURE_PATTERN_TRACKS != 0) {
-        score.deinit();
-        load_error = refusalReason(.unsupported_features);
-        return @intFromEnum(LoadStatus.refused);
-    }
     // Registry gate: the host join must BE the pack-time join — the
     // canonical-'PACT' byte equality is the one spelling of mismatch
-    // (review O-2).
+    // (review O-2). Pattern-capable blobs load since P4/A2: the
+    // `required_features` bit0 gate is GONE — the load-time pattern
+    // dry-run (`dryRunPatterns`) is the pattern class's acceptance
+    // gate now, the text path's compile dry-run doctrine.
     if (!Pacb.canonicalPactEquals(host_blob, score.regs)) {
         score.deinit();
         load_error = refusalReason(.registry_mismatch);
@@ -292,10 +295,21 @@ export fn prt_load(pacb_len: u32, targets_len: u32) u32 {
         load_error = DRY_RUN_FAILED;
         return @intFromEnum(LoadStatus.refused);
     }
+    const pattern_dry_ok = dryRunPatterns(shell) catch {
+        shell.score.deinit();
+        gpa.destroy(shell);
+        return @intFromEnum(LoadStatus.oom);
+    };
+    if (!pattern_dry_ok) {
+        shell.score.deinit();
+        gpa.destroy(shell);
+        load_error = DRY_RUN_FAILED;
+        return @intFromEnum(LoadStatus.refused);
+    }
     shell.evaluator = EvalCore.Evaluator.initContext(shell.score.arena.allocator(), .{
         .table = &shell.table,
-        .source = .{ .binary = .{ .expr = shell.expr_payloads } },
-        .schema = core_only_schema,
+        .source = .{ .binary = .{ .expr = shell.expr_payloads, .pattern = shell.pattern_payloads } },
+        .schema = rt_schema,
     }) catch {
         shell.score.deinit();
         gpa.destroy(shell);
@@ -315,7 +329,8 @@ export fn prt_loadError() u32 {
 
 /// Entry-side refusal reason (02:127-131's ordered name): a dry-tick
 /// evaluation failure — the decoder has no such class because it never
-/// evaluates. Arises here only.
+/// evaluates. Arises here only: the expr dry-run (C5) and, since
+/// P4/A2, the pattern dry-run.
 const DRY_RUN_FAILED: u16 = 11;
 
 /// C4 materialization: build the runtime table from the decoded rows
@@ -329,16 +344,22 @@ fn materialize(shell: *RtScore) bool {
 
     const tracks = a.alloc(TrackTable.Track, shell.score.tracks.len) catch return false;
     const expr_payloads = a.alloc(?[]const u8, shell.score.tracks.len) catch return false;
-    for (shell.score.tracks, tracks, expr_payloads) |dt, *track, *pl| {
+    const pattern_payloads = a.alloc(?[]const u8, shell.score.tracks.len) catch return false;
+    for (shell.score.tracks, tracks, expr_payloads, pattern_payloads) |dt, *track, *el, *pl| {
+        el.* = null;
         pl.* = null;
         const source: TrackTable.Source = switch (dt.source) {
             .keys => |ks| .{ .keys = .{ .start = ks.start, .len = ks.len } },
             .trigger => |trig| .{ .trigger = trig },
             .expr => |payload| blk: {
-                pl.* = payload;
+                el.* = payload;
                 break :blk .{ .expr = .invalid };
             },
             .pattern => |payload| blk: {
+                // The pattern payload rides ITS OWN parallel slice
+                // (P4/A2) — never the expr slice; the arms read
+                // disjoint slots and a mixed store would hand a
+                // pattern payload to the expr leaf.
                 pl.* = payload;
                 break :blk .{ .pattern = .invalid };
             },
@@ -390,6 +411,7 @@ fn materialize(shell: *RtScore) bool {
     @memset(key_spans, .{ .start = 0, .end = 0 });
 
     shell.expr_payloads = expr_payloads;
+    shell.pattern_payloads = pattern_payloads;
     shell.table = .{
         .arena = shell.table_arena,
         .transport = shell.score.transport,
@@ -436,13 +458,73 @@ fn dryRunExprs(shell: *RtScore) error{OutOfMemory}!bool {
         _ = ExprTrack.evalAtBinary(
             fba.allocator(),
             pl.?, // the parallel-slice invariant: an expr track carries its payload
-            core_only_schema,
+            rt_schema,
             &table.transport,
             bindings,
             dry_tick,
             scene,
             track.ncomp,
         ) catch return false;
+    }
+    return true;
+}
+
+/// P4/A2: dry-run every pattern track at its own dry tick — the scene's
+/// start tick when scened, else 0 (`Compile.dryRunPattern`'s rule) —
+/// through the SAME `PatternTrack.queryCycleBinary` the frame path will
+/// use, pacer's env bound exactly as the text path's compile dry-run
+/// binds it (`ExprTrack.buildEnv`: control ids with their document
+/// `:value`s, the time names at the dry tick — the pattern-locals
+/// shadow them), under the frame's own fixed budget: an FBA over
+/// `PatternTrack.SCRATCH_BYTES`, so an evaluation's `OutOfMemory` can
+/// only mean the budget — a REFUSAL (reason 11, the `Compile` dry-run
+/// doctrine), never a fake OOM. A genuine allocation failure of the
+/// scratch itself is the real `error.OutOfMemory` (status 3).
+///
+/// Acceptance mirrors the text dry-run's gates so the two paths cannot
+/// drift: the scalar-target rule, no engine diagnostics, no dropped
+/// haps, and every hap in the queried cycle satisfying the numeric
+/// result contract. False = refusal (reason 11).
+fn dryRunPatterns(shell: *RtScore) error{OutOfMemory}!bool {
+    const table = &shell.table;
+    var any_pattern = false;
+    for (table.tracks) |track| {
+        if (track.source == .pattern) any_pattern = true;
+    }
+    if (!any_pattern) return true;
+    // Lives in the score's arena — freed by `score.deinit()`, the one
+    // free; never separately.
+    const scratch = try shell.score.arena.allocator().alloc(u8, PatternTrack.SCRATCH_BYTES);
+
+    var bindings_buf: [TrackTable.MAX_CONTROLS]ExprTrack.ControlBinding = undefined;
+    for (table.controls, 0..) |control, i| bindings_buf[i] = ExprTrack.ControlBinding.fromControl(control);
+    const bindings = bindings_buf[0..table.controls.len];
+
+    for (table.tracks, shell.pattern_payloads) |track, pl| {
+        if (track.source != .pattern) continue;
+        // `PatValue` has no vector variant: a pattern can only ever
+        // drive a scalar target this slice — reject the statically
+        // impossible pairing regardless of the pattern's content (the
+        // text dry-run's first gate).
+        if (track.ncomp != 1) return false;
+        const scene: ?TrackTable.Scene = if (track.scene == TrackTable.NO_SCENE) null else table.scenes[track.scene];
+        const dry_tick: TrackTable.Tick = if (scene) |s| s.start_tick else 0;
+        var env_storage: ExprTrack.EnvStorage = undefined;
+        const env = ExprTrack.buildEnv(&env_storage, &table.transport, bindings, dry_tick, scene);
+        var fba = std.heap.FixedBufferAllocator.init(scratch);
+        var result = PatternTrack.queryCycleBinary(
+            fba.allocator(),
+            rt_schema,
+            pl.?, // the parallel-slice invariant: a pattern track carries its payload
+            dry_tick,
+            env,
+        ) catch return false;
+        defer result.deinit();
+        if (result.diagnostics.len > 0) return false;
+        if (result.dropped > 0) return false;
+        for (result.haps) |hap| {
+            if (PatternTrack.coerce(hap.value) == null) return false;
+        }
     }
     return true;
 }
@@ -611,12 +693,18 @@ const Oracle = struct {
 };
 
 fn compileOracle(a: std.mem.Allocator, src: [:0]const u8) !*Oracle {
+    return compileOracleT(a, src, &.{});
+}
+
+/// `compileOracle` over a NON-empty host join (the corpus cases' shape —
+/// docs that declare no targets take them from `times.sjon`).
+fn compileOracleT(a: std.mem.Allocator, src: [:0]const u8, targets: anytype) !*Oracle {
     const Compile = @import("Compile.zig");
     const Eval = @import("Eval.zig");
     const test_support = @import("test_support.zig");
     const oracle = try a.create(Oracle);
     errdefer a.destroy(oracle);
-    oracle.result = try Compile.compile(a, test_support.schema(), src, &.{});
+    oracle.result = try Compile.compile(a, test_support.schema(), src, targets);
     errdefer oracle.result.deinit();
     if (!oracle.result.ok()) return error.FixtureCompileFailed;
     oracle.evaluator = try Eval.Evaluator.init(a, &oracle.result);
@@ -974,7 +1062,7 @@ test "rt_entry (h): scened-expr acceptance parity (C5) — (sqrt scene-beat) loa
     const scratch = try t.allocator.alloc(u8, ExprTrack.SCRATCH_BYTES);
     defer t.allocator.free(scratch);
     var fba = std.heap.FixedBufferAllocator.init(scratch);
-    if (ExprTrack.evalAtBinary(fba.allocator(), payload.?, core_only_schema, &score.transport, &.{}, 0, null, 1)) |_| {
+    if (ExprTrack.evalAtBinary(fba.allocator(), payload.?, rt_schema, &score.transport, &.{}, 0, null, 1)) |_| {
         return error.TestUnexpectedResult; // flat-0 must NOT evaluate
     } else |_| {}
 }
@@ -1351,6 +1439,285 @@ test "rt_entry (m): a flag-on EMPTY count-0 tail loads through the production lo
     try t.expectEqual(@as(u32, 0), status);
     // The new score is live: a nonempty frame at tick 7.
     try t.expect(prt_evalTicks(7) > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Group 3 — A2: the binary pattern runtime path (real loader, producer
+// bypass fixtures)
+// ---------------------------------------------------------------------------
+
+/// A2 test-side producer bypass: `Compile` + `PacbEncode.encode` WITHOUT
+/// `preflight`. This is NOT a production backdoor: `pacer pack` (the CLI
+/// verb) runs preflight and still refuses `:pattern` scores — that
+/// interim refusal is A3+A4's scope and stays pinned by ParityTests.
+/// `encode`'s T3.1 uniform path already serializes pattern payloads
+/// structurally (it sets `required_features` bit0 and emits each
+/// `:pattern` body as a compact single-root payload), so the fixtures
+/// below reach the REAL runtime path (decode → registry gate →
+/// materialize → dry-run → eval) independently of pack support, exactly
+/// the "lower-level producer bypass" fixture class A2 calls for. The
+/// encode precondition (v1-legal sizes, the caps preflight measures) is
+/// upheld by fixture scale — every payload is orders of magnitude under
+/// the per-payload and 'PAYL' caps.
+fn packPatternForTest(a: std.mem.Allocator, src: [:0]const u8, targets: anytype) ![]u8 {
+    const Compile = @import("Compile.zig");
+    const PacbEncode = @import("PacbEncode.zig");
+    const test_support = @import("test_support.zig");
+    var r = try Compile.compile(a, test_support.schema(), src, targets);
+    defer r.deinit();
+    if (!r.ok()) return error.FixtureCompileFailed;
+    return PacbEncode.encode(a, &r, targets);
+}
+
+/// `loadPacB` over a NON-empty host join (test (d)'s shape): the blob's
+/// canonical 'REGS' must equal the canonical encoding of `targets`.
+fn loadPacBT(pacb: []const u8, targets: []const PactCodec.Target) u32 {
+    @memcpy(pacb_buffer[0..pacb.len], pacb);
+    const blob = PactCodec.encodeTargets(targets, &targets_buffer) catch unreachable;
+    return prt_load(@intCast(pacb.len), @intCast(blob.len));
+}
+
+test "rt_entry (n): a pattern score loads and evaluates through the production loader" {
+    // The named acceptance fixture (handoff :149-153): the
+    // `corpus/pattern-env` document — beat-tracking across the bar wrap
+    // (`(pure (* beat 2))`), the `tick` shadow (the frame-time OUTER
+    // binding must lose to the pattern-local), and a document control
+    // read through the env's parent scope. The successful LOAD itself is
+    // a dry-run proof: the load-time pattern dry-run binds pacer's env
+    // exactly as the text path does — had `beat`/`tick`/`sway` been
+    // unbound there, the static leaf check would refuse (reason 11) and
+    // this load could not succeed.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sjon = @import("sjon");
+    const root = @import("build_options").repo_root;
+    const Compile = @import("Compile.zig");
+
+    const src = try sjon.CappedRead.readFileZ(t.io, try std.fmt.allocPrint(a, "{s}/corpus/pattern-env/doc.sjon", .{root}), a, 1 << 20);
+    // The corpus case's own host join (times.sjon): clock/onset/swayx2 on
+    // registry 0 — the doc declares no targets, the corpus supplies them.
+    // A drift between this list and times.sjon fails loudly at compile.
+    const tg = [_]Compile.Target{
+        .{ .name = "clock", .ncomp = 1, .registry = 0 },
+        .{ .name = "onset", .ncomp = 1, .registry = 0 },
+        .{ .name = "swayx2", .ncomp = 1, .registry = 0 },
+    };
+    var oracle = try compileOracleT(a, src, &tg);
+    defer oracle.deinit(a);
+    const pacb = try packPatternForTest(a, src, &tg);
+
+    // The A2 gate: pre-lift this load is status 1, reason 2
+    // (unsupported_features). Post-lift the whole path must arm.
+    try t.expectEqual(@as(u32, 0), loadPacBT(pacb, &tg));
+    defer unload();
+
+    // Explicit non-vacuous values (never oracle-only): document order is
+    // clock, onset, swayx2 — three whole-cycle haps, one write each.
+    const PPC = RtSjon.Pattern.PPC;
+    {
+        const frame = rtFrame(0);
+        try t.expectEqual(@as(usize, 3), frame.len);
+        try t.expectEqual(@as(f32, 0), frame[0].value[0]); // (* beat 2) @ beat 0
+        try t.expectEqual(@as(f32, 0), frame[1].value[0]); // tick shadow: cycle-0 onset, NOT frame tick
+        try t.expectEqual(@as(f32, 0.5), frame[2].value[0]); // sway 0.25 × 2 through the parent scope
+    }
+    // The shadow decoy at the boundary: frame tick PPC/2 carries an
+    // OUTER `tick` of PPC/2, but the pattern-local wins — the onset hap
+    // still writes 0.0. And `beat` follows the clock (PPC/2 = two beats
+    // at [4 4], ×2 = 4.0).
+    {
+        const frame = rtFrame(PPC / 2);
+        try t.expectEqual(@as(usize, 3), frame.len);
+        try t.expectEqual(@as(f32, 4), frame[0].value[0]);
+        try t.expectEqual(@as(f32, 0), frame[1].value[0]);
+    }
+    // Byte-parity with the tree arm across the wrap and on
+    // nonmonotonic revisits — the oracle re-derives every frame.
+    const sweep = [_]i64{ 0, 1, PPC / 2, PPC - 1, PPC, PPC + PPC / 4, 2 * PPC, 3 * PPC + PPC / 2, 5 };
+    for (sweep) |tick| {
+        const want = oracle.evaluator.evalTicks(tick);
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(want), std.mem.sliceAsBytes(rtFrame(tick)));
+    }
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+
+    // Live controls change BETWEEN frames on both arms identically:
+    // hold sway at 0.75, the hap value follows on the next frame.
+    try t.expectEqual(@as(u32, 0), prt_setControl(0, 0.75, 0, 0, 0));
+    try t.expect(oracle.evaluator.setControl(0, .{ 0.75, 0, 0, 0 }));
+    for ([_]i64{ 0, PPC + PPC / 2 }) |tick| {
+        const want = oracle.evaluator.evalTicks(tick);
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(want), std.mem.sliceAsBytes(rtFrame(tick)));
+    }
+    try t.expectEqual(@as(f32, 1.5), rtFrame(0)[2].value[0]); // 0.75 × 2 — the held value reached the hap
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+
+    // Retained-caller-bytes safety: clobber the whole input zone. The
+    // live score owns every byte it evaluates (payload slices point
+    // into the decoded score's arena, never the zone), so frames are
+    // unchanged.
+    @memset(&pacb_buffer, 0);
+    try t.expectEqual(@as(f32, 1.5), rtFrame(0)[2].value[0]);
+}
+
+test "rt_entry (o): an empty (silence) pattern loads light; the keys track is unaffected" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const src =
+        \\(target :name glow :arity 1 :registry 0)
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(track :target glow (key :at 0b :value 0.2) (key :at 4b :value 0.8 :ease in-out-quad))
+        \\(track :target glow :pattern (silence))
+        \\
+    ;
+    const pacb = try packPatternForTest(a, src, &.{});
+    try t.expectEqual(@as(u32, 0), loadPacB(pacb));
+    defer unload();
+
+    // The silence slot is a GAP, not a failure: only the keys track
+    // writes, byte-equal to the tree arm, and the drop counter stays 0 —
+    // a plain silence never counts as a failure (same tree semantics).
+    var oracle = try compileOracle(a, src);
+    defer oracle.deinit(a);
+    for ([_]i64{ 0, 96, 191, 192, 384, 900 }) |tick| {
+        const want = oracle.evaluator.evalTicks(tick);
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(want), std.mem.sliceAsBytes(rtFrame(tick)));
+        try t.expectEqual(@as(usize, 1), rtFrame(tick).len); // the key write only
+    }
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+}
+
+test "rt_entry (p): a pattern whose dry-run cycle exceeds the frame budget refuses reason 11, old score live" {
+    // The `corpus/pattern-budget` shape (the text path's
+    // `pattern_eval_failed` load diagnostic): a dry-run cycle that
+    // out-allocates `PatternTrack.SCRATCH_BYTES` must refuse at LOAD —
+    // status 1, the reason-11 reserve, deterministically distinct from
+    // real OOM (status 3) and from decode refusal (reason 8) — and the
+    // refusal is transactional. The same document text is a COMPILE
+    // refusal (asserted below — same budget, same tree: the text
+    // dry-run fronts the identical 1 MiB), so the blob is produced by
+    // hand-encoding the `(fast 8000 (pure 1))` payload and splicing it
+    // over a decode-valid single-payload blob — the producer class that
+    // bypasses the compile gate the runtime dry-run must mirror.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sjon = @import("sjon");
+
+    const budget_src =
+        \\(target :name radius :arity 1 :registry 0)
+        \\(transport :bpm 120)
+        \\(track :target radius :pattern (fast 8000 (pure 1)))
+        \\
+    ;
+    {
+        const Compile = @import("Compile.zig");
+        const test_support = @import("test_support.zig");
+        var r = try Compile.compile(a, test_support.schema(), budget_src, &.{});
+        defer r.deinit();
+        try t.expect(!r.ok()); // the text path refuses the same score
+    }
+
+    // Hand-encode the budget pattern (parse-only — no compile gate) and
+    // splice it over a packed silence-pattern blob (single payload, so
+    // the surgeons apply).
+    var tree = try sjon.parse(a, "(fast 8000 (pure 1))");
+    defer tree.deinit();
+    const body = try sjon.Binary.toBinary(a, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer body.deinit();
+
+    const base_src =
+        \\(target :name radius :arity 1 :registry 0)
+        \\(transport :bpm 120)
+        \\(track :target radius :pattern (silence))
+        \\
+    ;
+    const pacb = try packPatternForTest(a, base_src, &.{});
+    const budget_blob = try splicePayloadRecord(a, pacb, body.data);
+
+    // A live old score with held state, as in (a)/(l).
+    const live_src =
+        \\(target :name glow :arity 1 :registry 0)
+        \\(target :name level :arity 1 :registry 1)
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(control :id depth :target level :min 0 :max 1 :value 0.25)
+        \\(track :target glow (key :at 0b :value 0.2) (key :at 4b :value 0.8 :ease in-out-quad))
+        \\(track :target level :expr (* depth beat))
+        \\
+    ;
+    const live_blob = try packForTest(a, live_src);
+    try t.expectEqual(@as(u32, 0), loadPacB(live_blob));
+    defer unload();
+    try t.expectEqual(@as(u32, 0), prt_setControl(0, 0.9, 0, 0, 0));
+    try t.expectEqual(@as(u32, 0), prt_setBpm(240));
+    const frame_before = try captureFrame(a, 0.3);
+    const ticks_before = try captureTicks(a, 7);
+    const meta_ptr_before = prt_metaPtr();
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+
+    try t.expectEqual(@as(u32, 1), loadPacB(budget_blob));
+    try t.expectEqual(@as(u32, 11), prt_loadError()); // dry_run_failed — the reserve, exact current behavior
+    // The OLD score is still live: byte-identical frames (held 0.9 and
+    // the ×2 tempo inside them), meta pointer unmoved, counter intact.
+    try t.expectEqualSlices(u8, frame_before, try captureFrame(a, 0.3));
+    try t.expectEqualSlices(u8, ticks_before, try captureTicks(a, 7));
+    try t.expectEqual(meta_ptr_before, prt_metaPtr());
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+}
+
+test "rt_entry (q): a pattern leaf that fails its cycle-0 dry-run refuses reason 11, not reason 8" {
+    // The (e) doctrine, pattern twin: decode is structural — a payload
+    // whose `(pure …)` leaf carries an UNBOUND name is decode-valid
+    // (reason 8 cannot see it) and must be caught by the entry-side
+    // dry-run instead. The text path refuses the same score at compile
+    // (`pattern_eval_failed`), so the bypass producer cannot emit it:
+    // the body is spliced by hand over a packed silence-pattern blob
+    // (the single-payload surgeons are source-agnostic).
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sjon = @import("sjon");
+    const Compile = @import("Compile.zig");
+    const test_support = @import("test_support.zig");
+
+    const base_src =
+        \\(target :name glow :arity 1 :registry 0)
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target glow :pattern (silence))
+        \\
+    ;
+    const pacb = try packPatternForTest(a, base_src, &.{});
+
+    // Compile PROVES the unbound-name score is a compile refusal (the
+    // text path's acceptance boundary this dry-run mirrors).
+    {
+        var r = try Compile.compile(a, test_support.schema(),
+            \\(target :name glow :arity 1 :registry 0)
+            \\(transport :bpm 120 :meter [4 4])
+            \\(track :target glow :pattern (pure nosuchname))
+            \\
+        , &.{});
+        defer r.deinit();
+        try t.expect(!r.ok());
+    }
+
+    var tree = try sjon.parse(a, "(pure nosuchname)");
+    defer tree.deinit();
+    const body = try sjon.Binary.toBinary(a, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer body.deinit();
+    const mutated = try splicePayloadRecord(a, pacb, body.data);
+
+    // A live old score, then the refusal: exact reason 11 (not the
+    // decode class 8), transactional.
+    const fx = try readFixture(a, "expr-keys");
+    try t.expectEqual(@as(u32, 0), loadPacB(fx.pacb));
+    defer unload();
+    const before = try captureTicks(a, 96);
+    try t.expectEqual(@as(u32, 1), loadPacB(mutated));
+    try t.expectEqual(@as(u32, 11), prt_loadError()); // dry_run_failed
+    try t.expectEqualSlices(u8, before, try captureTicks(a, 96));
 }
 
 test "rt_entry: ownership — repeated reloads, eval-after-reload, no stale pointers" {

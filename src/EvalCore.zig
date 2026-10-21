@@ -14,13 +14,13 @@
 //!     against the borrowed validated tree with the document's
 //!     user-plugin aggregate schema;
 //!   * binary — the runtime's path (02): parallel compact-payload
-//!     slices carry each `.expr` track's decode-validated single-root
-//!     IR, evaluated by `ExprTrack.evalAtBinary` (the T1.1 twin: same
-//!     env, same coerce, bit-equal by test pin). The table's `.expr`
-//!     node index is an INERT sentinel on this arm — never read (C4).
-//!     Pattern payloads stay empty until P4 (load refuses
-//!     `required_features` bit0 first); the pattern arm asserts the
-//!     track class absent rather than silently evaluating silence.
+//!     slices carry each `.expr`/`.pattern` track's decode-validated
+//!     single-root IR, evaluated by `ExprTrack.evalAtBinary` (the T1.1
+//!     twin: same env, same coerce, bit-equal by test pin) and — since
+//!     P4/A2 (2026-10-21) — `PatternTrack.queryCycleBinary` (the
+//!     delivered env-carrying binary query: same window, same env, same
+//!     sample/coerce). The table's `.expr`/`.pattern` node indices are
+//!     INERT sentinels on this arm — never read (C4).
 //!
 //! Per-arm schema contract: the tree arm's schema is bound by the
 //! context venter (the compile result's core ⊕ user-plugins aggregate
@@ -118,8 +118,10 @@ pub const LeafSource = union(enum) {
         /// `table.tracks`: the `.expr` track's payload at its track
         /// position, null on every other track.
         expr: []const ?[]const u8,
-        /// Pattern payloads — empty until P4 (load refuses
-        /// `required_features` bit0 before any evaluator exists).
+        /// Compact single-root pattern payloads, PARALLEL to
+        /// `table.tracks` (the expr slice's P4 twin): the `.pattern`
+        /// track's payload at its track position, null on every other
+        /// track. Same length as `expr` — one slot per track either way.
         pattern: []const ?[]const u8 = &.{},
     },
 };
@@ -135,9 +137,10 @@ pub const Context = struct {
     source: LeafSource,
     /// Per-arm contract: tree arm — the aggregate the document
     /// validated under (core ⊕ its user plugins; user heads are public
-    /// text-path semantics and must keep resolving). Binary arm — the
-    /// frozen core-only schema (+ pattern at P4); user heads never
-    /// enter a binary because pack refuses them (01, decision 8).
+    /// text-path semantics and must keep resolving). Binary arm —
+    /// the frozen core ⊕ pattern aggregate (the pattern row joined at
+    /// P4/A2); user heads never enter a binary because pack refuses
+    /// them (01, decision 8).
     schema: RtSjon.Schema.Schema,
 };
 
@@ -253,10 +256,14 @@ pub const Evaluator = struct {
         // count is the lane ceiling — the invariant MAX_FRAME_ENTRIES
         // rests on.
         std.debug.assert(table.transport.emit.len <= @typeInfo(TrackTable.EmitName).@"enum".fields.len);
-        // The binary arm's expr payloads are indexed by track position
-        // (C4) — the parallel-slice invariant the arm rests on.
+        // The binary arm's expr AND pattern payloads are indexed by
+        // track position (C4) — the parallel-slice invariant both arms
+        // rest on.
         switch (ctx.source) {
-            .binary => |bin| std.debug.assert(bin.expr.len == table.tracks.len),
+            .binary => |bin| {
+                std.debug.assert(bin.expr.len == table.tracks.len);
+                std.debug.assert(bin.pattern.len == table.tracks.len);
+            },
             .tree => {},
         }
         var arena = std.heap.ArenaAllocator.init(gpa);
@@ -493,7 +500,7 @@ pub const Evaluator = struct {
                         self.push(&n, entry);
                 },
                 .pattern => |node| {
-                    if (self.evalPatternTrack(track, node, t, scene)) |entry|
+                    if (self.evalPatternTrack(track, node, i, t, scene)) |entry|
                         self.push(&n, entry);
                 },
             }
@@ -633,34 +640,48 @@ pub const Evaluator = struct {
         self: *Evaluator,
         track: *const TrackTable.Track,
         node: RtSjon.Ast.NodeIndex,
+        track_index: usize,
         t: Tick,
         scene: ?TrackTable.Scene,
     ) ?Writes.Entry {
         std.debug.assert(track.ncomp >= 1);
         std.debug.assert(track.ncomp <= 4);
-        const tree = switch (self.source) {
-            .tree => |tree| tree,
-            .binary => {
-                // `node` is inert on this arm by CONTROL FLOW — the arm
-                // never falls through to the query below (C4's
-                // never-read rule, held by the trap, not a discard).
-                // Pre-P4 the binary arm never carries a pattern track:
-                // load refuses `required_features` bit0 before any
-                // evaluator exists (02 P2), and the `pattern` payload
-                // slice stays empty. Reaching this arm means a
-                // table/context mismatch — assert the track class absent
-                // rather than silently evaluating silence (never treat a
-                // binary pattern as valid empty features). P4 replaces
-                // this arm with the binary pattern query.
-                unreachable;
-            },
-        };
         var fba = std.heap.FixedBufferAllocator.init(self.scratch);
         var env_storage: ExprTrack.EnvStorage = undefined;
         const env = ExprTrack.buildEnv(&env_storage, &self.transport, self.ctl_bindings, t, scene);
-        var result = PatternTrack.queryCycle(fba.allocator(), tree, self.schema, node, t, env) catch {
-            self.expr_failures += 1;
-            return null;
+        var result = switch (self.source) {
+            .tree => |tree| blk: {
+                // C4 guard (R-O2): the tree arm dereferences the track's
+                // source node — a real index, never the inert sentinel a
+                // binary-materialized table would carry.
+                std.debug.assert(node != .invalid);
+                break :blk PatternTrack.queryCycle(fba.allocator(), tree, self.schema, node, t, env) catch {
+                    self.expr_failures += 1;
+                    return null;
+                };
+            },
+            .binary => |bin| blk: {
+                // P4/A2: the parallel payload slice is the leaf — the
+                // binary parallel of the tree arm's node, through the
+                // SAME shared window/sample/coerce helpers (no second
+                // interpreter). The env is built identically (transport
+                // clock + live control values, scene-locals when
+                // scened), so the shadow rule and the hap semantics
+                // cannot drift from the text path.
+                const payload = bin.pattern[track_index] orelse {
+                    // Parallel-slice invariant: a `.pattern` track
+                    // carries its payload. A missing one is a
+                    // context-construction bug — the same
+                    // omit-and-count as any leaf failure, never a
+                    // silent empty write.
+                    self.expr_failures += 1;
+                    return null;
+                };
+                break :blk PatternTrack.queryCycleBinary(fba.allocator(), self.schema, payload, t, env) catch {
+                    self.expr_failures += 1;
+                    return null;
+                };
+            },
         };
         defer result.deinit();
         if (PatternTrack.sampleAt(result.haps, t)) |pv| {
@@ -846,9 +867,10 @@ fn compactPayloadFor(a: std.mem.Allocator, tree: *const RtSjon.Ast.Tree, node: R
     return a.dupe(u8, bin.data);
 }
 
-/// The core-only schema — the binary arm's frozen aggregate.
-const core_plugins = [_]RtSjon.Plugin.Plugin{RtSjon.plugins.core.plugin};
-const core_only_schema: RtSjon.Schema.Schema = .{ .plugins = &core_plugins };
+/// The binary arm's frozen aggregate — core ⊕ pattern (the pattern row
+/// joined at P4/A2).
+const core_plugins = [_]RtSjon.Plugin.Plugin{ RtSjon.plugins.core.plugin, RtSjon.plugins.pattern.plugin };
+const binary_schema: RtSjon.Schema.Schema = .{ .plugins = &core_plugins };
 
 test "EvalCore: initContext evaluates a binary-arm context bit-equal to the facade path" {
     const Compile = @import("Compile.zig");
@@ -867,6 +889,7 @@ test "EvalCore: initContext evaluates a binary-arm context bit-equal to the faca
     const payload = try compactPayloadFor(t_.allocator, &r.validated.result.tree, table.tracks[0].source.expr);
     defer t_.allocator.free(payload);
     const payloads = [_]?[]const u8{payload};
+    const pattern_nulls = [_]?[]const u8{null};
 
     // The tree arm through the PRESERVED public spelling (the facade
     // alias — pins it against this file's typed spelling).
@@ -875,8 +898,8 @@ test "EvalCore: initContext evaluates a binary-arm context bit-equal to the faca
     // The binary arm through the runtime's typed spelling.
     var bin_ev = try Evaluator.initContext(t_.allocator, .{
         .table = table,
-        .source = .{ .binary = .{ .expr = &payloads } },
-        .schema = core_only_schema,
+        .source = .{ .binary = .{ .expr = &payloads, .pattern = &pattern_nulls } },
+        .schema = binary_schema,
     });
     defer bin_ev.deinit();
 
@@ -929,10 +952,13 @@ test "EvalCore: binary arm ≡ tree arm over one table — tick sweep, held cont
             else => null,
         };
     }
+    const pattern_nulls = try t_.allocator.alloc(?[]const u8, table.tracks.len);
+    defer t_.allocator.free(pattern_nulls);
+    @memset(pattern_nulls, null);
     const ctx: Context = .{
         .table = table,
-        .source = .{ .binary = .{ .expr = payloads } },
-        .schema = core_only_schema,
+        .source = .{ .binary = .{ .expr = payloads, .pattern = pattern_nulls } },
+        .schema = binary_schema,
     };
 
     // Tree arm — the PRESERVED public spelling, through the facade
@@ -1023,14 +1049,15 @@ test "EvalCore: binary arm ≡ tree arm over one table — tick sweep, held cont
     try t_.expectEqual(@as(u64, 0), tree_ev.expr_failures);
 }
 
-test "EvalCore: per-arm schema — the tree arm carries the document's user plugins, the binary arm is core-only" {
+test "EvalCore: per-arm schema — the tree arm carries the document's user plugins, the binary arm the frozen core⊕pattern aggregate" {
     const Compile = @import("Compile.zig");
     const Eval = @import("Eval.zig");
     const test_support = @import("test_support.zig");
     // A user plugin REDECLARING a core name (`sin`): through the
     // compile result's eval_schema (core ⊕ user) the bare head is
     // AMBIGUOUS, so the tree arm's taken branch fails — omit + count —
-    // while a core-only schema would resolve core's sin and WRITE. The
+    // while the binary arm's frozen core⊕pattern aggregate would
+    // resolve core's sin and WRITE. The
     // dry-run at t=0 takes the else branch, so this score compiles
     // clean (the pack-preflight I1/G11 vocabulary, minus the pack).
     const tg = [_]Compile.Target{.{ .name = "x", .ncomp = 1 }};
@@ -1057,16 +1084,17 @@ test "EvalCore: per-arm schema — the tree arm carries the document's user plug
     try t_.expectEqual(@as(usize, 0), tree_ev.evalTicks(t_taken).len);
     try t_.expectEqual(@as(u64, 1), tree_ev.expr_failures);
 
-    // Binary arm over the SAME table, core-only schema: core's sin
+    // Binary arm over the SAME table, the frozen aggregate: core's sin
     // resolves — the write lands (the per-arm contract is the point,
     // not the value; the kernel is SJON's own).
     const payload = try compactPayloadFor(t_.allocator, &r.validated.result.tree, table.tracks[0].source.expr);
     defer t_.allocator.free(payload);
     const payloads = [_]?[]const u8{payload};
+    const pattern_nulls = [_]?[]const u8{null};
     var bin_ev = try Evaluator.initContext(t_.allocator, .{
         .table = table,
-        .source = .{ .binary = .{ .expr = &payloads } },
-        .schema = core_only_schema,
+        .source = .{ .binary = .{ .expr = &payloads, .pattern = &pattern_nulls } },
+        .schema = binary_schema,
     });
     defer bin_ev.deinit();
     const at_zero = bin_ev.evalTicks(0);
@@ -1076,4 +1104,82 @@ test "EvalCore: per-arm schema — the tree arm carries the document's user plug
     try t_.expectEqual(@as(usize, 1), at_taken.len);
     try t_.expectApproxEqAbs(@as(f32, 0.8414710), at_taken[0].value[0], 1e-5); // sin(1)
     try t_.expectEqual(@as(u64, 0), bin_ev.expr_failures);
+}
+
+test "EvalCore: binary pattern arm ≡ tree pattern arm — env, shadow, dropped counting" {
+    // P4/A2: the `.pattern` arm over a binary LeafSource evaluates
+    // through `queryCycleBinary` with the SAME buildEnv scope as the
+    // tree arm — byte-equal frames over a control-reading, shadow-using
+    // pattern score, and the same omit-and-count on a dropped hap.
+    const Compile = @import("Compile.zig");
+    const Eval = @import("Eval.zig");
+    const test_support = @import("test_support.zig");
+    const tg = [_]Compile.Target{
+        .{ .name = "clock", .ncomp = 1 },
+        .{ .name = "onset", .ncomp = 1 },
+        .{ .name = "swayx2", .ncomp = 1 },
+        .{ .name = "hole", .ncomp = 1 },
+    };
+    var r = try Compile.compile(t_.allocator, test_support.schema(),
+        \\(transport :bpm 120 :meter [4 4])
+        \\(control :id sway :value 0.25)
+        \\(track :target clock :pattern (pure (* beat 2)))
+        \\(track :target onset :pattern (pure (+ tick 0)))
+        \\(track :target swayx2 :pattern (pure (* sway 2)))
+        \\(track :target hole :pattern (pure (/ 1 (- 1 cycle))))
+        \\
+    , &tg);
+    defer r.deinit();
+    for (r.diagnostics) |d| std.debug.print("unexpected: {s} {s}\n", .{ @tagName(d.code), d.message });
+    try t_.expect(r.ok());
+
+    const table = &r.table.?;
+    const tree = &r.validated.result.tree;
+    // Binary payloads, parallel to table.tracks (C4): each `.pattern`
+    // track's compact clone at its position, null elsewhere.
+    const expr_nulls = try t_.allocator.alloc(?[]const u8, table.tracks.len);
+    defer t_.allocator.free(expr_nulls);
+    @memset(expr_nulls, null);
+    var pattern_payloads = try t_.allocator.alloc(?[]const u8, table.tracks.len);
+    defer {
+        for (pattern_payloads) |maybe| if (maybe) |p| t_.allocator.free(@constCast(p));
+        t_.allocator.free(pattern_payloads);
+    }
+    for (table.tracks, 0..) |tr, i| {
+        pattern_payloads[i] = switch (tr.source) {
+            .pattern => |node| try compactPayloadFor(t_.allocator, tree, node),
+            else => null,
+        };
+    }
+    var bin_ev = try Evaluator.initContext(t_.allocator, .{
+        .table = table,
+        .source = .{ .binary = .{ .expr = expr_nulls, .pattern = pattern_payloads } },
+        .schema = binary_schema,
+    });
+    defer bin_ev.deinit();
+    var tree_ev = try Eval.Evaluator.init(t_.allocator, &r);
+    defer tree_ev.deinit();
+
+    // Byte-equal frames across the wrap; the `hole` track drops its hap
+    // in cycle 1 (÷0) on BOTH arms — the write omits and the counter
+    // counts identically, then recovers in cycle 2.
+    const PPC = RtSjon.Pattern.PPC;
+    const sweep = [_]Tick{ 0, PPC / 2, PPC - 1, PPC, PPC + PPC / 2, 2 * PPC - 1, 2 * PPC, 3 * PPC };
+    for (sweep) |tick| {
+        const a = tree_ev.evalTicks(tick);
+        const b = bin_ev.evalTicks(tick);
+        try t_.expectEqualSlices(Writes.Entry, a, b);
+    }
+    // The drop was seen identically (cycle-1 frames, both arms), and
+    // both evaluators recovered to 0-new-failures by cycle 2's frames.
+    try t_.expect(tree_ev.expr_failures > 0);
+    try t_.expectEqual(tree_ev.expr_failures, bin_ev.expr_failures);
+    // A held control changes the sway hap identically on both arms.
+    try t_.expect(tree_ev.setControl(0, .{ 0.75, 0, 0, 0 }));
+    try t_.expect(bin_ev.setControl(0, .{ 0.75, 0, 0, 0 }));
+    for (sweep) |tick| {
+        const a = tree_ev.evalTicks(tick);
+        const b = bin_ev.evalTicks(tick);
+        try t_.expectEqualSlices(Writes.Entry, a, b);
+    }
 }
