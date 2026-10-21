@@ -279,6 +279,24 @@ also remains owner-notified.
   plan gate — implementation is NOT STARTED and no WASM artifact has
   been built or tested by this wave.
 
+- 2026-10-20 — **User authorization, recorded 2026-10-21 per the
+  execution brief: four-stage production delivery authorized, including
+  the Animader export integration, subject to measured property
+  blockers** (04's verbatim blocker classes). This is permission to run
+  Group D after Groups A–C's correctness/property gates and the Group C
+  measured report exist. It is **not** a numeric size-ratchet approval
+  and **not** permission to ignore a real regression. For the execution
+  wave, **local implementation commits are authorized**; push, merge,
+  publication and registry activity remain prohibited everywhere in the
+  wave. Reviewed executable plan of record:
+  `plans/binary/06-production-delivery.md` (verbatim copy of the
+  control-plane `plan-prod-four.md`, revised 2026-10-21; independent
+  final review **READY**, blockers none — disposition appended there,
+  full verdict in the control plane's `prod-four-plan-final-review.log`).
+  SJON prerequisite delivered (ask29 chain, cursor drain `8b8a38ee`);
+  decision 9's gate condition is met, so the Group A consumer adoption
+  proceeds under this authorization.
+
 ## Open issues
 
 | # | Issue | Status |
