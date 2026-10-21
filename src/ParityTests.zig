@@ -51,6 +51,27 @@ fn negativeFixtures(a: std.mem.Allocator) !negatives.Fixtures {
     };
 }
 
+/// Number of non-overlapping `needle` occurrences in `haystack`.
+fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, i, needle)) |at| {
+        n += 1;
+        i = at + needle.len;
+    }
+    return n;
+}
+
+/// The last `\n`-delimited line of `haystack` containing `needle`, if any.
+fn lastLineContaining(haystack: []const u8, needle: []const u8) ?[]const u8 {
+    var found: ?[]const u8 = null;
+    var it = std.mem.splitScalar(u8, haystack, '\n');
+    while (it.next()) |line| {
+        if (std.mem.indexOf(u8, line, needle) != null) found = line;
+    }
+    return found;
+}
+
 test "negatives: production prt_load exact refusals and transactional state" {
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
@@ -59,7 +80,73 @@ test "negatives: production prt_load exact refusals and transactional state" {
     var sink: std.Io.Writer.Allocating = .init(a);
     defer sink.deinit();
     try negatives.run(a, &sink.writer, try negativeFixtures(a));
-    try t.expect(std.mem.indexOf(u8, sink.written(), "skipped 0") != null);
+    const out = sink.written();
+
+    // The LITERAL expected category inventory of the T6a suite, independent
+    // of the suite's own execution counters — the report gate must never
+    // derive its expectation from the counters it checks. Names must match
+    // `parity_negatives.zig` exactly; the counts are the reviewed inventory:
+    // 35 named mutations, 3 bad-call cases, the 1 "prefixes" family label
+    // (a label, never an attempt), and one prefix attempt per byte of the
+    // committed keys-only blob (3700 proper prefixes).
+    const expected_named = [_][]const u8{
+        "forged-magic",            "forged-version",       "forged-features",
+        "directory-overlap",       "directory-overrun",    "directory-reorder",
+        "directory-gap",           "directory-duplicate-id", "directory-unknown-id",
+        "directory-trailing-slack", "trak-count-inflated", "tick-count-cap",
+        "tran-bpm-nan",            "tran-bpm-pos-inf",     "tran-bpm-neg-inf",
+        "tmpo-bpm-nan",            "tmpo-bpm-pos-inf",     "tmpo-bpm-neg-inf",
+        "keys-value-pad-nan",      "keys-value-pad-pos-inf", "keys-value-pad-neg-inf",
+        "ctrl-min-nan",            "ctrl-min-pos-inf",     "ctrl-min-neg-inf",
+        "ease-stage-nan",          "ease-stage-pos-inf",   "ease-stage-neg-inf",
+        "ease-op-param-nan",
+        "ease-ref-range",          "ease-ref-disagrees",   "ease-stage-domain",
+        "ease-op-padding",
+        "ease-program-cap",        "ease-degenerate-present", "ease-refs-count-mismatch",
+    };
+    const expected_bad_calls = [_][]const u8{
+        "bad-call-pacb-overcap", "bad-call-targets-overcap", "bad-call-pact-malformed",
+    };
+    const expected_family_labels = [_][]const u8{"prefixes"};
+    const expected_prefix_cases: usize = 3700;
+
+    // Every named mutation and bad call executed EXACTLY once: a removed or
+    // double-counted run call fails here, per name.
+    for (expected_named) |name| {
+        const needle = try std.fmt.allocPrint(a, "negatives: {s}: status 1 reason", .{name});
+        try t.expectEqual(@as(usize, 1), countOccurrences(out, needle));
+    }
+    for (expected_bad_calls) |name| {
+        const needle = try std.fmt.allocPrint(a, "negatives: {s}: status 2", .{name});
+        try t.expectEqual(@as(usize, 1), countOccurrences(out, needle));
+    }
+    try t.expectEqual(
+        @as(usize, 1),
+        countOccurrences(out, "negatives: prefixes 0.."),
+    );
+
+    // The printed partition equals the literal inventory, arithmetic exact.
+    const expected_partition = try std.fmt.allocPrint(
+        a,
+        "negatives: partition {d} named + {d} bad-call + {d} prefix = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} family label(s) (T6b payload/meta/registry/dry-run work is excluded from T6a)\n",
+        .{
+            expected_named.len,
+            expected_bad_calls.len,
+            expected_prefix_cases,
+            expected_named.len + expected_bad_calls.len + expected_prefix_cases,
+            expected_named.len + expected_bad_calls.len + expected_family_labels.len,
+            expected_named.len,
+            expected_bad_calls.len,
+            expected_family_labels.len,
+        },
+    );
+    if (std.mem.indexOf(u8, out, expected_partition) == null) {
+        // RED context: show the summary line the suite actually printed.
+        if (lastLineContaining(out, "attempted")) |line| {
+            std.debug.print("negatives partition gate, actually printed summary: {s}\n", .{line});
+        }
+    }
+    try t.expect(std.mem.indexOf(u8, out, expected_partition) != null);
 }
 
 const HOST_TARGETS = [_]pacer.Compile.Target{

@@ -302,6 +302,23 @@ const Family = struct {
     }
 };
 
+/// Summary partition counters, one increment per operation AT the place the
+/// operation actually executes. Every summary term must be one of these —
+/// never derived from a fixture length or from the names list (B1).
+const Counters = struct {
+    /// Every expected-under-test production call: named mutations, bad
+    /// calls, prefix attempts. The three fixture setup loads and the
+    /// bad-call family's prior-reason re-eval are setup/probe loads, not
+    /// attempts, and stay uncounted.
+    attempted: usize = 0,
+    named: usize = 0,
+    bad_calls: usize = 0,
+    prefix: usize = 0,
+    /// Family labels ride the names list for uniqueness but are never
+    /// attempts.
+    family_labels: usize = 0,
+};
+
 fn addName(a: Allocator, names: *std.ArrayList([]const u8), name: []const u8) !void {
     for (names.items) |existing| {
         if (std.mem.eql(u8, existing, name)) return error.DuplicateMutationName;
@@ -312,15 +329,31 @@ fn addName(a: Allocator, names: *std.ArrayList([]const u8), name: []const u8) !v
 fn runNamed(
     fam: *Family,
     names: *std.ArrayList([]const u8),
-    attempted: *usize,
+    counters: *Counters,
     name: []const u8,
     bytes: []const u8,
     reason: u32,
 ) !void {
     try addName(fam.a, names, name);
-    attempted.* += 1;
+    counters.named += 1;
+    counters.attempted += 1;
     try fam.expectRefusal(name, bytes, reason);
     try fam.out.print("negatives: {s}: status 1 reason {d}\n", .{ name, reason });
+}
+
+/// Count and require one status-2 bad call; name uniqueness rides `names`.
+fn runBadCall(
+    fam: *Family,
+    names: *std.ArrayList([]const u8),
+    counters: *Counters,
+    name: []const u8,
+    pacb_len: u32,
+    targets_len: u32,
+) !void {
+    try addName(fam.a, names, name);
+    counters.bad_calls += 1;
+    counters.attempted += 1;
+    try fam.expectBadCall(name, pacb_len, targets_len);
 }
 
 // ---------------------------------------------------------------------------
@@ -697,8 +730,7 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
     const pact = try pacer.PactCodec.encodeTargets(&none, pact_buf);
 
     var names: std.ArrayList([]const u8) = .empty;
-    var attempted: usize = 0;
-    const skipped: usize = 0;
+    var counters = Counters{};
 
     // 1. Every full fixture must load successfully before any mutation.
     const fixture_list = [_]struct { name: []const u8, bytes: []const u8 }{
@@ -732,14 +764,25 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
     // 2. Every proper prefix of the actual small fixture.
     {
         try addName(a, &names, "prefixes");
+        counters.family_labels += 1; // a family label, never an attempt
         var fam = try Family.begin(a, out, fixtures.keys_only, pact);
         defer fam.end();
 
         var n: usize = 0;
         while (n < fixtures.keys_only.len) : (n += 1) {
             const want_reason: u32 = if (n < MAGIC_LEN) 0 else 3;
-            attempted += 1;
+            counters.prefix += 1;
+            counters.attempted += 1;
             try fam.expectRefusal("prefix", fixtures.keys_only[0..n], want_reason);
+        }
+        // The summary prints THIS counter — the loop's own increment —
+        // never the fixture-length shorthand.
+        if (n != counters.prefix) {
+            try out.print(
+                "negatives: prefix loop counter {d} != loop increments {d}\n",
+                .{ n, counters.prefix },
+            );
+            return error.CounterMismatch;
         }
         try out.print(
             "negatives: prefixes 0..{d} (actual blob length): {d} proper prefixes, magic-short reason 0, all longer reason 3\n",
@@ -753,50 +796,50 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         var fam = try Family.begin(a, out, fixtures.full_small, pact);
         defer fam.end();
 
-        try runNamed(&fam, &names, &attempted, "forged-magic", try forgedMagic(a, fixtures.full_small), 0);
-        try runNamed(&fam, &names, &attempted, "forged-version", try forgedVersion(a, fixtures.full_small), 1);
-        try runNamed(&fam, &names, &attempted, "forged-features", try forgedFeatures(a, fixtures.full_small), 2);
+        try runNamed(&fam, &names, &counters, "forged-magic", try forgedMagic(a, fixtures.full_small), 0);
+        try runNamed(&fam, &names, &counters, "forged-version", try forgedVersion(a, fixtures.full_small), 1);
+        try runNamed(&fam, &names, &counters, "forged-features", try forgedFeatures(a, fixtures.full_small), 2);
 
-        try runNamed(&fam, &names, &attempted, "directory-overlap", try directoryOverlap(a, fixtures.full_small), 3);
-        try runNamed(&fam, &names, &attempted, "directory-overrun", try directoryOverrun(a, fixtures.full_small), 3);
-        try runNamed(&fam, &names, &attempted, "directory-reorder", try directoryReorder(a, fixtures.full_small), 3);
-        try runNamed(&fam, &names, &attempted, "directory-gap", try directoryGap(a, fixtures.full_small), 3);
-        try runNamed(&fam, &names, &attempted, "directory-duplicate-id", try directoryDuplicateId(a, fixtures.full_small), 3);
-        try runNamed(&fam, &names, &attempted, "directory-unknown-id", try directoryUnknownId(a, fixtures.full_small), 3);
-        try runNamed(&fam, &names, &attempted, "directory-trailing-slack", try directoryTrailingSlack(a, fixtures.full_small), 3);
+        try runNamed(&fam, &names, &counters, "directory-overlap", try directoryOverlap(a, fixtures.full_small), 3);
+        try runNamed(&fam, &names, &counters, "directory-overrun", try directoryOverrun(a, fixtures.full_small), 3);
+        try runNamed(&fam, &names, &counters, "directory-reorder", try directoryReorder(a, fixtures.full_small), 3);
+        try runNamed(&fam, &names, &counters, "directory-gap", try directoryGap(a, fixtures.full_small), 3);
+        try runNamed(&fam, &names, &counters, "directory-duplicate-id", try directoryDuplicateId(a, fixtures.full_small), 3);
+        try runNamed(&fam, &names, &counters, "directory-unknown-id", try directoryUnknownId(a, fixtures.full_small), 3);
+        try runNamed(&fam, &names, &counters, "directory-trailing-slack", try directoryTrailingSlack(a, fixtures.full_small), 3);
 
-        try runNamed(&fam, &names, &attempted, "trak-count-inflated", try trakCountInflated(a, fixtures.full_small), 3);
-        try runNamed(&fam, &names, &attempted, "tick-count-cap", try tickCapFixture(a, fixtures.full_small), 6);
+        try runNamed(&fam, &names, &counters, "trak-count-inflated", try trakCountInflated(a, fixtures.full_small), 3);
+        try runNamed(&fam, &names, &counters, "tick-count-cap", try tickCapFixture(a, fixtures.full_small), 6);
 
-        try runNamed(&fam, &names, &attempted, "tran-bpm-nan", try tranBpm(a, fixtures.full_small, std.math.nan(f64)), 5);
-        try runNamed(&fam, &names, &attempted, "tran-bpm-pos-inf", try tranBpm(a, fixtures.full_small, std.math.inf(f64)), 5);
-        try runNamed(&fam, &names, &attempted, "tran-bpm-neg-inf", try tranBpm(a, fixtures.full_small, -std.math.inf(f64)), 5);
+        try runNamed(&fam, &names, &counters, "tran-bpm-nan", try tranBpm(a, fixtures.full_small, std.math.nan(f64)), 5);
+        try runNamed(&fam, &names, &counters, "tran-bpm-pos-inf", try tranBpm(a, fixtures.full_small, std.math.inf(f64)), 5);
+        try runNamed(&fam, &names, &counters, "tran-bpm-neg-inf", try tranBpm(a, fixtures.full_small, -std.math.inf(f64)), 5);
 
-        try runNamed(&fam, &names, &attempted, "tmpo-bpm-nan", try tmpoBpm(a, fixtures.full_small, std.math.nan(f64)), 5);
-        try runNamed(&fam, &names, &attempted, "tmpo-bpm-pos-inf", try tmpoBpm(a, fixtures.full_small, std.math.inf(f64)), 5);
-        try runNamed(&fam, &names, &attempted, "tmpo-bpm-neg-inf", try tmpoBpm(a, fixtures.full_small, -std.math.inf(f64)), 5);
+        try runNamed(&fam, &names, &counters, "tmpo-bpm-nan", try tmpoBpm(a, fixtures.full_small, std.math.nan(f64)), 5);
+        try runNamed(&fam, &names, &counters, "tmpo-bpm-pos-inf", try tmpoBpm(a, fixtures.full_small, std.math.inf(f64)), 5);
+        try runNamed(&fam, &names, &counters, "tmpo-bpm-neg-inf", try tmpoBpm(a, fixtures.full_small, -std.math.inf(f64)), 5);
 
-        try runNamed(&fam, &names, &attempted, "keys-value-pad-nan", try keyPadLane(a, fixtures.full_small, std.math.nan(f32)), 5);
-        try runNamed(&fam, &names, &attempted, "keys-value-pad-pos-inf", try keyPadLane(a, fixtures.full_small, std.math.inf(f32)), 5);
-        try runNamed(&fam, &names, &attempted, "keys-value-pad-neg-inf", try keyPadLane(a, fixtures.full_small, -std.math.inf(f32)), 5);
+        try runNamed(&fam, &names, &counters, "keys-value-pad-nan", try keyPadLane(a, fixtures.full_small, std.math.nan(f32)), 5);
+        try runNamed(&fam, &names, &counters, "keys-value-pad-pos-inf", try keyPadLane(a, fixtures.full_small, std.math.inf(f32)), 5);
+        try runNamed(&fam, &names, &counters, "keys-value-pad-neg-inf", try keyPadLane(a, fixtures.full_small, -std.math.inf(f32)), 5);
 
-        try runNamed(&fam, &names, &attempted, "ctrl-min-nan", try controlMinLane(a, fixtures.full_small, std.math.nan(f32)), 5);
-        try runNamed(&fam, &names, &attempted, "ctrl-min-pos-inf", try controlMinLane(a, fixtures.full_small, std.math.inf(f32)), 5);
-        try runNamed(&fam, &names, &attempted, "ctrl-min-neg-inf", try controlMinLane(a, fixtures.full_small, -std.math.inf(f32)), 5);
+        try runNamed(&fam, &names, &counters, "ctrl-min-nan", try controlMinLane(a, fixtures.full_small, std.math.nan(f32)), 5);
+        try runNamed(&fam, &names, &counters, "ctrl-min-pos-inf", try controlMinLane(a, fixtures.full_small, std.math.inf(f32)), 5);
+        try runNamed(&fam, &names, &counters, "ctrl-min-neg-inf", try controlMinLane(a, fixtures.full_small, -std.math.inf(f32)), 5);
 
-        try runNamed(&fam, &names, &attempted, "ease-stage-nan", try easeStageTEnd(a, fixtures.full_small, std.math.nan(f32)), 5);
-        try runNamed(&fam, &names, &attempted, "ease-stage-pos-inf", try easeStageTEnd(a, fixtures.full_small, std.math.inf(f32)), 5);
-        try runNamed(&fam, &names, &attempted, "ease-stage-neg-inf", try easeStageTEnd(a, fixtures.full_small, -std.math.inf(f32)), 5);
-        try runNamed(&fam, &names, &attempted, "ease-op-param-nan", try easeOpParam(a, fixtures.full_small, std.math.nan(f32)), 5);
+        try runNamed(&fam, &names, &counters, "ease-stage-nan", try easeStageTEnd(a, fixtures.full_small, std.math.nan(f32)), 5);
+        try runNamed(&fam, &names, &counters, "ease-stage-pos-inf", try easeStageTEnd(a, fixtures.full_small, std.math.inf(f32)), 5);
+        try runNamed(&fam, &names, &counters, "ease-stage-neg-inf", try easeStageTEnd(a, fixtures.full_small, -std.math.inf(f32)), 5);
+        try runNamed(&fam, &names, &counters, "ease-op-param-nan", try easeOpParam(a, fixtures.full_small, std.math.nan(f32)), 5);
 
-        try runNamed(&fam, &names, &attempted, "ease-ref-range", try easeRefRange(a, fixtures.full_small), 5);
-        try runNamed(&fam, &names, &attempted, "ease-ref-disagrees", try easeRefDisagrees(a, fixtures.full_small), 5);
-        try runNamed(&fam, &names, &attempted, "ease-stage-domain", try easeStageDomain(a, fixtures.full_small), 5);
-        try runNamed(&fam, &names, &attempted, "ease-op-padding", try easeOpPadding(a, fixtures.full_small), 5);
+        try runNamed(&fam, &names, &counters, "ease-ref-range", try easeRefRange(a, fixtures.full_small), 5);
+        try runNamed(&fam, &names, &counters, "ease-ref-disagrees", try easeRefDisagrees(a, fixtures.full_small), 5);
+        try runNamed(&fam, &names, &counters, "ease-stage-domain", try easeStageDomain(a, fixtures.full_small), 5);
+        try runNamed(&fam, &names, &counters, "ease-op-padding", try easeOpPadding(a, fixtures.full_small), 5);
 
-        try runNamed(&fam, &names, &attempted, "ease-program-cap", try easeProgramCap(a, fixtures.full_small), 6);
-        try runNamed(&fam, &names, &attempted, "ease-degenerate-present", try easeDegeneratePresent(a, fixtures.full_small), 4);
-        try runNamed(&fam, &names, &attempted, "ease-refs-count-mismatch", try easeRefsCountMismatch(a, fixtures.full_small), 4);
+        try runNamed(&fam, &names, &counters, "ease-program-cap", try easeProgramCap(a, fixtures.full_small), 6);
+        try runNamed(&fam, &names, &counters, "ease-degenerate-present", try easeDegeneratePresent(a, fixtures.full_small), 4);
+        try runNamed(&fam, &names, &counters, "ease-refs-count-mismatch", try easeRefsCountMismatch(a, fixtures.full_small), 4);
     }
 
     // 4. Status-2 bad calls: a prior status-1 reason must survive.
@@ -805,21 +848,25 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         defer fam.end();
 
         // Establish a nonzero prior reason through the ACTUAL loader. This
-        // mutation name was already counted in the envelope family.
+        // is the bad-call family's setup re-eval, not a new attempt: the
+        // mutation is already counted once in the envelope family, and the
+        // success path prints nothing here.
         try fam.expectRefusal("forged-version", try forgedVersion(a, fixtures.full_small), 1);
         if (NativeRt.loadError() != 1) return error.NegativeMismatch;
 
-        try addName(a, &names, "bad-call-pacb-overcap");
-        attempted += 1;
-        try fam.expectBadCall(
+        try runBadCall(
+            &fam,
+            &names,
+            &counters,
             "bad-call-pacb-overcap",
             NativeRt.pacbCap() + 1,
             @intCast(pact.len),
         );
 
-        try addName(a, &names, "bad-call-targets-overcap");
-        attempted += 1;
-        try fam.expectBadCall(
+        try runBadCall(
+            &fam,
+            &names,
+            &counters,
             "bad-call-targets-overcap",
             @intCast(fixtures.full_small.len),
             NativeRt.targetsCap() + 1,
@@ -829,9 +876,10 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         // live score and the prior reason word survive.
         @memset(NativeRt.targetsPtr()[0..8], 0);
         @memcpy(NativeRt.targetsPtr()[0..4], "XXXX");
-        try addName(a, &names, "bad-call-pact-malformed");
-        attempted += 1;
-        try fam.expectBadCall(
+        try runBadCall(
+            &fam,
+            &names,
+            &counters,
             "bad-call-pact-malformed",
             @intCast(fixtures.full_small.len),
             8,
@@ -839,9 +887,35 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
     }
 
+    // Internal consistency: the partition must reconstruct `attempted` and
+    // the names list exactly, from the execution counters alone.
+    if (counters.attempted != counters.named + counters.bad_calls + counters.prefix) {
+        try out.print(
+            "negatives: counter partition mismatch: attempted {d} != {d} named + {d} bad-call + {d} prefix\n",
+            .{ counters.attempted, counters.named, counters.bad_calls, counters.prefix },
+        );
+        return error.CounterMismatch;
+    }
+    if (names.items.len != counters.named + counters.bad_calls + counters.family_labels) {
+        try out.print(
+            "negatives: name partition mismatch: {d} names != {d} mutations + {d} bad-calls + {d} family label(s)\n",
+            .{ names.items.len, counters.named, counters.bad_calls, counters.family_labels },
+        );
+        return error.CounterMismatch;
+    }
+
     try out.print(
-        "negatives: {d} named mutation(s) + {d} prefix case(s) = {d} attempted; skipped {d} (T6b payload/meta/registry/dry-run work is excluded from T6a)\n",
-        .{ names.items.len, fixtures.keys_only.len, attempted, skipped },
+        "negatives: partition {d} named + {d} bad-call + {d} prefix = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} family label(s) (T6b payload/meta/registry/dry-run work is excluded from T6a)\n",
+        .{
+            counters.named,
+            counters.bad_calls,
+            counters.prefix,
+            counters.attempted,
+            names.items.len,
+            counters.named,
+            counters.bad_calls,
+            counters.family_labels,
+        },
     );
     try out.print(
         "negatives: exact status/reason and transactional preservation PASS; T6a only, T6/P3 remain incomplete\n",
