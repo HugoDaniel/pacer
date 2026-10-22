@@ -308,11 +308,19 @@ export fn prt_load(pacb_len: u32, targets_len: u32) u32 {
         load_error = DRY_RUN_FAILED;
         return @intFromEnum(LoadStatus.refused);
     }
-    // ask30/M4 (2026-10-22): materialize the prepared state BEFORE the
-    // dry-runs — state building first, acceptance gates second, the
-    // same precedence the decode (8) keeps ahead of the dry-run (11).
-    // A prepare failure is the payload-malformed CLASS (typed set:
-    // unreachable past 01's structural walk, but never a trap).
+    // ask30/M4 (2026-10-22; ordering wording corrected 2026-10-22 in the
+    // record-fix slice — comment only, no behavior change): materialize
+    // the prepared state AFTER the expr dry-run and BEFORE the pattern
+    // dry-run, which queries it — state building for patterns sits
+    // between the two gates, not ahead of both. This is not a blanket
+    // "prepare before the dry-runs": if a payload could reach prepare
+    // malformed, the earlier expr-dry refusal (11) would mask prepare's
+    // payload-malformed class (8). That input class does not exist
+    // through the production loader — decode's structural walk
+    // (Pacb.decodePayloads) has already refused everything in prepare's
+    // typed malformed set — so the ordering above is unobservable and no
+    // refusal class is ever masked. A prepare failure remains the
+    // payload-malformed CLASS (never a trap).
     switch (preparePatterns(shell) catch {
         shell.score.deinit();
         gpa.destroy(shell);

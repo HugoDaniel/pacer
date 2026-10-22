@@ -904,3 +904,125 @@ EvalCore characterization, and the twin unit pin. Gates: `zig build test`
 840/840; full five-verb gate green (per-gate exits in
 `.agent/control/prod-four-owner-adoption-gates-final.log`). Commits:
 `d084b8a` (gate amendment), `57d6373` (adoption), this append.
+
+## ask30/M4 record-correction status append (dated — not plan prose)
+
+2026-10-22 — record-only corrections required by the independent adoption
+review (verdict READY — the bounded prepared-runtime adoption is accepted;
+`.agent/control/prod-four-owner-adoption-review-report.md`). The ask30/M4
+append above and the worker report carried stale-cache evidence figures and
+two over-claims; this append supersedes them BY EVIDENCE — the original
+texts above are preserved, never rewritten. No code, behavior, pack, skip,
+export, wire, enum, or budget change; `d084b8a`/`57d6373`/`430680e` stand
+as the accepted slice. Whole production (A3+A4 pack lift, skip removal,
+A5/B2/C) remains NOT started. The slice's only source change is a
+comment-ordering correction in `src/rt_entry.zig` (comment only — below).
+
+**Executed-gate figures — SUPERSEDED.** The append above records
+"check_rt_artifact UNTOUCHED and green with the decoder linked
+(pacer-rt.wasm 188,442 B, 1 import, 17 `prt_*` + memory, markers
+absent/present-in-control)" — the 188,442/682,079 figures are the WORKER's
+default-cache run (`prod-four-owner-adoption.log:3099`, repeated at :3272
+and :5927; the figure appears nowhere in
+`prod-four-owner-adoption-gates-final.log`) and are NFS-stale-cache
+contamination, not a property of the linked decoder. Authority: the
+parent's COLD-cache rerun, exit 0, exact configuration `zig build test
+fuzz verify parity audit-rt-imports --cache-dir
+.agent/control/cache-adoption-parent-430680e --summary all` under
+`ulimit -c 0 && ulimit -s 32768` — log
+`.agent/control/prod-four-owner-adoption-parent-gates.log`. True figures:
+`pacer-rt.wasm` **189,506 B**, sha256
+`4e2f2100fecc1e7a4657261867a26993c1e3e98bc3a29c4a319fab730b792515`; text
+control **668,852 B**, sha256
+`9736a41b61e2fa4ae2e37388bd36d8953fcdd41feb465d5805125867706e3258` — each
+hash verified with two independent tools (python3 hashlib + openssl; the
+host `sha256sum` returns the empty-input hash for every file and is
+unusable — the same two-tool method the parent used, agreeing).
+`tools/check_rt_artifact.zig` is UNCHANGED (diff vs `3d25ae5` empty) and
+green on the fresh artifact: 1 import, exactly 17 `prt_*` + memory, the 3
+compiler-only markers absent/present-in-control.
+
+**No artifact-growth claim.** The worker report's "no artifact growth …
+same byte size as the parent's fresh baseline" is INVALID and retracted:
+the 188,442 B "baseline" (`prod-four-owner-adoption-baseline.log:832`)
+came from the same default cache, so no cold pre-adoption baseline exists
+and no byte-growth delta for the linked decoder is knowable — none is
+claimed. The worker's cached-run artifact evidence (its 188,442/682,079
+figures, its node legs, its gates-final capture — itself garbled:
+CLI-golden JSON interleaved into the TAP stream at :4, and its
+check-rt-artifact step showing `cached` at :927) is contaminated and
+unreliable, SUPERSEDED by the parent's cold rerun; cache attribution is
+not upgraded to "verified".
+
+**True counts (parent cold log, all five verbs exit 0):** Build Summary
+51/51 steps; 1230/1230 tests (840 native + 390 fuzz); node 135/135; corpus
+43/0; parity 43/0 with the exact held partition (24 replayed, 4
+skipped-pending-SJON — not passes, 15 compile-refused); audit closure
+12 pacer + 18 SJON (16 linked, 2 comptime-excluded); `pacer-rt`
+ReleaseSmall wasm32-freestanding compiled fresh (not cached) in that run.
+
+**Executed-evidence distinction (explicit).** The parent's cold run proves
+two things and only two things about the wasm side: (1) REAL wasm32
+typecheck/link of the new prepared function — YES (fresh, not-cached
+compile with `queryPreparedBinaryWithEnv` reachable from `prt_eval`);
+(2) Node executed the FRESH runtime — YES, but NON-PATTERN ONLY: the node
+rt fixtures (keys-only/full-small) carry no pattern tracks. Actual
+prepared-pattern WASM execution — a pattern payload loaded and evaluated
+through `pacer-rt.wasm` — remains A3+A4/A5 scope: NOT done, NOT claimed by
+the adoption or by this correction.
+
+**Transactional-coverage correction.** The worker report's claim that
+(a), (d), (e), (i), (l), (p), (q) "now exercise refusal paths that also
+carry prepared state" is corrected: only (p) and (q) reach a post-prepare
+failure through the prepared arm (prepare succeeds; the PREPARED dry-run
+refuses reason 11), and (r)/(s) pin successful load plus the success-path
+unload teardown. (k)/(l)/(m) are expr-payload malformed tests refused at
+decode — before `preparePatterns` — and carry no pattern live state, and
+the same holds for (a)/(d)/(e)/(i). No prepared-state teardown coverage is
+claimed for (a)/(d)/(e)/(i)/(l). The invariant itself stays genuinely
+covered — (p)/(q) refusal teardown + (r)/(s) success unload, all through
+the single `score.deinit()` free — and the review accepted the structural
+one-free cleanup as sufficient: no fake OOM injection is required or
+attempted.
+
+**Gap carried forward (not silently done):** no test reloads FROM a
+pattern-carrying live score into a new successful score and evaluates
+after the swap. Carried to the NEXT A3+A4 acceptance brief / dated record.
+
+**Corpus pattern parity:** currently pinned by proxy only — rt_entry
+(r)/(s)/(t) oracle sweeps plus the EvalCore characterization; the four
+corpus pattern cases remain excluded (the held parity skips) until the
+A3+A4 pack lift.
+
+**Ordering wording corrected (comment only).** The in-source comment at
+`src/rt_entry.zig`'s materialize step said the prepared state is built
+"BEFORE the dry-runs"; the actual order is AFTER `dryRunExprs` and BEFORE
+`dryRunPatterns` (which queries the prepared state). The mismatch is
+unobservable: if a payload could reach prepare malformed, the earlier
+expr-dry refusal (11) would mask prepare's class-8 — but prepare's typed
+malformed set is exactly what decode's structural walk
+(`Pacb.decodePayloads` → `walkPayloadStructurally`) already refuses, so no
+payload reaches prepare malformed and no class is masked. The comment is
+corrected in-source in this slice's commit; no reorder, no behavior claim.
+The matching report wording is superseded in the report's dated append.
+
+**npm package copy unchanged:** `npm/pacer/pacer-rt.wasm` (171,852 B) is
+the stale release-time copy; no gate executes it — the node tests read
+`zig-out/bin/pacer-rt.wasm` directly (`npm/pacer/test/rt.test.js:31`,
+`bundle.test.js:70`, `compat-old-readers.test.js:39`). It refreshes only
+via the npm release script (`build:wasm-rt-copy`) — out of this slice.
+
+**Verification of this correction:** the record-fix slice re-ran the full
+five-verb gate COLD on a new cache `.agent/control/cache-adoption-record-fix-20261022a`
+(`--summary all`, foreground via obs/OpenBSD, `ulimit -c 0 && ulimit -s
+32768`, exits captured): **EXIT=0** — Build Summary 51/51 steps, 1230/1230
+tests (840 native + 390 fuzz), node 135/135, corpus 43/0, parity 43/0 with
+the exact held partition (24 replayed / 4 skipped-pending-SJON / 15
+compile-refused), audit 12 pacer + 18 SJON (16 linked, 2
+comptime-excluded), check-rt-artifact OK on the fresh artifact (189,506 B;
+668,852 B control), `pacer-rt` ReleaseSmall wasm32-freestanding compiled
+fresh (not cached) — and the rebuilt artifacts hash IDENTICAL to the
+parent's cold figures (four agreeing hash results: openssl + cksum on
+obs-dev, python3 + openssl over the NFS view; the host `sha256sum` is the
+broken wrapper noted above). Log:
+`.agent/control/prod-four-owner-adoption-record-fix-gates.log`.
