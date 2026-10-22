@@ -1026,3 +1026,155 @@ parent's cold figures (four agreeing hash results: openssl + cksum on
 obs-dev, python3 + openssl over the NFS view; the host `sha256sum` is the
 broken wrapper noted above). Log:
 `.agent/control/prod-four-owner-adoption-record-fix-gates.log`.
+
+## A3+A4 executed status append (dated — not plan prose)
+
+2026-10-22 — A3+A4 EXECUTED as ONE atomic green commit `9cf932d` on
+`agent/animader-init` (parent: `f89bd49`, tracked tree clean except the
+pre-existing untracked `zig-pkg/`, preserved). Scope was exactly this
+section's A3+A4 + the review-carry reload gap; A5, B2, C, D, E remain
+NOT started and NOT claimed.
+
+**Pack refusal lift (A3).** `PacbEncode.preflight`'s interim `.pattern`
+refusal arm is removed; the payload-cap measure loop now covers
+`.pattern` — per-payload and `'PAYL'`-total, the same measured shapes as
+expr (structural writer rejections profile and refuse identically; the
+structural-diag wording generalized from "expr payload" to "payload" for
+the shared path). The CLI verb needed no code change (it calls the same
+preflight); `pack_patterns_unsupported` is KEPT as a frozen, UNEMITTED
+wire reserve — ordinal 32 (`== 32`, `pack_cap_exceeded == 33`, exactly
+34 variants, comptime pins unchanged) — emitted by no path, pinned by a
+new reserve test (also the audit-diagnostics coverage anchor), never
+removed or reordered; no new refusal reason, no wire version move. The
+enum doc and the message-of-record surfaces (`docs/cli.md`,
+`docs/binary-score.md`, `tools/cli_golden.sh`'s expected exit for the
+starter-pack case) carry the dated factual status; historical plan prose
+untouched.
+
+**Parity becomes skip-free (A4).** The `clean_pattern` class now takes
+the SAME binary leg as `clean_non_pattern` (pack → real loader → full
+cross-path replay); the old refusal-asserting arm is gone. The summary
+prints the actual partition from execution counters — class counters, a
+`binary_replayed` execution counter, a RETAINED skip class that no
+current path increments (prints 0), a class-partition-sum identity and
+a binary-replay identity, each checked as data. The plan 06 acceptance
+inventory — `examples-starter`, `pattern-basic`, `pattern-env`,
+`rig-studio` — must each have COMPLETED its binary replay; the run
+fails naming any missing one, independently of the counters (the
+classification itself stays algorithmic; only the required inventory is
+name-pinned). Actual partition at this commit: **44 cases = 24 clean
+non-pattern + 5 clean pattern replayed (binary leg) + 15 load-failing;
+0 failed; skipped 0; inventory 4/4.** Note the honest bucket split vs
+this section's illustrative text: the new all-features anchor CARRIES a
+pattern track, so the classifier counts it among the clean-pattern
+replays (5, not 4) — the counts are derived, never hardcoded, and the
+clean-replay total matches this section's identity (28 former + 1 = 29
+replayed, 15 load-failing, 44 total, 0 skipped).
+
+**Payload-cap RED shape (calibration honestly recorded).** The first
+cap RED fixture (huge flat pattern literal vectors) failed to COMPILE:
+SJON's pattern query bounds a legal flat literal vector near its
+1024-live-frame ceiling (`DepthExceeded` past ~1024 haps; observed via
+the real CLI: 1020 compiles, 1100 refuses). The committed fixtures are
+legal: the per-payload shape crosses the writer's 65536-entry pool cap
+through an untaken branch (same trick as the expr fixture, pattern
+side), and the `'PAYL'`-total shape crosses the 4 MiB region cap through
+pattern MULTIPLICITY (80 legal ~900-literal pattern tracks) over expr
+bulk held just under the cap — with fixture-honesty assertions that the
+expr bytes alone stay under the region cap so only the pattern bytes
+can cross it.
+
+**All-features corpus anchor (text-first).** `corpus/all-features/`
+authored text-first (expr + pattern + controls + scenes + tempo map +
+emit lanes + trigger, looping transport; hand-worked pins: the 240 bpm
+step exactly at the 2bar boundary, the 6.0 s loop wrap to beat 0, the
+env pattern following a live control across the wrap, euclid onsets
+0.9 in slots 0/3/6, trigger phase 0.75/1.0 holds, omitted trigger
+write before the first event). Golden generated ONLY by the native
+corpus authority (`zig build corpus -- --update`, exit 0) and reviewed
+as a diff BEFORE any binary replay; no hand edits; the regen pass left
+all 43 committed goldens byte-identical. The wasm leg (verify's node
+corpus parity, `corpus parity: all-features`, 136/136) re-derives the
+same golden from `pacer.wasm`. Authoring note recorded: emit lanes
+resolve against the host join by exact name (the case's times.sjon
+names `beat`/`bpm` literally), per `transport-emit`'s rule.
+
+**Review-carry reload gap — CLOSED.** New rt_entry (u)/(v), driving the
+REAL production entries end to end from the REAL producer
+(preflight+encode; the A2-era bypass helper now runs the ordinary
+production route): (u) a successful reload FROM a live pattern-carrying
+score (held control, bpm nudge, frames, a nonzero expr-failure counter
+from a per-frame overflow hole) to a new clean score — after the swap
+the meta is the new score's own 'PACM', the frame is the new score's
+(fresh bpm, no pattern writes, no held control slot — index 0 is
+rejected), the counter is 0, and a further reload back into the pattern
+score rebuilds it from document state; (v) malformed (status 1 reason
+1, corrupt bytes in the zone) and refused (status 1 reason 9) and
+bad-call (status 2) reloads while the pattern score is live preserve
+its frames, held control, bpm, meta and counter byte-exactly. Mutation
+teeth proven in an isolated scratch worktree (`pacer-scratch-a34`,
+sibling paths intact; both mutations restored byte-exact — openssl
+sha256 `16b75445…655f` runner / `59650e99…240c` rt_entry): (2A) the
+refusal path unloading the live score REDs (v) together with the
+existing transactional family (a)/(i)/(l) and the composition probe;
+(2B) carrying the old evaluator's failure counter across the successful
+swap REDs (u) at its fresh-counter assertion (`expected 0, found 1`)
+and the lifecycle parity anchor. The prior record's gap note ("no test
+reloads FROM a pattern-carrying live score") is hereby discharged;
+the (p)/(q) anchors stand unchanged.
+
+**CLI golden.** `src/cli/testdata/starter-pack.json` regenerated through
+the actual command (`zig build cli-golden`, exit 0) and reviewed as a
+diff: exit 1 → 0, the `code_id 32` refusal diagnostic gone,
+`pack:null` → the real written blob (14,719 B, 11 sections, host 8
+targets, pacm 7,130 B). `tools/cli_golden.sh`'s expected-exit pin for
+the case flipped 1 → 0 in the same commit (the message-of-record).
+The ordinal 32 stays valid as the reserve's pin (Compile.zig comptime +
+reserve test); the golden simply no longer carries that diagnostic.
+
+**Required REDs captured before the change** (working tree, obs,
+foreground, explicit exits in `.agent/control/prod-four-a34-red-*.log`):
+(1) the real CLI refused `corpus/pattern-env` — exit 1, three
+`pack_patterns_unsupported` (code 32) records, `pack:null`, no blob;
+(2) the flipped classifier-replay test failed at the still-standing
+refusal (`.preflight_refused` arm); (3) the flipped cap tests failed on
+the pattern refusal instead of the measured caps (per-payload: code
+still `pack_patterns_unsupported`; total: 80 per-track refusals vs the
+one measured total).
+
+**Gates (all obs/OpenBSD, foreground, `ulimit -c 0 && ulimit -s
+32768`, fresh per-run cache dirs):** pre-commit `zig build test` 845/845
+(`prod-four-a34-green-1..4.log` — the last exit 0 after RED→GREEN);
+`zig build parity fuzz audit-rt-imports` exit 0
+(`prod-four-a34-green-5-parity-fuzz-audit.log`); `zig build verify`
+exit 0, 32/32 steps, 731/731 tests, corpus 44/0, node incl.
+`corpus parity: all-features`
+(`prod-four-a34-green-6-verify.log`). DECISIVE, on the committed tree
+at `9cf932d`, cold NEW cache `.agent/control/cache-a34-final-cold1`:
+`zig build test verify cli-golden parity fuzz audit-rt-imports --summary
+all` — **EXIT 0**, 53/53 steps, 1236/1236 tests in the verify leg, node
+136/136 (0 skipped), fuzz 391, parity partition exactly as above,
+negatives partition unchanged (3738 attempted, the B1-pinned
+inventory), audit closure unchanged (12 pacer + 18 SJON modules, 16
+linked, 2 comptime-excluded), `cli-golden: CLI envelopes are current`,
+score-docs current, and the gate's own regen pass left the committed
+tree clean (byte-idempotent; `git status` after the gate: only the
+pre-existing `zig-pkg/`). Artifacts, fresh from that run and hashed
+with two tools (python3 hashlib + openssl; the host `sha256sum` is the
+known-broken empty-input wrapper): `zig-out/bin/pacer-rt.wasm`
+**189,506 B**, sha256
+`4e2f2100fecc1e7a4657261867a26993c1e3e98bc3a29c4a319fab730b792515`
+(unchanged from the parent baseline — the slice changes no runtime
+behavior); text control `zig-out/bin/pacer.wasm` **668,852 B**, sha256
+`9736a41b61e2fa4ae2e37388bd36d8953fcdd41feb465d5805125867706e3258`
+(unchanged). `npm/pacer/pacer-rt.wasm` (stale 171,852 B release copy)
+NOT touched, per the brief. GitNexus CLI absent here
+(`node .gitnexus/run.cjs impact|detect-changes` → MODULE_NOT_FOUND,
+attempted once each, no install/index) — coverage by source-level diff
+review plus the gate suite.
+
+**NOT done (explicit):** A5 (npm/wasm pattern corpus harness, npm
+fixtures, pretest pack, npm parity count) — not started; B2 negatives,
+C measurement, D/E — not started; no SJON edits; no wire/budget/
+enum-reorder/export change; `npm lint/typecheck` untouched (no npm
+source change); no `.agent` commits; `zig-pkg/` preserved.
