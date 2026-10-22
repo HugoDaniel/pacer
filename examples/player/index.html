@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pacer examples — PacerRt player</title>
+    <style>
+      :root { color-scheme: dark; font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      body { margin: 0; padding: 24px; background: #111; color: #e8e8e8; }
+      main { display: grid; gap: 18px; max-width: 980px; }
+      h1 { font-size: 16px; font-weight: 600; margin: 0; }
+      .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+      canvas { width: 100%; max-width: 720px; height: 220px; background: #1b1b1f; border: 1px solid #333; }
+      code, pre { background: #1b1b1f; }
+      pre { padding: 10px; overflow: auto; max-height: 220px; }
+      button, input[type="range"] { accent-color: #7ad; }
+      .muted { color: #999; }
+      #status[data-ok="false"] { color: #f77; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>pacer <span class="muted">— pacer-rt.wasm / score.pacb</span></h1>
+      <div class="row">
+        <button id="restart" type="button">Restart</button>
+        <label class="row">hero-speed <input id="speed" type="range" min="0" max="2" step="0.01" value="1" /></label>
+        <span id="status">loading…</span>
+      </div>
+      <canvas id="stage" width="720" height="220"></canvas>
+      <div class="row"><span class="muted">eval(0) first frame</span></div>
+      <pre id="first-frame">—</pre>
+      <div class="row"><span class="muted">meta: tracks / controls</span></div>
+      <pre id="meta">—</pre>
+      <div class="row"><span class="muted">latest routed writes</span></div>
+      <pre id="frame">—</pre>
+    </main>
+    <script type="module" src="./player.mjs"></script>
+  </body>
+</html>
