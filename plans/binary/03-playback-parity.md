@@ -400,3 +400,10 @@ parity 44/0; cold 56/56 steps, 1237/1237 aggregate (846 native + 391 fuzz), node
 gate-removal calibrations flipped the one-sided-key, min-nonfinite and key-pad cells and the restored tree
 reran byte-exact. Evidence: `.agent/control/prod-four-b2b-{report.md,green4.log,parity2.log,cold-gates2.log}`;
 the T6/P3 remainder (Group B exit) stays open.
+
+
+*(2026-10-22, B2b ACCEPTED at `bb0ba56`.)* Parent OpenBSD cold gate green at the fix HEAD
+(1238/1238 = 847 native + 391 fuzz; node 182/0; parity 44/0; partition 3775/81) after the review's
+CTRL-stride HIGH was fixed with an offset regression test and the two calibration rows were
+corrected to the captured 1/5 → 1/10 `lanesEq` backstop. T6b is complete; P3 acceptance and Group
+B exit remain the separate broad review.

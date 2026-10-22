@@ -1580,3 +1580,21 @@ new family**. Group B exit and P3 acceptance remain open and unclaimed.
   NFS rejects `renameat2(RENAME_NOREPLACE)`). Neither touches pacer source or the committed
   fixture/record. This is a test-targeting/record fix only: no product semantics moved, and
   independent review plus the parent gate remain the acceptance steps.
+
+
+*(2026-10-22, B2b ACCEPTED at `bb0ba56`; append-only.)* Fix commits `39ee1f1` (source) and
+`bb0ba56` (record). Parent cold six-gate rerun on the OpenBSD host at the fix HEAD, new cache
+dir `cache-b2b-fix-parent-bb0ba56`: EXIT 0, 56/56 steps, **1238/1238** aggregate = 847 native +
+391 fuzz, node **182 pass / 0 fail / 0 skipped**, parity 44/0 (five pattern cases binary-replayed),
+partition unchanged at 68 named + 3 bad-call + 3700 prefix + 4 positive = 3775 attempted / 81
+names, audit 12 pacer + 18 SJON. Independent review was REVISE with one HIGH: the matrix walked
+PACB `'CTRL'` records with a variable stride (`60 + id_len`) although `Pacb.zig:1711` uses a fixed
+60-byte stride, so all 14 control-index-1 cells landed one f32 lane late; the fix restores the
+fixed stride, adds a stride/field offset test (RED `expected 412, found 416`), and changes no
+expectation. The MEDIUM was corrected with captured reruns: removing the flag-set min finiteness
+or the key pad-zero gate flips the named cell to **1/10 `meta_incoherent` via the `lanesEq`
+backstop, not 0**. Both LOWs fixed. Narrow confirmation: READY. (The worker-host rerun was Linux
+and recorded host-gated node/native skips; the parent OpenBSD rerun above is the comparable
+record.) **T6b is complete. Group B exit and P3 acceptance remain a separate broad review; C/D/E
+remain open.** Evidence: `prod-four-b2b-fix-parent-gates.log`,
+`prod-four-b2b-fix-confirm-report.md`.
