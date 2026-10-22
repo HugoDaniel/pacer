@@ -2,7 +2,10 @@
 
 Companion raw data for `docs/binary-perf-20261022.md`. Environment record:
 `environment.tsv`. All paths are repo-relative; the measurements ran on
-OpenBSD `obs` (pacer `d2605e7`, SJON `c9a90d85`).
+OpenBSD `obs`. C2/C3 ran on pacer `d2605e7`; the C4/C5 rows below come from
+the parity-enforced harness at pacer `7a20d0b` (SJON `c9a90d85`). The
+harness compares every text/binary frame hash and length after both timed
+sweeps and aborts before writing any TSV on divergence.
 
 ## Size (C2)
 
@@ -28,9 +31,14 @@ OpenBSD `obs` (pacer `d2605e7`, SJON `c9a90d85`).
 
 - `meridian-minimal.{text,binary}.frames.tsv` and
   `all-features.{text,binary}.frames.tsv` — 100,000 rows each:
-  `frame, t_seconds, ns, allocs, frees, bytes, frame_len`.
+  `frame, t_seconds, ns, allocs, frees, bytes, frame_len, fnv1a64`.
   `ns` is `rdtsc` delta converted with the run's calibrated TSC rate
-  (`*.meta.tsv`).
+  (`*.meta.tsv`). `fnv1a64` is the per-frame FNV-1a hash of the emitted
+  `'PACW'` bytes — the frame-parity evidence column; `frame_len` is its
+  companion. The harness enforces equality on both before writing.
+- `meridian-keys-only.{text,binary}.frames.tsv` — the supplementary
+  attribution control (same shape, no expr track; see
+  `keys-only-provenance.tsv`). These are **not** binding C4 rows.
 - `*.summary.tsv` — p50/p95/p99/max, MAD, mean, alloc_frames, total_allocs.
 - `*.memory.tsv` — cold/warm load, 1,000 steady frames, and the
   `DecodedScore` ownership-copy row (production `Pacb.decode` with the
@@ -39,7 +47,8 @@ OpenBSD `obs` (pacer `d2605e7`, SJON `c9a90d85`).
   WASM batch timing (1,000-frame batches; the binding C4 instrument is the
   native harness).
 - Fixtures: `fixtures/all-features.pacb`, `fixtures/meridian-minimal.pacb`,
-  `fixtures/meridian.score.{sjon,pacb}`, and the minimal score source.
+  `fixtures/meridian-keys-only.pacb`, `fixtures/meridian.score.{sjon,pacb}`,
+  and the minimal score sources.
 
 ## Reproduction commands (on obs)
 
@@ -47,12 +56,29 @@ OpenBSD `obs` (pacer `d2605e7`, SJON `c9a90d85`).
 PACER_PERF_FIXTURES=docs/perf-data-20261022/fixtures \
   node tools/measure_load.mjs docs/perf-data-20261022
 
+# C4/C5 binding rows (parity enforced before any TSV is written)
 zig build perf-measure -Doptimize=ReleaseFast -- \
   --score meridian-minimal \
   --doc tools/testdata/perf/meridian-minimal.score.sjon \
   --pacb docs/perf-data-20261022/fixtures/meridian-minimal.pacb \
   --target beat --target heroPos:2 --target heroTurn --target heroTint \
-  --out /tmp/c4 --frames 100000
+  --out .agent/control/cache-c4 --frames 100000
+
+zig build perf-measure -Doptimize=ReleaseFast -- \
+  --score all-features \
+  --doc corpus/all-features/doc.sjon \
+  --pacb docs/perf-data-20261022/fixtures/all-features.pacb \
+  --target beat --target bpm --target radius --target blend --target pat \
+  --target grid --target hit --target level --target sweep --target dropx \
+  --target pulse:4 --out .agent/control/cache-c4 --frames 100000
+
+# Supplementary attribution control (not a binding C4 row)
+zig build perf-measure -Doptimize=ReleaseFast -- \
+  --score meridian-keys-only \
+  --doc tools/testdata/perf/meridian-keys-only.score.sjon \
+  --pacb docs/perf-data-20261022/fixtures/meridian-keys-only.pacb \
+  --target beat --target heroPos:2 --target heroTurn --target heroTint \
+  --out .agent/control/cache-c4 --frames 100000
 ```
 
 The size script takes the ablation artifacts as its optional arguments; see

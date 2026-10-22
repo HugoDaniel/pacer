@@ -1,0 +1,9 @@
+row	status	allocs	frees	total_alloc_bytes	peak_bytes	live_after_bytes
+text-cold-load	0	256	241	630732	469120	145822
+text-warm-reload	0	51	51	102348	152774	145822
+binary-cold-load	0	4	0	31832	31832	31832
+binary-warm-reload	0	4	4	31832	63664	31832
+text-steady-frame-1000	0	0	0	0	145822	145822
+binary-steady-frame-1000	0	0	0	0	31832	31832
+decodedscore-ownership-copy	0	2	0	12724	12724	12724
+decodedscore-after-deinit	0	2	2	12724	12724	0

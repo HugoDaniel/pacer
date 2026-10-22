@@ -1,0 +1,11 @@
+key	value
+label	supplementary C4 attribution control (not a binding C4 row)
+source	tools/testdata/perf/meridian-keys-only.score.sjon
+pacb	docs/perf-data-20261022/fixtures/meridian-keys-only.pacb
+shape	Meridian-minimal transport, three scenes, hero-speed control and four-track join; all four tracks are key tracks (no expr leaf on either path)
+join	beat, heroPos:2, heroTurn, heroTint
+pack_command	zig build run -- pack tools/testdata/perf/meridian-keys-only.score.sjon --target beat --target heroPos:2 --target heroTurn --target heroTint --out docs/perf-data-20261022/fixtures/meridian-keys-only.pacb
+source_commit	7a20d0b (harness parity enforcement + keys-only fixture)
+frames	100000 per path
+script	same deterministic four-phase script as meridian-minimal (monotonic, scene seeks, non-monotonic revisits, hold-end crossing)
+purpose	test whether the text/binary eval delta is present on a non-expr frame path; it does not decompose expr work per operation
