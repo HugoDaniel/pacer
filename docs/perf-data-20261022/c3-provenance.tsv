@@ -6,3 +6,4 @@ wasm_text_gzip9	241544
 cold_definition	fresh WebAssembly instance + load call; module precompiled once
 warm_definition	second load on the live instance
 n_per_cell	50
+fixtures	docs/perf-data-20261022/fixtures/{all-features,meridian-minimal}.pacb (measurement working paths were .agent/control/cache-c/fixtures; bytes identical)
