@@ -1733,5 +1733,9 @@ range is 32.1–75.9% (all-features 52.2/68.8, Meridian 32.1/75.9).
 **Class (b) still fires; (a) and (c) do not** (100,000/100,000 frame
 hashes per score, enforced before write). Group D remains not started, no
 authorization is carried into D, and no threshold/ratchet was created.
-Corrected-tree gate and C7 evidence:
+Cold six-gate on `11afb54` (code unchanged since `7a20d0b`) EXIT 0:
+56/56, 1238/1238 (847+391), node 182/0/0, parity 44/0, negatives
+3775/81, audit 12+18; C7 node proof PASS; wasm hashes unchanged
+(668,852 / `9736a41b…`, 189,506 / `4e2f2100…`). Evidence:
+`.agent/control/prod-four-c-fix-gates.log`,
 `.agent/control/prod-four-c-fix-report.md`.

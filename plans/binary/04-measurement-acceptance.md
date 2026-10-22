@@ -196,6 +196,10 @@ _(created 2026-10-18; entries appended per phase)_
   escalation: class (b) fires, D is not started, the 2026-10-20
   authorization is not carried into D, and no size-check/budget/ratchet
   exists.** C3's cold-load noise statement is corrected to the observed
-  MAD range 32.1–75.9% (all-features 52.2/68.8; Meridian 32.1/75.9). The
-  corrected-tree cold gate and C7 proof are in
+  MAD range 32.1–75.9% (all-features 52.2/68.8; Meridian 32.1/75.9). Cold
+  six-gate on `11afb54` (code unchanged since `7a20d0b`) EXIT 0: 56/56,
+  1238/1238 (847+391), node 182/0/0, parity 44/0, negatives 3775/81,
+  audit 12+18; C7 node proof PASS; wasm hashes unchanged (668,852 /
+  `9736a41b…`, 189,506 / `4e2f2100…`). Evidence:
+  `.agent/control/prod-four-c-fix-gates.log`,
   `.agent/control/prod-four-c-fix-report.md`.
