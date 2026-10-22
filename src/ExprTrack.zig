@@ -219,6 +219,35 @@ pub fn evalAtBinary(
     return coerce(result.value, ncomp) orelse error.ResultShape;
 }
 
+/// Materialize one compact single-root expr payload into an owned,
+/// self-contained prepared tree — the decode-once-at-load seam (2026-10-22,
+/// the pattern `PatternTrack.materializePrepared` precedent). ONE read-only
+/// decode through the audited `RtSjon.BinaryDecoder` window, then the
+/// prepared entry's single-root discipline: `:expr` has no rootless
+/// semantics, so exactly one root is required.
+///
+/// Allocation: O(payload), ONCE per loaded track, from `gpa` — the runtime
+/// backs it with the score's own arena, so the tree dies with the score's
+/// one free and no explicit teardown exists. The caller's bytes may be
+/// freed once this returns: strings are duplicated into the tree's arena.
+///
+/// Errors: `BinaryDecoder`'s typed wire set plus `error.MultipleRoots`.
+/// Through the production loader every variant is unreachable — `Pacb`'s
+/// structural walk is the preceding proof — but on any input they
+/// propagate rather than trap (the totality doctrine), and the loader maps
+/// the whole set to the `payload_malformed` refusal class.
+pub fn materializePrepared(
+    gpa: std.mem.Allocator,
+    payload: []const u8,
+) (RtSjon.BinaryDecoder.Error || error{MultipleRoots})!Ast.Tree {
+    var tree = try RtSjon.BinaryDecoder.fromBinary(gpa, payload, .{});
+    if (tree.root.len != 1) {
+        tree.deinit();
+        return error.MultipleRoots;
+    }
+    return tree;
+}
+
 /// A control value as an Expr value: scalar for ncomp 1, else a vector
 /// of `ncomp` numbers backed by `vals` (caller-owned, must outlive the
 /// evaluation). f32→f64 promotion is exact.
@@ -516,16 +545,52 @@ test "evalAt: an unbound control name is still UnknownBinding" {
 /// the one-root tree against "" (compact drops spans; strings re-intern),
 /// encode compact. Caller owns the returned bytes.
 fn compactPayload(a: std.mem.Allocator, doc: *const TestDoc, node: usize) ![]u8 {
+    return compactPayloadOf(a, &doc.result.tree, doc.node(node));
+}
+
+/// `compactPayload` over an already-validated tree + node index. Shared
+/// with the corpus parity test, which compiles real score documents.
+fn compactPayloadOf(a: std.mem.Allocator, tree: *const Ast.Tree, node: Ast.NodeIndex) ![]u8 {
     const sjon = @import("sjon");
     var tree_arena = std.heap.ArenaAllocator.init(a);
     defer tree_arena.deinit(); // no-op once finalize snapshots the arena
     var builder = sjon.Ast.TreeBuilder{ .a = tree_arena.allocator() };
-    const root = try builder.cloneNode(&doc.result.tree, doc.node(node));
+    const root = try builder.cloneNode(tree, node);
     var one_root = try builder.finalize(&tree_arena, "", &.{root});
     defer one_root.deinit();
     const bin = try sjon.Binary.toBinary(a, one_root, sjon.Binary.ToBinaryOptions.forMode(.compact));
     defer bin.deinit();
     return a.dupe(u8, bin.data);
+}
+
+/// Compile one real score document against the same host join the corpus
+/// and measurement harnesses use. Test-only compiler imports (the runtime
+/// closure keeps its frozen window). The indented import keeps the
+/// column-0 runtime-closure scan honest.
+const TestCompile = struct {
+    const Compile = @import("Compile.zig");
+    const Target = Compile.Target;
+    const Result = Compile.CompileResult;
+};
+
+fn compileDocForTest(
+    a: std.mem.Allocator,
+    relative_path: []const u8,
+    targets: []const TestCompile.Target,
+) !TestCompile.Result {
+    const test_support = @import("test_support.zig");
+    const sjon = @import("sjon");
+    const path = try std.fmt.allocPrint(a, "{s}/{s}", .{ @import("build_options").repo_root, relative_path });
+    defer a.free(path);
+    const src = try sjon.CappedRead.readFileZ(t_.io, path, a, 1 << 20);
+    defer a.free(src);
+    return TestCompile.Compile.compile(a, test_support.schema(), src, targets);
+}
+
+fn expectSameBits(want: [4]f32, got: [4]f32) !void {
+    for (want, got) |w, g| {
+        try t_.expectEqual(@as(u32, @bitCast(w)), @as(u32, @bitCast(g)));
+    }
 }
 
 test "evalAtBinary: constant scalar equivalence — bit-equal [4]f32 vs the tree arm" {
@@ -719,4 +784,204 @@ test "evalAtBinary: malformed and non-single-root payloads are errors, never tra
         error.InvalidMagic,
         evalAtBinary(t_.allocator, &junk, core_schema, &test_transport, &.{}, 0, null, 1),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Prepared expr leaf — decode-once at load, tree-arm eval at frame.
+// ---------------------------------------------------------------------------
+
+test "materializePrepared: decodes the payload into an owned single-root tree" {
+    var doc = try TestDoc.init("(+ 1 2)");
+    defer doc.deinit();
+    const payload = try compactPayload(t_.allocator, &doc, 0);
+    errdefer t_.allocator.free(payload);
+
+    var prepared = try materializePrepared(t_.allocator, payload);
+    defer prepared.deinit();
+    try t_.expectEqual(@as(usize, 1), prepared.root.len);
+    // The caller's bytes may be freed once materialize returns: the tree
+    // owns its strings and arena.
+    t_.allocator.free(payload);
+    const v = try evalAt(t_.allocator, &prepared, core_schema, &test_transport, &.{}, prepared.root[0], 0, null, 1);
+    try t_.expectEqual([4]f32{ 3, 0, 0, 0 }, v);
+}
+
+test "materializePrepared: multi-root and corrupt payloads refuse typed errors, never trap" {
+    const sjon = @import("sjon");
+    // More than one root: the prepared entry's single-root discipline.
+    var multi = try sjon.parse(t_.allocator, "1 2");
+    defer multi.deinit();
+    const multi_bin = try sjon.Binary.toBinary(t_.allocator, multi, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer multi_bin.deinit();
+    try t_.expectError(error.MultipleRoots, materializePrepared(t_.allocator, multi_bin.data));
+
+    // Zero roots is also not single-root for `:expr` (unlike the pattern
+    // prepared entry, which has a specified silence mapping).
+    var zero = try sjon.parse(t_.allocator, "");
+    defer zero.deinit();
+    const zero_bin = try sjon.Binary.toBinary(t_.allocator, zero, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer zero_bin.deinit();
+    try t_.expectError(error.MultipleRoots, materializePrepared(t_.allocator, zero_bin.data));
+
+    // Not binary IR at all: the decoder's typed magic refusal.
+    const junk = [_]u8{0} ** 16;
+    try t_.expectError(error.InvalidMagic, materializePrepared(t_.allocator, &junk));
+}
+
+test "prepared-vs-wire parity: all-features and Meridian-minimal expr payloads across a tick sweep" {
+    const Compile = @import("Compile.zig");
+    const PPC = RtSjon.Pattern.PPC;
+    const all_features_targets = [_]Compile.Target{
+        .{ .name = "beat", .ncomp = 1, .registry = 0 },
+        .{ .name = "bpm", .ncomp = 1, .registry = 0 },
+        .{ .name = "radius", .ncomp = 1, .registry = 0 },
+        .{ .name = "blend", .ncomp = 1, .registry = 0 },
+        .{ .name = "pat", .ncomp = 1, .registry = 0 },
+        .{ .name = "grid", .ncomp = 1, .registry = 0 },
+        .{ .name = "hit", .ncomp = 1, .registry = 0 },
+        .{ .name = "level", .ncomp = 1, .registry = 0 },
+        .{ .name = "sweep", .ncomp = 1, .registry = 0 },
+        .{ .name = "dropx", .ncomp = 1, .registry = 0 },
+        .{ .name = "pulse", .ncomp = 4, .registry = 0 },
+    };
+    const meridian_targets = [_]Compile.Target{
+        .{ .name = "beat", .ncomp = 1, .registry = 0 },
+        .{ .name = "heroPos", .ncomp = 2, .registry = 0 },
+        .{ .name = "heroTurn", .ncomp = 1, .registry = 0 },
+        .{ .name = "heroTint", .ncomp = 1, .registry = 0 },
+    };
+    const cases = [_]struct { path: []const u8, targets: []const Compile.Target }{
+        .{ .path = "corpus/all-features/doc.sjon", .targets = &all_features_targets },
+        .{ .path = "tools/testdata/perf/meridian-minimal.score.sjon", .targets = &meridian_targets },
+    };
+    const sweep = [_]Tick{
+        -@divExact(PPC, 4),
+        0,
+        1,
+        @divExact(PPC, 16),
+        @divExact(PPC, 8) + 1,
+        @divExact(PPC, 4),
+        @divExact(PPC, 2),
+        PPC - 1,
+        PPC,
+        PPC + @divExact(PPC, 16),
+        2 * PPC - 1,
+        2 * PPC,
+        3 * PPC + 7,
+        6 * PPC,
+    };
+
+    for (cases) |case| {
+        var r = try compileDocForTest(t_.allocator, case.path, case.targets);
+        defer r.deinit();
+        try t_.expect(r.ok());
+        const table = &r.table.?;
+        var bindings_buf: [TrackTable.MAX_CONTROLS]ControlBinding = undefined;
+        for (table.controls, 0..) |control, i| bindings_buf[i] = ControlBinding.fromControl(control);
+        const bindings = bindings_buf[0..table.controls.len];
+
+        var expr_tracks: usize = 0;
+        for (table.tracks) |track| {
+            if (track.source != .expr) continue;
+            expr_tracks += 1;
+            const node = track.source.expr;
+            const payload = try compactPayloadOf(t_.allocator, &r.validated.result.tree, node);
+            defer t_.allocator.free(payload);
+            var prepared = try materializePrepared(t_.allocator, payload);
+            defer prepared.deinit();
+            try t_.expectEqual(@as(usize, 1), prepared.root.len);
+            const scene: ?TrackTable.Scene = if (track.scene == TrackTable.NO_SCENE) null else table.scenes[track.scene];
+            for (sweep) |tick| {
+                const wire = evalAtBinary(
+                    t_.allocator,
+                    payload,
+                    core_schema,
+                    &table.transport,
+                    bindings,
+                    tick,
+                    scene,
+                    track.ncomp,
+                );
+                if (wire) |want| {
+                    const got = try evalAt(
+                        t_.allocator,
+                        &prepared,
+                        core_schema,
+                        &table.transport,
+                        bindings,
+                        prepared.root[0],
+                        tick,
+                        scene,
+                        track.ncomp,
+                    );
+                    try expectSameBits(want, got);
+                } else |wire_err| {
+                    if (evalAt(
+                        t_.allocator,
+                        &prepared,
+                        core_schema,
+                        &table.transport,
+                        bindings,
+                        prepared.root[0],
+                        tick,
+                        scene,
+                        track.ncomp,
+                    )) |_| {
+                        return error.TestExpectedEqual;
+                    } else |tree_err| {
+                        try t_.expectEqual(@as(anyerror, wire_err), @as(anyerror, tree_err));
+                    }
+                }
+            }
+        }
+        try t_.expect(expr_tracks > 0);
+    }
+}
+
+test "prepared-vs-wire parity: -0 sign and NaN-result rejection are bit-domain equal" {
+    var doc = try TestDoc.init("(* -1 0) (pow -1 0.5)");
+    defer doc.deinit();
+    for (0..2) |i| {
+        const payload = try compactPayload(t_.allocator, &doc, i);
+        defer t_.allocator.free(payload);
+        var prepared = try materializePrepared(t_.allocator, payload);
+        defer prepared.deinit();
+        const wire = evalAtBinary(t_.allocator, payload, core_schema, &test_transport, &.{}, 0, null, 1);
+        if (wire) |want| {
+            const got = try evalAt(
+                t_.allocator,
+                &prepared,
+                core_schema,
+                &test_transport,
+                &.{},
+                prepared.root[0],
+                0,
+                null,
+                1,
+            );
+            try expectSameBits(want, got);
+            if (i == 0) {
+                // -1 * 0 is negative zero, and both arms preserve its
+                // sign bit through the f64→f32 truncation.
+                try t_.expectEqual(@as(u32, 0x8000_0000), @as(u32, @bitCast(got[0])));
+            }
+        } else |wire_err| {
+            try t_.expectEqual(@as(anyerror, error.ResultShape), @as(anyerror, wire_err));
+            if (evalAt(
+                t_.allocator,
+                &prepared,
+                core_schema,
+                &test_transport,
+                &.{},
+                prepared.root[0],
+                0,
+                null,
+                1,
+            )) |_| {
+                return error.TestExpectedEqual;
+            } else |tree_err| {
+                try t_.expectEqual(@as(anyerror, error.ResultShape), @as(anyerror, tree_err));
+            }
+        }
+    }
 }

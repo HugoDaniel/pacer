@@ -180,9 +180,22 @@ const RtScore = struct {
     table_arena: std.heap.ArenaAllocator,
     table: TrackTable,
     /// Compact expr payloads PARALLEL to `table.tracks` (null on every
-    /// non-expr track) — the binary arm's leaf (C4): the table's
-    /// `.expr` node index is the inert `.invalid` sentinel, never read.
+    /// non-expr track) — retained as the wire parity oracle and the
+    /// test-only ablation fallback: the table's `.expr` node index is the
+    /// inert `.invalid` sentinel, never read.
     expr_payloads: []?[]const u8,
+    /// The prepared expr leaf, PARALLEL to `table.tracks` (null on every
+    /// non-expr track) — the expr-leaf adoption (2026-10-22): each
+    /// `.expr` track's payload decoded ONCE at load into an owned tree
+    /// (`ExprTrack.materializePrepared` through the audited
+    /// `RtSjon.BinaryDecoder` window). The slice and every tree are
+    /// score-arena allocations: the ONE free (`score.deinit()`) reclaims
+    /// all of it on every path — success, refusal, OOM —
+    /// transactionally, so no explicit teardown exists and none can be
+    /// missed. The evaluator borrows the pointees read-only
+    /// (`LeafSource.binary.expr_prepared`); the frame and dry-run seams
+    /// evaluate them under each call's own env.
+    expr_prepared: []?RtSjon.Ast.Tree,
     /// Compact pattern payloads, PARALLEL to `table.tracks` (null on
     /// every non-pattern track) — the binary pattern arm's leaf
     /// (P4/A2): the table's `.pattern` node index is the inert
@@ -335,6 +348,31 @@ export fn prt_load(pacb_len: u32, targets_len: u32) u32 {
         gpa.destroy(shell);
         return @intFromEnum(LoadStatus.oom);
     }
+    // State building sits AHEAD of the dry-run that consumes it: the expr
+    // prepared trees precede `dryRunExprs` (it evaluates them), and the
+    // pattern prepared states precede `dryRunPatterns`. The expr prepare
+    // moving ahead of the expr dry-run does not mask a refusal class: if
+    // a payload could reach prepare malformed, a pre-prepare dry-run
+    // refusal (11) would have hidden prepare's payload-malformed class
+    // (8). That input class does not exist through the production
+    // loader — decode's structural walk (`Pacb.decodePayloads`, the same
+    // depth/pool/root caps) has already refused prepare's whole typed
+    // malformed set — so the order is unobservable and no class is ever
+    // masked. Typed anyway (the totality doctrine): a prepare failure is
+    // the payload-malformed CLASS (reason 8), never a trap.
+    switch (prepareExprs(shell) catch {
+        shell.score.deinit();
+        gpa.destroy(shell);
+        return @intFromEnum(LoadStatus.oom);
+    }) {
+        .ok => {},
+        .malformed => {
+            shell.score.deinit();
+            gpa.destroy(shell);
+            load_error = refusalReason(.payload_malformed);
+            return @intFromEnum(LoadStatus.refused);
+        },
+    }
     const dry_ok = dryRunExprs(shell) catch {
         shell.score.deinit();
         gpa.destroy(shell);
@@ -347,17 +385,9 @@ export fn prt_load(pacb_len: u32, targets_len: u32) u32 {
         return @intFromEnum(LoadStatus.refused);
     }
     // ask30/M4 (2026-10-22; ordering wording corrected 2026-10-22 in the
-    // record-fix slice — comment only, no behavior change): materialize
-    // the prepared state AFTER the expr dry-run and BEFORE the pattern
-    // dry-run, which queries it — state building for patterns sits
-    // between the two gates, not ahead of both. This is not a blanket
-    // "prepare before the dry-runs": if a payload could reach prepare
-    // malformed, the earlier expr-dry refusal (11) would mask prepare's
-    // payload-malformed class (8). That input class does not exist
-    // through the production loader — decode's structural walk
-    // (Pacb.decodePayloads) has already refused everything in prepare's
-    // typed malformed set — so the ordering above is unobservable and no
-    // refusal class is ever masked. A prepare failure remains the
+    // record-fix slice — comment only, no behavior change): the pattern
+    // prepared state sits AFTER the expr dry-run and BEFORE the pattern
+    // dry-run, which queries it. A pattern prepare failure remains the
     // payload-malformed CLASS (never a trap).
     switch (preparePatterns(shell) catch {
         shell.score.deinit();
@@ -389,6 +419,7 @@ export fn prt_load(pacb_len: u32, targets_len: u32) u32 {
             .expr = shell.expr_payloads,
             .pattern = shell.pattern_payloads,
             .pattern_prepared = shell.pattern_prepared,
+            .expr_prepared = shell.expr_prepared,
         } },
         .schema = rt_schema,
     }) catch {
@@ -509,7 +540,7 @@ fn materialize(shell: *RtScore) bool {
 
 /// C5: dry-run every expr track at its own dry tick — the scene's start
 /// tick when scened, else 0 (`Compile.zig:1189` verbatim) — through the
-/// SAME `evalAtBinary` the frame path will use, control ids bound with
+/// SAME prepared leaf the frame path will use, control ids bound with
 /// their document `:value`s, under the frame's own fixed budget: an FBA
 /// over `ExprTrack.SCRATCH_BYTES`, so an evaluation's `OutOfMemory` can
 /// only mean the budget — a REFUSAL (reason 11), the `Compile` dry-run
@@ -531,23 +562,58 @@ fn dryRunExprs(shell: *RtScore) error{OutOfMemory}!bool {
     for (table.controls, 0..) |control, i| bindings_buf[i] = ExprTrack.ControlBinding.fromControl(control);
     const bindings = bindings_buf[0..table.controls.len];
 
-    for (table.tracks, shell.expr_payloads) |track, pl| {
+    for (table.tracks, 0..) |track, ti| {
         if (track.source != .expr) continue;
+        // Parallel-slice invariant: an expr track carries its prepared
+        // tree (`prepareExprs` ran for every expr track).
+        const prepared = if (shell.expr_prepared[ti]) |*p| p else return false;
         const scene: ?TrackTable.Scene = if (track.scene == TrackTable.NO_SCENE) null else table.scenes[track.scene];
         const dry_tick: TrackTable.Tick = if (scene) |s| s.start_tick else 0;
         var fba = std.heap.FixedBufferAllocator.init(scratch);
-        _ = ExprTrack.evalAtBinary(
+        _ = ExprTrack.evalAt(
             fba.allocator(),
-            pl.?, // the parallel-slice invariant: an expr track carries its payload
+            prepared,
             rt_schema,
             &table.transport,
             bindings,
+            prepared.root[0],
             dry_tick,
             scene,
             track.ncomp,
         ) catch return false;
     }
     return true;
+}
+
+/// The expr-leaf adoption (2026-10-22): materialize the prepared state —
+/// ONE `ExprTrack.materializePrepared` per `.expr` track, into the
+/// score's own arena, so the slice and every decoded tree die with the
+/// score's one free on every path (transactional by construction: a
+/// refusal's teardown is the same `score.deinit()` the other gates run).
+/// No env is read and no budget is touched: the decode is O(payload) once
+/// per load, outside the 256 KiB dry-run scratch.
+///
+/// `.malformed` = a typed prepare refusal (`BinaryDecoder`'s wire set or
+/// `MultipleRoots`) — the payload-malformed class; unreachable past the
+/// decode's structural walk, typed here so it propagates rather than
+/// traps. `error.OutOfMemory` is the real status-3 class.
+fn prepareExprs(shell: *RtScore) error{OutOfMemory}!PrepareOutcome {
+    const a = shell.score.arena.allocator();
+    const prepared = try a.alloc(?RtSjon.Ast.Tree, shell.table.tracks.len);
+    for (prepared) |*slot| slot.* = null;
+    for (shell.table.tracks, 0..) |track, ti| {
+        if (track.source != .expr) continue;
+        // Parallel-slice invariant: an expr track carries its payload.
+        // A missing slot would be an inconsistent decode — the defensive
+        // mapping is the payload-malformed class, never a trap.
+        const payload = shell.expr_payloads[ti] orelse return .malformed;
+        prepared[ti] = ExprTrack.materializePrepared(a, payload) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return .malformed,
+        };
+    }
+    shell.expr_prepared = prepared;
+    return .ok;
 }
 
 /// ask30/M4 (2026-10-22): materialize the prepared state — ONE
@@ -2251,6 +2317,241 @@ test "rt_entry (v): refused and malformed reloads while a pattern score is live 
     try t.expectEqual(n_p, n3);
     try t.expectEqualSlices(u8, frame_p, writes_buffer[0..n3]);
     try t.expectEqual(counter, prt_exprFailures());
+}
+
+// ---------------------------------------------------------------------------
+// Expr-leaf adoption — ownership, dry-run budget, zero frame allocations.
+// ---------------------------------------------------------------------------
+
+/// A pass-through counting allocator over a debug backing allocator. Used
+/// to prove the frame path never leaves the fixed scratch and that the
+/// score's one free reclaims every prepared-tree allocation.
+const CountingAllocator = struct {
+    backing: std.mem.Allocator,
+    allocs: usize = 0,
+    frees: usize = 0,
+
+    fn allocator(self: *CountingAllocator) std.mem.Allocator {
+        return .{ .ptr = @ptrCast(self), .vtable = &vtable };
+    }
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        const p = self.backing.vtable.alloc(self.backing.ptr, len, alignment, ret_addr);
+        if (p != null) self.allocs += 1;
+        return p;
+    }
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        return self.backing.vtable.resize(self.backing.ptr, memory, alignment, new_len, ret_addr);
+    }
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        return self.backing.vtable.remap(self.backing.ptr, memory, alignment, new_len, ret_addr);
+    }
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.frees += 1;
+        self.backing.vtable.free(self.backing.ptr, memory, alignment, ret_addr);
+    }
+};
+
+fn setTestGpa(a: std.mem.Allocator) void {
+    NativeGpa.gpa_ptr = a.ptr;
+    NativeGpa.gpa_vtable = a.vtable;
+}
+
+fn restoreTestGpa() void {
+    NativeGpa.gpa_ptr = @ptrCast(&gpa_dummy);
+    NativeGpa.gpa_vtable = std.heap.page_allocator.vtable;
+}
+
+/// Read a repo-relative committed blob with the testing allocator.
+fn readBlob(a: std.mem.Allocator, relative_path: []const u8) ![]u8 {
+    const sjon = @import("sjon");
+    const path = try std.fmt.allocPrint(a, "{s}/{s}", .{ @import("build_options").repo_root, relative_path });
+    defer a.free(path);
+    return sjon.CappedRead.readFile(t.io, path, a, 1 << 20);
+}
+
+fn loadWithAllocator(a: std.mem.Allocator, pacb: []const u8) !void {
+    setTestGpa(a);
+    defer restoreTestGpa();
+    unload();
+    const status = loadPacB(pacb);
+    if (status == 3) {
+        unload();
+        return error.OutOfMemory;
+    }
+    try t.expectEqual(@as(u32, 0), status);
+    // The frame path must stay on the fixed scratch even under an
+    // allocation-failure allocator.
+    _ = rtFrame(0);
+    unload();
+}
+
+test "rt_entry: prepared expr trees are score-owned and one free reclaims all" {
+    var dbg: std.heap.DebugAllocator(.{}) = .init;
+    setTestGpa(dbg.allocator());
+    defer restoreTestGpa();
+    unload();
+
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fx = try readFixture(a, "expr-keys");
+    try t.expectEqual(@as(u32, 0), loadPacB(fx.pacb));
+
+    const shell = live.?;
+    try t.expectEqual(shell.table.tracks.len, shell.expr_prepared.len);
+    var expr_tracks: usize = 0;
+    for (shell.table.tracks, shell.expr_prepared) |track, slot| {
+        if (track.source != .expr) {
+            try t.expect(slot == null);
+            continue;
+        }
+        expr_tracks += 1;
+        try t.expect(slot != null);
+        try t.expectEqual(@as(usize, 1), slot.?.root.len);
+    }
+    try t.expect(expr_tracks > 0);
+    try t.expect(rtFrame(0).len > 0);
+
+    // A refusal inside the same allocation epoch must not leak either:
+    // reason 11 (expr dry-run), then reason 8 (decoder class), then the
+    // live score's one free.
+    {
+        const mutated = try a.dupe(u8, fx.pacb);
+        const dir = Pacb.parseDirectory(mutated, null) catch unreachable;
+        const payl = dir.find(.payl).?;
+        const section = mutated[payl.off..][0..payl.len];
+        var pos: usize = 0;
+        while (pos < section.len) {
+            const plen = std.mem.readInt(u32, section[pos..][0..4], .little);
+            const body = section[pos + 4 ..][0..plen];
+            for (body) |*byte| if (byte.* == '*') {
+                byte.* = '/';
+            };
+            pos += 4 + plen;
+        }
+        try t.expectEqual(@as(u32, 1), loadPacB(mutated));
+        try t.expectEqual(@as(u32, 11), prt_loadError());
+    }
+    {
+        const corrupt = try a.dupe(u8, fx.pacb);
+        std.mem.writeInt(u32, corrupt[4..8], 99, .little);
+        try t.expectEqual(@as(u32, 1), loadPacB(corrupt));
+        try t.expectEqual(@as(u32, 1), prt_loadError());
+    }
+
+    unload();
+    try t.expectEqual(std.heap.Check.ok, dbg.deinit());
+}
+
+test "rt_entry: prepared-expr OOM at every allocation index is transactional and leak-free" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fx = try readFixture(a, "expr-keys");
+    unload();
+    try t.checkAllAllocationFailures(t.allocator, loadWithAllocator, .{fx.pacb});
+}
+
+test "rt_entry: expr dry-run budget still refuses reason 11, old score live" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sjon = @import("sjon");
+
+    // A decode-valid but over-budget expression: a 16,000-lane vector
+    // literal allocates well past the 256 KiB dry-run scratch, while its
+    // compact encoding stays inside the 256 KiB per-payload cap (asserted
+    // below). The text path would refuse the same document at compile;
+    // the hand-encoded payload is the producer class that bypasses that
+    // gate, so the runtime dry-run must mirror the budget.
+    var text: std.ArrayList(u8) = .empty;
+    try text.append(a, '[');
+    for (0..16_000) |_| try text.appendSlice(a, "1 ");
+    try text.append(a, ']');
+    try text.append(a, 0);
+    var tree = try sjon.parse(a, text.items[0 .. text.items.len - 1 :0]);
+    defer tree.deinit();
+    const body = try sjon.Binary.toBinary(a, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer body.deinit();
+    try t.expect(body.data.len < Pacb.MAX_PAYLOAD_BYTES);
+
+    const fx = try readFixture(a, "expr-keys");
+    const budget_blob = try splicePayloadRecord(a, fx.pacb, body.data);
+
+    var dbg: std.heap.DebugAllocator(.{}) = .init;
+    setTestGpa(dbg.allocator());
+    defer restoreTestGpa();
+    unload();
+    try t.expectEqual(@as(u32, 0), loadPacB(fx.pacb));
+    const frame_before = try captureTicks(a, 96);
+    try t.expectEqual(@as(u32, 1), loadPacB(budget_blob));
+    try t.expectEqual(@as(u32, 11), prt_loadError());
+    try t.expectEqualSlices(u8, frame_before, try captureTicks(a, 96));
+    unload();
+    try t.expectEqual(std.heap.Check.ok, dbg.deinit());
+}
+
+test "rt_entry: zero frame-path allocations over 100k frames on both binding scores" {
+    // The test allocator's own leak check covers the score's one free; the
+    // wrapper only counts allocation calls inside the timed frame loop.
+    var counter: CountingAllocator = .{ .backing = t.allocator };
+    setTestGpa(counter.allocator());
+    defer restoreTestGpa();
+    unload();
+
+    const meridian_targets = [_]PactCodec.Target{
+        .{ .name = "beat", .ncomp = 1, .registry = 0 },
+        .{ .name = "heroPos", .ncomp = 2, .registry = 0 },
+        .{ .name = "heroTurn", .ncomp = 1, .registry = 0 },
+        .{ .name = "heroTint", .ncomp = 1, .registry = 0 },
+    };
+    const all_targets = [_]PactCodec.Target{
+        .{ .name = "beat", .ncomp = 1, .registry = 0 },
+        .{ .name = "bpm", .ncomp = 1, .registry = 0 },
+        .{ .name = "radius", .ncomp = 1, .registry = 0 },
+        .{ .name = "blend", .ncomp = 1, .registry = 0 },
+        .{ .name = "pat", .ncomp = 1, .registry = 0 },
+        .{ .name = "grid", .ncomp = 1, .registry = 0 },
+        .{ .name = "hit", .ncomp = 1, .registry = 0 },
+        .{ .name = "level", .ncomp = 1, .registry = 0 },
+        .{ .name = "sweep", .ncomp = 1, .registry = 0 },
+        .{ .name = "dropx", .ncomp = 1, .registry = 0 },
+        .{ .name = "pulse", .ncomp = 4, .registry = 0 },
+    };
+    const cases = [_]struct { pacb: []const u8, targets: []const PactCodec.Target }{
+        .{ .pacb = "docs/perf-data-20261022/fixtures/meridian-minimal.pacb", .targets = &meridian_targets },
+        .{ .pacb = "docs/perf-data-20261022/fixtures/all-features.pacb", .targets = &all_targets },
+    };
+
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    for (cases) |case| {
+        const pacb = try readBlob(a, case.pacb);
+        try t.expectEqual(@as(u32, 0), loadPacBT(pacb, case.targets));
+        counter.allocs = 0;
+        counter.frees = 0;
+        for (0..100_000) |i| {
+            const tick: i64 = @intCast(i * 13);
+            _ = prt_evalTicks(tick);
+        }
+        try t.expectEqual(@as(usize, 0), counter.allocs);
+        try t.expectEqual(@as(usize, 0), counter.frees);
+        unload();
+    }
 }
 
 test "rt_entry: ownership — repeated reloads, eval-after-reload, no stale pointers" {

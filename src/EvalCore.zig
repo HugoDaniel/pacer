@@ -102,6 +102,7 @@
 //! entries (and `Writes.encode` bytes), native and wasm32.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const RtSjon = @import("RtSjon.zig");
 const TrackTable = @import("TrackTable.zig");
 const TimeMap = @import("TimeMap.zig");
@@ -119,8 +120,18 @@ pub const LeafSource = union(enum) {
     binary: struct {
         /// Compact single-root expr payloads, PARALLEL to
         /// `table.tracks`: the `.expr` track's payload at its track
-        /// position, null on every other track.
+        /// position, null on every other track. Retained as the wire
+        /// parity oracle and the test-only ablation fallback; the frame
+        /// arm reads `expr_prepared`, not this slice.
         expr: []const ?[]const u8,
+        /// The prepared expr leaf, PARALLEL to `table.tracks`: each
+        /// `.expr` track's owned decoded tree, materialized ONCE per
+        /// loaded track (`ExprTrack.materializePrepared`) and read-only
+        /// at frame — at its track position, null on every other track.
+        /// Same length as `expr`; every `.expr` track's slot is non-null
+        /// (asserted at init). The pointees are borrowed whole: the score
+        /// owns the prepared trees, ordered teardown.
+        expr_prepared: []const ?RtSjon.Ast.Tree = &.{},
         /// Compact single-root pattern payloads, PARALLEL to
         /// `table.tracks` (the expr slice's P4 twin): the `.pattern`
         /// track's payload at its track position, null on every other
@@ -167,6 +178,24 @@ pub const Error = TimeMap.Error;
 /// (`registerControl` — editor-lifted literals with no `(control …)`
 /// in the text).
 pub const MAX_DYNAMIC_CONTROLS = 64;
+
+/// Test-only ablation switch for the expr-leaf adoption. It exists in the
+/// TEST compilation only (`builtin.is_test`), so every shipped artifact
+/// compiles the branch out; there is no runtime or host switch. The test
+/// toggles it to prove the prepared arm and the retained wire oracle
+/// produce identical frames and that the wire leaf costs more.
+const test_hooks = if (builtin.is_test) struct {
+    var wire_expr_leaf: bool = false;
+} else struct {};
+
+fn wireExprAblation() bool {
+    if (builtin.is_test) return test_hooks.wire_expr_leaf;
+    return false;
+}
+
+fn setWireExprAblationForTest(on: bool) void {
+    if (builtin.is_test) test_hooks.wire_expr_leaf = on;
+}
 
 /// Sentinel target id of an env-only document control (writes nothing) —
 /// `TrackTable.NO_TARGET`, re-exported for the wasm entry's range guard.
@@ -275,12 +304,15 @@ pub const Evaluator = struct {
             .binary => |bin| {
                 std.debug.assert(bin.expr.len == table.tracks.len);
                 std.debug.assert(bin.pattern.len == table.tracks.len);
-                // The prepared state is parallel too (ask30/M4), and
-                // every `.pattern` track carries its prepared object —
-                // the frame seam dereferences it per query.
+                // The prepared states are parallel too (ask30/M4 for
+                // patterns; the expr-leaf adoption 2026-10-22 for exprs),
+                // and every track of each class carries its prepared
+                // object — the frame seams dereference them per call.
                 std.debug.assert(bin.pattern_prepared.len == table.tracks.len);
-                for (table.tracks, bin.pattern_prepared) |tr, *slot| {
-                    if (tr.source == .pattern) std.debug.assert(slot.* != null);
+                std.debug.assert(bin.expr_prepared.len == table.tracks.len);
+                for (table.tracks, bin.pattern_prepared, bin.expr_prepared) |tr, *pslot, *eslot| {
+                    if (tr.source == .pattern) std.debug.assert(pslot.* != null);
+                    if (tr.source == .expr) std.debug.assert(eslot.* != null);
                 }
             },
             .tree => {},
@@ -562,8 +594,10 @@ pub const Evaluator = struct {
     /// One `.expr` track at wrapped tick `t`, or null when the write is
     /// OMITTED by a runtime failure (counted in `expr_failures`). The
     /// leaf switch: the tree arm re-reads the node against the borrowed
-    /// tree; the binary arm decodes the track's compact payload —
-    /// same env, same coerce, so the arms cannot drift (T1.1's pin).
+    /// tree; the binary arm walks the track's prepared decoded tree
+    /// (`expr_prepared`, materialized once at load) — same env, same
+    /// coerce, so the arms cannot drift (T1.1's pin). The retained wire
+    /// payload is the parity oracle and the test-only ablation fallback.
     /// Either arm's failure rides the same omit-and-count path.
     fn evalExprTrack(
         self: *Evaluator,
@@ -600,22 +634,48 @@ pub const Evaluator = struct {
                 };
             },
             .binary => |bin| blk: {
-                // The node index is inert on this arm — never read (C4);
-                // the payload slice is the leaf.
-                const payload = bin.expr[track_index] orelse {
+                // The node index is inert on this arm — never read (C4).
+                // Test-only ablation: the retained wire leaf can stand in
+                // for the prepared tree to attribute the delta. Compiled
+                // out of every non-test build.
+                if (wireExprAblation()) {
+                    const payload = bin.expr[track_index] orelse {
+                        self.expr_failures += 1;
+                        return null;
+                    };
+                    break :blk ExprTrack.evalAtBinary(
+                        fba.allocator(),
+                        payload,
+                        self.schema,
+                        &self.transport,
+                        self.ctl_bindings,
+                        t,
+                        scene,
+                        track.ncomp,
+                    ) catch {
+                        self.expr_failures += 1;
+                        return null;
+                    };
+                }
+                // The prepared leaf: one owned decoded tree per loaded
+                // track, read-only at frame. The shared `evalAt` is the
+                // text arm's own code path — the wire walk is gone from
+                // the frame (retained only as the oracle above).
+                const prepared = if (bin.expr_prepared[track_index]) |*p| p else {
                     // Parallel-slice invariant: an `.expr` track carries
-                    // its payload. A missing one is a context-construction
-                    // bug — the same omit-and-count as any leaf failure,
-                    // never a silent empty write.
+                    // its prepared tree. A missing one is a context-
+                    // construction bug — the same omit-and-count as any
+                    // leaf failure, never a silent empty write.
                     self.expr_failures += 1;
                     return null;
                 };
-                break :blk ExprTrack.evalAtBinary(
+                break :blk ExprTrack.evalAt(
                     fba.allocator(),
-                    payload,
+                    prepared,
                     self.schema,
                     &self.transport,
                     self.ctl_bindings,
+                    prepared.root[0],
                     t,
                     scene,
                     track.ncomp,
@@ -898,6 +958,31 @@ fn compactPayloadFor(a: std.mem.Allocator, tree: *const RtSjon.Ast.Tree, node: R
 const core_plugins = [_]RtSjon.Plugin.Plugin{ RtSjon.plugins.core.plugin, RtSjon.plugins.pattern.plugin };
 const binary_schema: RtSjon.Schema.Schema = .{ .plugins = &core_plugins };
 
+/// Materialize the parallel prepared-expr slice for a binary test context,
+/// exactly as the runtime's load gate does (one decode per `.expr` track,
+/// caller owns the trees).
+fn prepareExprsForTest(
+    a: std.mem.Allocator,
+    table: *const TrackTable,
+    payloads: []const ?[]const u8,
+) ![]?RtSjon.Ast.Tree {
+    const prepared = try a.alloc(?RtSjon.Ast.Tree, table.tracks.len);
+    @memset(prepared, null);
+    errdefer deinitPreparedExprsForTest(a, prepared);
+    for (table.tracks, 0..) |tr, i| {
+        if (tr.source != .expr) continue;
+        prepared[i] = try ExprTrack.materializePrepared(a, payloads[i].?);
+    }
+    return prepared;
+}
+
+fn deinitPreparedExprsForTest(a: std.mem.Allocator, prepared: []?RtSjon.Ast.Tree) void {
+    for (prepared) |*slot| {
+        if (slot.*) |*tree| tree.deinit();
+    }
+    a.free(prepared);
+}
+
 test "EvalCore: initContext evaluates a binary-arm context bit-equal to the facade path" {
     const Compile = @import("Compile.zig");
     const Eval = @import("Eval.zig");
@@ -917,6 +1002,8 @@ test "EvalCore: initContext evaluates a binary-arm context bit-equal to the faca
     const payloads = [_]?[]const u8{payload};
     const pattern_nulls = [_]?[]const u8{null};
     const prepared_nulls = [_]?RtSjon.PatternQuery.PreparedBinary{null};
+    const expr_prepared = try prepareExprsForTest(t_.allocator, table, &payloads);
+    defer deinitPreparedExprsForTest(t_.allocator, expr_prepared);
 
     // The tree arm through the PRESERVED public spelling (the facade
     // alias — pins it against this file's typed spelling).
@@ -925,7 +1012,12 @@ test "EvalCore: initContext evaluates a binary-arm context bit-equal to the faca
     // The binary arm through the runtime's typed spelling.
     var bin_ev = try Evaluator.initContext(t_.allocator, .{
         .table = table,
-        .source = .{ .binary = .{ .expr = &payloads, .pattern = &pattern_nulls, .pattern_prepared = &prepared_nulls } },
+        .source = .{ .binary = .{
+            .expr = &payloads,
+            .pattern = &pattern_nulls,
+            .pattern_prepared = &prepared_nulls,
+            .expr_prepared = expr_prepared,
+        } },
         .schema = binary_schema,
     });
     defer bin_ev.deinit();
@@ -985,9 +1077,16 @@ test "EvalCore: binary arm ≡ tree arm over one table — tick sweep, held cont
     const prepared_nulls = try t_.allocator.alloc(?RtSjon.PatternQuery.PreparedBinary, table.tracks.len);
     defer t_.allocator.free(prepared_nulls);
     @memset(prepared_nulls, null);
+    const expr_prepared = try prepareExprsForTest(t_.allocator, table, payloads);
+    defer deinitPreparedExprsForTest(t_.allocator, expr_prepared);
     const ctx: Context = .{
         .table = table,
-        .source = .{ .binary = .{ .expr = payloads, .pattern = pattern_nulls, .pattern_prepared = prepared_nulls } },
+        .source = .{ .binary = .{
+            .expr = payloads,
+            .pattern = pattern_nulls,
+            .pattern_prepared = prepared_nulls,
+            .expr_prepared = expr_prepared,
+        } },
         .schema = binary_schema,
     };
 
@@ -1122,9 +1221,16 @@ test "EvalCore: per-arm schema — the tree arm carries the document's user plug
     const payloads = [_]?[]const u8{payload};
     const pattern_nulls = [_]?[]const u8{null};
     const prepared_nulls = [_]?RtSjon.PatternQuery.PreparedBinary{null};
+    const expr_prepared = try prepareExprsForTest(t_.allocator, table, &payloads);
+    defer deinitPreparedExprsForTest(t_.allocator, expr_prepared);
     var bin_ev = try Evaluator.initContext(t_.allocator, .{
         .table = table,
-        .source = .{ .binary = .{ .expr = &payloads, .pattern = &pattern_nulls, .pattern_prepared = &prepared_nulls } },
+        .source = .{ .binary = .{
+            .expr = &payloads,
+            .pattern = &pattern_nulls,
+            .pattern_prepared = &prepared_nulls,
+            .expr_prepared = expr_prepared,
+        } },
         .schema = binary_schema,
     });
     defer bin_ev.deinit();
@@ -1177,6 +1283,9 @@ test "EvalCore: binary pattern arm ≡ tree pattern arm — env, shadow, dropped
     const expr_nulls = try t_.allocator.alloc(?[]const u8, table.tracks.len);
     defer t_.allocator.free(expr_nulls);
     @memset(expr_nulls, null);
+    const expr_prepared_nulls = try t_.allocator.alloc(?RtSjon.Ast.Tree, table.tracks.len);
+    defer t_.allocator.free(expr_prepared_nulls);
+    @memset(expr_prepared_nulls, null);
     var pattern_payloads = try t_.allocator.alloc(?[]const u8, table.tracks.len);
     defer {
         for (pattern_payloads) |maybe| if (maybe) |p| t_.allocator.free(@constCast(p));
@@ -1202,7 +1311,12 @@ test "EvalCore: binary pattern arm ≡ tree pattern arm — env, shadow, dropped
     }
     var bin_ev = try Evaluator.initContext(t_.allocator, .{
         .table = table,
-        .source = .{ .binary = .{ .expr = expr_nulls, .pattern = pattern_payloads, .pattern_prepared = pattern_prepared } },
+        .source = .{ .binary = .{
+            .expr = expr_nulls,
+            .pattern = pattern_payloads,
+            .pattern_prepared = pattern_prepared,
+            .expr_prepared = expr_prepared_nulls,
+        } },
         .schema = binary_schema,
     });
     defer bin_ev.deinit();
@@ -1231,4 +1345,167 @@ test "EvalCore: binary pattern arm ≡ tree pattern arm — env, shadow, dropped
         const b = bin_ev.evalTicks(tick);
         try t_.expectEqualSlices(Writes.Entry, a, b);
     }
+}
+
+test "EvalCore: binary expr arm evaluates the prepared tree, not the wire payload" {
+    // A deliberately DIVERGENT wire/prepared pair proves which leaf the
+    // frame arm reads. Both are valid compact payloads; the prepared tree
+    // is the score's real expression (1), the wire payload is another
+    // valid expression (2). The frame must write the prepared 1. Before
+    // the tree-arm switch the binary arm decoded the wire payload and
+    // wrote 2 — the behavioural RED for this seam.
+    const Compile = @import("Compile.zig");
+    const Eval = @import("Eval.zig");
+    const test_support = @import("test_support.zig");
+    const sjon = @import("sjon");
+    const tg = [_]Compile.Target{.{ .name = "x", .ncomp = 1 }};
+    var r = try Compile.compile(t_.allocator, test_support.schema(),
+        \\(transport :bpm 120 :meter [4 4])
+        \\(track :target x :expr 1)
+    , &tg);
+    defer r.deinit();
+    try t_.expect(r.ok());
+    const table = &r.table.?;
+    const node = table.tracks[0].source.expr;
+    const real_payload = try compactPayloadFor(t_.allocator, &r.validated.result.tree, node);
+    defer t_.allocator.free(real_payload);
+
+    var alt = try sjon.parse(t_.allocator, "2");
+    defer alt.deinit();
+    const alt_payload = try compactPayloadFor(t_.allocator, &alt, alt.root[0]);
+    defer t_.allocator.free(alt_payload);
+
+    const wire_payloads = [_]?[]const u8{alt_payload};
+    const pattern_nulls = [_]?[]const u8{null};
+    const prepared_nulls = [_]?RtSjon.PatternQuery.PreparedBinary{null};
+    const expr_prepared = try prepareExprsForTest(t_.allocator, table, &[_]?[]const u8{real_payload});
+    defer deinitPreparedExprsForTest(t_.allocator, expr_prepared);
+
+    var bin_ev = try Evaluator.initContext(t_.allocator, .{
+        .table = table,
+        .source = .{ .binary = .{
+            .expr = &wire_payloads,
+            .pattern = &pattern_nulls,
+            .pattern_prepared = &prepared_nulls,
+            .expr_prepared = expr_prepared,
+        } },
+        .schema = binary_schema,
+    });
+    defer bin_ev.deinit();
+
+    // The tree arm is the oracle for the REAL expression.
+    var tree_ev = try Eval.Evaluator.init(t_.allocator, &r);
+    defer tree_ev.deinit();
+    const want = tree_ev.evalTicks(0);
+    const got = bin_ev.evalTicks(0);
+    try t_.expectEqualSlices(Writes.Entry, want, got);
+    try t_.expectEqual(@as(f32, 1), got[0].value[0]);
+}
+
+test "EvalCore: wire-leaf ablation is byte-identical and measurably costlier" {
+    // Test-only switch (compiled out of every non-test build): the frame
+    // arm's prepared leaf vs the retained wire leaf over the SAME context.
+    // The outputs must be byte-identical; the wire leaf must cost more —
+    // the attribution gate for the prepared path, not a semantics change.
+    const Compile = @import("Compile.zig");
+    const test_support = @import("test_support.zig");
+    const tg = [_]Compile.Target{
+        .{ .name = "x", .ncomp = 1 },
+        .{ .name = "y", .ncomp = 1 },
+    };
+    var r = try Compile.compile(t_.allocator, test_support.schema(),
+        \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+        \\(control :id knob :value 0.25)
+        \\(track :target x :expr (+ 1 (* 2 beat)))
+        \\(track :target y :expr (* knob (+ beat 1)))
+    , &tg);
+    defer r.deinit();
+    try t_.expect(r.ok());
+    const table = &r.table.?;
+    const tree = &r.validated.result.tree;
+
+    var payloads = try t_.allocator.alloc(?[]const u8, table.tracks.len);
+    defer {
+        for (payloads) |maybe| if (maybe) |p| t_.allocator.free(@constCast(p));
+        t_.allocator.free(payloads);
+    }
+    for (table.tracks, 0..) |tr, i| {
+        payloads[i] = switch (tr.source) {
+            .expr => |node| try compactPayloadFor(t_.allocator, tree, node),
+            else => null,
+        };
+    }
+    const pattern_nulls = try t_.allocator.alloc(?[]const u8, table.tracks.len);
+    defer t_.allocator.free(pattern_nulls);
+    @memset(pattern_nulls, null);
+    const prepared_nulls = try t_.allocator.alloc(?RtSjon.PatternQuery.PreparedBinary, table.tracks.len);
+    defer t_.allocator.free(prepared_nulls);
+    @memset(prepared_nulls, null);
+    const expr_prepared = try prepareExprsForTest(t_.allocator, table, payloads);
+    defer deinitPreparedExprsForTest(t_.allocator, expr_prepared);
+
+    var ev = try Evaluator.initContext(t_.allocator, .{
+        .table = table,
+        .source = .{ .binary = .{
+            .expr = payloads,
+            .pattern = pattern_nulls,
+            .pattern_prepared = prepared_nulls,
+            .expr_prepared = expr_prepared,
+        } },
+        .schema = binary_schema,
+    });
+    defer ev.deinit();
+    defer setWireExprAblationForTest(false);
+
+    const PPC = RtSjon.Pattern.PPC;
+    const sweep = [_]Tick{ 0, 1, PPC / 8, PPC / 4, PPC / 2, PPC - 1, PPC, PPC + 1, 2 * PPC, 3 * PPC };
+
+    setWireExprAblationForTest(false);
+    const prepared_frames = try t_.allocator.alloc([]Writes.Entry, sweep.len);
+    defer {
+        for (prepared_frames) |f| t_.allocator.free(f);
+        t_.allocator.free(prepared_frames);
+    }
+    for (sweep, 0..) |tick, i| prepared_frames[i] = try t_.allocator.dupe(Writes.Entry, ev.evalTicks(tick));
+
+    setWireExprAblationForTest(true);
+    for (sweep, 0..) |tick, i| {
+        try t_.expectEqualSlices(Writes.Entry, prepared_frames[i], ev.evalTicks(tick));
+    }
+    setWireExprAblationForTest(false);
+
+    // Batched timing, min of five rounds each: the wire leaf re-decodes
+    // both payloads per frame; the prepared path walks owned trees. The
+    // difference is far above this host's clock overhead at 2,000 frames
+    // per round.
+    var prepared_best: u64 = std.math.maxInt(u64);
+    var wire_best: u64 = std.math.maxInt(u64);
+    for (0..5) |_| {
+        setWireExprAblationForTest(false);
+        prepared_best = @min(prepared_best, timeSweep(&ev, &sweep));
+        setWireExprAblationForTest(true);
+        wire_best = @min(wire_best, timeSweep(&ev, &sweep));
+    }
+    setWireExprAblationForTest(false);
+    try t_.expect(wire_best > prepared_best);
+}
+
+fn timeSweep(ev: *Evaluator, sweep: []const Tick) u64 {
+    const rounds = 200;
+    const start = fastNow();
+    var sink: usize = 0;
+    for (0..rounds) |_| {
+        for (sweep) |tick| sink +%= ev.evalTicks(tick).len;
+    }
+    std.mem.doNotOptimizeAway(sink);
+    return fastNow() - start;
+}
+
+/// `CLOCK_MONOTONIC` directly, as `perf_harness.zig` does — the 0.16 Io
+/// clock vtable is an event-loop call and would dominate a tiny batch.
+fn fastNow() u64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) unreachable;
+    const ns: i128 = @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+    return @intCast(ns);
 }
