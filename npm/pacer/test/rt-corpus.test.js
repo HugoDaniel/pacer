@@ -21,7 +21,7 @@
 //     steps state their binary truth explicitly instead of masking it.
 //
 // Fixtures are generated fresh every run (npm pretest hook / build.zig
-// verify) into test/fixtures/ by test/generate-rt-fixtures.js, which also
+// verify) into test/fixtures/ by tools/generate-rt-fixtures.js, which also
 // writes fixtures/manifest.json — the producer identity + content digests
 // this file verifies before every load, so a stale-but-compatible blob
 // bites here instead of passing silently. Counts are derived from

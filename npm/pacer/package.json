@@ -73,7 +73,7 @@
     "build:wasm-rt-copy": "node -e \"require('node:fs').copyFileSync('../../zig-out/bin/pacer-rt.wasm','pacer-rt.wasm')\"",
     "build:rt-fixture": "cd ../.. && zig build run -- pack tools/testdata/pacb/full-small.score.sjon --out npm/pacer/test/rt-fixture.pacb",
     "build:cli": "cd ../.. && zig build cli",
-    "gen:rt-corpus-fixtures": "node test/generate-rt-fixtures.js",
+    "gen:rt-corpus-fixtures": "node tools/generate-rt-fixtures.js",
     "build:types": "tsc",
     "build": "npm run build:wasm && npm run build:wasm-rt && npm run build:wasm-copy && npm run build:wasm-rt-copy && npm run build:types",
     "typecheck": "tsc --noEmit",

@@ -30,14 +30,14 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseHarness } from './harness.js';
+import { parseHarness } from '../test/harness.js';
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const corpusDir = path.join(repoRoot, 'corpus');
-const fixturesDir = fileURLToPath(new URL('./fixtures/', import.meta.url));
-const manifestPath = fileURLToPath(new URL('./fixtures/manifest.json', import.meta.url));
+const fixturesDir = fileURLToPath(new URL('../test/fixtures/', import.meta.url));
+const manifestPath = fileURLToPath(new URL('../test/fixtures/manifest.json', import.meta.url));
 const cliPath = path.join(repoRoot, 'zig-out', 'bin', 'pacer');
 
 /** The same enumeration corpus.test.js and rt-corpus.test.js walk. */
@@ -65,7 +65,7 @@ const artifactRecord = (absolutePath) => {
 };
 
 const manifest = {
-  generator: 'npm/pacer/test/generate-rt-fixtures.js',
+  generator: 'npm/pacer/tools/generate-rt-fixtures.js',
   purpose: 'A5 rt-corpus playback fixtures — real pacer pack output, one entry per corpus case',
   producer: {
     cli: { path: 'zig-out/bin/pacer', ...artifactRecord(cliPath) },

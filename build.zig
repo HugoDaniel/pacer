@@ -335,7 +335,7 @@ pub fn build(b: *std.Build) void {
     // walk verifies). Depends on the installed CLI and BOTH wasm artifacts
     // so the manifest's producer identities are fresh, and node --test can
     // never race a fixture write.
-    const rt_corpus_fixtures = b.addSystemCommand(&.{ "node", "npm/pacer/test/generate-rt-fixtures.js" });
+    const rt_corpus_fixtures = b.addSystemCommand(&.{ "node", "npm/pacer/tools/generate-rt-fixtures.js" });
     rt_corpus_fixtures.setCwd(b.path("."));
     rt_corpus_fixtures.step.dependOn(&install_cli.step);
     rt_corpus_fixtures.step.dependOn(&install_wasm.step);

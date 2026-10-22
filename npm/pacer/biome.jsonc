@@ -6,7 +6,7 @@
   // (not Biome's double-quote default) — adopting the tool should not reflow
   // every string. Recommended rules are on by default.
   "files": {
-    "includes": ["src/**/*.js", "test/**/*.js", "browser/**/*.{js,mjs}", "playwright.config.js"]
+    "includes": ["src/**/*.js", "test/**/*.js", "tools/**/*.js", "browser/**/*.{js,mjs}", "playwright.config.js"]
   },
   "formatter": {
     "enabled": true,
