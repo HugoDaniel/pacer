@@ -407,3 +407,12 @@ the T6/P3 remainder (Group B exit) stays open.
 CTRL-stride HIGH was fixed with an offset regression test and the two calibration rows were
 corrected to the captured 1/5 → 1/10 `lanesEq` backstop. T6b is complete; P3 acceptance and Group
 B exit remain the separate broad review.
+*(2026-10-22, P3 ACCEPTED at `bb0ba56`; Group B exited.)* The independent Group B exit review
+(`.agent/control/prod-four-groupb-exit-report.md`) returned P3 ACCEPTED + GROUP B READY for the
+deliverable at `bb0ba56`. Parent OpenBSD cold six-gate at that HEAD
+(`.agent/control/prod-four-b2b-fix-parent-gates.log`): 56/56 steps, 1238/1238 aggregate = 847
+native + 391 fuzz, node 182/0/0, parity 44/0 with five clean-pattern cases binary-replayed,
+partition 3775/81, audit 12+18. Every class in this plan's `:87-97` negative-suite inventory is
+covered by a named case or explicitly by the fuzz leg; `skipped` is a real counter (0), and the
+391/391 fuzz corpus ran inside the same cold invocation. **P4 is not open** — it was accepted at
+the Group A exit (the A5 record above; `00-strategy.md` closure). **Open: Groups C, D, E.**

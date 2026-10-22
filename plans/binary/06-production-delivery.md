@@ -1598,3 +1598,25 @@ and recorded host-gated node/native skips; the parent OpenBSD rerun above is the
 record.) **T6b is complete. Group B exit and P3 acceptance remain a separate broad review; C/D/E
 remain open.** Evidence: `prod-four-b2b-fix-parent-gates.log`,
 `prod-four-b2b-fix-confirm-report.md`.
+*(2026-10-22, P3 ACCEPTED and GROUP B EXIT.)* P3 is accepted and Group B is exited on 2026-10-22
+at deliverable `bb0ba56`; this append is the record commit that follows it. The independent exit
+review (`.agent/control/prod-four-groupb-exit-report.md`) returned **P3 ACCEPTED + GROUP B READY**
+after checking the binary leg, the negative-suite coverage, the fuzz join and the record chain
+against source and the parent's on-disk cold log. Parent OpenBSD cold six-gate at `bb0ba56`
+(`.agent/control/prod-four-b2b-fix-parent-gates.log`, cache `cache-b2b-fix-parent-bb0ba56`):
+56/56 steps, **1238/1238** aggregate = **847 native + 391 fuzz**, node **182 pass / 0 fail / 0
+skipped**, parity **44/0**, partition **3775/81** (68 named + 3 bad-call + 3700 prefix + 4
+positive; 81 names), audit closure **12 pacer + 18 SJON**. P3 coverage: every class in
+`03-playback-parity.md:87-97` maps to a named case or explicitly to the fuzz leg — every-prefix
+truncation (3700 counted attempts), forged magic/version/features, directory overlap/overrun/
+reorder/gap, count overflows, NaN/±inf fields (named cases plus the 74-cell B2b matrix), easing
+domain violations, payload zero/multi-root/trailing-slack/corrupt-bytes, non-canonical presence,
+PACM structural garbage, PACM↔PACB incoherence and registry identity mismatch; the clean-pattern
+leg binary-replayed **5** cases, `skipped` is a real zero-increment counter (printed 0), and the
+**391/391** fuzz corpus ran inside the same cold six-gate invocation (847+391 reconstructs 1238).
+P4 was already accepted at the Group A exit (02 P4 and 03 P4 per the A5 record and `00`'s closure
+log); it is not reopened here. The authority header at `:15` above remains a dated 2026-10-21
+snapshot; this dated append supersedes its "P3 open / P4 open" status. The exit review's MEDIUM
+(status file one acceptance behind) and two LOWs (stale `packCase` comment; pinned `T6/P3` strings)
+are folded into this acceptance record with no behaviour, case, expectation, product, wire or
+fixture change. **Open: Groups C (measurement), D (export), E (QA) — C next.**
