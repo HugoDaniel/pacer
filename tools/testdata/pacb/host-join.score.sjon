@@ -1,0 +1,21 @@
+; host-join — a two-track score whose targets ride the HOST 'PACT' join
+; only: no in-source (target …) declarations, so the pack-time join is
+; spelled by the CLI's --target flags and 'REGS' carries the non-empty
+; host registry. The flow expr is deliberately singular at beat 1 (the
+; same ordinary shape as the corpus lifecycle cases): the B2a registry
+; family uses one dry probe there to establish a nonzero expr-failure
+; counter that every refused reload must preserve. The committed
+; host-join.pacb beside this file is the REAL CLI's own output;
+; regenerate with
+;   zig build run -- pack tools/testdata/pacb/host-join.score.sjon \
+;     --target glow:1:0 --target flow:1:0 \
+;     --out tools/testdata/pacb/host-join.pacb
+
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(track :target glow
+  (key :at 0b :value 0.2)
+  (key :at 4b :value 0.8 :ease out-cubic))
+
+(track :target flow
+  :expr (/ 1 (- beat 1)))

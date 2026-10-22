@@ -31,8 +31,9 @@ test {
     _ = @import("parity_negatives.zig");
 }
 
-/// Read the three committed fixture blobs the production-loader negative
-/// suite mutates. Bounded reads; no fixture is ever written.
+/// Read the four committed fixture blobs the production-loader negative
+/// suite mutates (three T6a blobs plus the B2a `host-join` registry
+/// fixture). Bounded reads; no fixture is ever written.
 fn negativeFixtures(a: std.mem.Allocator) !negatives.Fixtures {
     const load = struct {
         fn one(alloc: std.mem.Allocator, name: []const u8) ![]u8 {
@@ -48,6 +49,7 @@ fn negativeFixtures(a: std.mem.Allocator) !negatives.Fixtures {
         .keys_only = try load.one(a, "keys-only"),
         .expr_keys = try load.one(a, "expr-keys"),
         .full_small = try load.one(a, "full-small"),
+        .host_join = try load.one(a, "host-join"),
     };
 }
 
@@ -107,6 +109,10 @@ test "negatives: production prt_load exact refusals and transactional state" {
     const expected_bad_calls = [_][]const u8{
         "bad-call-pacb-overcap", "bad-call-targets-overcap", "bad-call-pact-malformed",
     };
+    // B2a status-0 characterization attempts (named v1 tolerances and
+    // honest-rewrite controls). Each must appear EXACTLY once as an
+    // acceptance line; a refusal here is a failed gate.
+    const expected_positive = [_][]const u8{};
     const expected_family_labels = [_][]const u8{"prefixes"};
     const expected_prefix_cases: usize = 3700;
 
@@ -120,23 +126,33 @@ test "negatives: production prt_load exact refusals and transactional state" {
         const needle = try std.fmt.allocPrint(a, "negatives: {s}: status 2", .{name});
         try t.expectEqual(@as(usize, 1), countOccurrences(out, needle));
     }
+    for (expected_positive) |name| {
+        const needle = try std.fmt.allocPrint(a, "negatives: {s}: status 0 (accepted; ", .{name});
+        try t.expectEqual(@as(usize, 1), countOccurrences(out, needle));
+    }
     try t.expectEqual(
         @as(usize, 1),
         countOccurrences(out, "negatives: prefixes 0.."),
     );
 
     // The printed partition equals the literal inventory, arithmetic exact.
+    // B2a (2026-10-22): the partition gained a `positive` term — status-0
+    // characterization attempts are counted, never laundered as refusals —
+    // and the T6a-only qualifier was NARROWED to its true remainder (B2b
+    // numeric/dry-run), not removed: the hold stays until B2b lands.
     const expected_partition = try std.fmt.allocPrint(
         a,
-        "negatives: partition {d} named + {d} bad-call + {d} prefix = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} family label(s) (T6b payload/meta/registry/dry-run work is excluded from T6a)\n",
+        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (B2b numeric/dry-run remains excluded)\n",
         .{
             expected_named.len,
             expected_bad_calls.len,
             expected_prefix_cases,
-            expected_named.len + expected_bad_calls.len + expected_prefix_cases,
-            expected_named.len + expected_bad_calls.len + expected_family_labels.len,
+            expected_positive.len,
+            expected_named.len + expected_bad_calls.len + expected_prefix_cases + expected_positive.len,
+            expected_named.len + expected_bad_calls.len + expected_positive.len + expected_family_labels.len,
             expected_named.len,
             expected_bad_calls.len,
+            expected_positive.len,
             expected_family_labels.len,
         },
     );
@@ -147,6 +163,26 @@ test "negatives: production prt_load exact refusals and transactional state" {
         }
     }
     try t.expect(std.mem.indexOf(u8, out, expected_partition) != null);
+
+    // The superseded T6a-only totals are preserved as a DATED baseline
+    // line (history, not a live claim): the reviewed B1 inventory at
+    // d2644eb, printed verbatim.
+    try t.expectEqual(
+        @as(usize, 1),
+        countOccurrences(out, "negatives: T6a baseline at d2644eb (2026-10-22): 35 named + 3 bad-call + 3700 prefix = 3738 attempted; 39 names = 35 mutation name(s) + 3 bad-call name(s) + 1 family label(s)"),
+    );
+
+    // The old all-of-T6b exclusion qualifier must be GONE — narrowed to
+    // the B2b remainder, never silently kept as if nothing had landed.
+    try t.expectEqual(
+        @as(usize, 0),
+        countOccurrences(out, "(T6b payload/meta/registry/dry-run work is excluded from T6a)"),
+    );
+    // The closing PASS line keeps the remaining-open holds spelled out.
+    try t.expectEqual(
+        @as(usize, 1),
+        countOccurrences(out, "negatives: exact status/reason and transactional preservation PASS; B2b numeric/dry-run and T6/P3 remain open"),
+    );
 }
 
 const HOST_TARGETS = [_]pacer.Compile.Target{

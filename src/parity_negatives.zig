@@ -55,12 +55,26 @@ const Pb = pacer.Pacb;
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
-/// The three committed fixture blobs, read once by the caller. They are
-/// immutable inputs: this suite only ever mutates copies.
+/// The committed fixture blobs, read once by the caller. They are
+/// immutable inputs: this suite only ever mutates copies. `host_join`
+/// is the B2a registry fixture: a real CLI pack whose pack-time host
+/// join is NON-empty (`'REGS'` carries `glow:1:0, flow:1:0`), so the
+/// registry-identity family can load it against canonical-but-mismatched
+/// joins — the three older blobs all pack against the empty join.
 pub const Fixtures = struct {
     keys_only: []const u8,
     expr_keys: []const u8,
     full_small: []const u8,
+    host_join: []const u8,
+};
+
+/// The pack-time host join of the `host-join` fixture, spelled by the
+/// fixture source's regen command (`--target glow:1:0 --target
+/// flow:1:0`) and carried in its `'REGS'` section. The suite encodes
+/// the same triples through the actual `PactCodec` producer.
+const HOST_JOIN_TARGETS = [_]pacer.Compile.Target{
+    .{ .name = "glow", .ncomp = 1, .registry = 0 },
+    .{ .name = "flow", .ncomp = 1, .registry = 0 },
 };
 
 /// Frozen format-derived sizes. `Abi.META_EASE_*` are the public wire
@@ -317,6 +331,11 @@ const Counters = struct {
     named: usize = 0,
     bad_calls: usize = 0,
     prefix: usize = 0,
+    /// B2a: characterization attempts that the production loader must
+    /// ACCEPT (status 0) — named v1 tolerances and honest-rewrite
+    /// controls. Never counted as refusals; every one still rides the
+    /// real loader and a unique name.
+    positive: usize = 0,
     /// Family labels ride the names list for uniqueness but are never
     /// attempts.
     family_labels: usize = 0,
@@ -732,21 +751,30 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
     const pact_buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(&none));
     const pact = try pacer.PactCodec.encodeTargets(&none, pact_buf);
 
+    // The host-join fixture's own pack-time join (its 'REGS' payload).
+    const join_buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(&HOST_JOIN_TARGETS));
+    const join_pact = try pacer.PactCodec.encodeTargets(&HOST_JOIN_TARGETS, join_buf);
+
     var names: std.ArrayList([]const u8) = .empty;
     var counters = Counters{};
 
-    // 1. Every full fixture must load successfully before any mutation.
-    const fixture_list = [_]struct { name: []const u8, bytes: []const u8 }{
-        .{ .name = "keys-only", .bytes = fixtures.keys_only },
-        .{ .name = "expr-keys", .bytes = fixtures.expr_keys },
-        .{ .name = "full-small", .bytes = fixtures.full_small },
+    // 1. Every full fixture must load successfully before any mutation,
+    //    each against its own pack-time join (the three declared-only
+    //    blobs pack against the empty join; host-join packs against the
+    //    non-empty 'REGS' join it carries).
+    const fixture_list = [_]struct { name: []const u8, bytes: []const u8, pact: []const u8 }{
+        .{ .name = "keys-only", .bytes = fixtures.keys_only, .pact = pact },
+        .{ .name = "expr-keys", .bytes = fixtures.expr_keys, .pact = pact },
+        .{ .name = "full-small", .bytes = fixtures.full_small, .pact = pact },
+        .{ .name = "host-join", .bytes = fixtures.host_join, .pact = join_pact },
     };
     for (fixture_list) |fx| {
         NativeRt.reset();
         if (fx.bytes.len > NativeRt.pacbCap()) return error.FixtureInvalid;
+        if (fx.pact.len > NativeRt.targetsCap()) return error.FixtureInvalid;
         @memcpy(NativeRt.pacbPtr()[0..fx.bytes.len], fx.bytes);
-        @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
-        const status = NativeRt.load(@intCast(fx.bytes.len), @intCast(pact.len));
+        @memcpy(NativeRt.targetsPtr()[0..fx.pact.len], fx.pact);
+        const status = NativeRt.load(@intCast(fx.bytes.len), @intCast(fx.pact.len));
         if (status != 0) {
             try out.print(
                 "negatives: fixture {s}: full untruncated load expected status 0, got {d} reason {d}\n",
@@ -760,8 +788,8 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         }
     }
     try out.print(
-        "negatives: full fixtures 3/3 status 0 (keys-only {d} B, expr-keys {d} B, full-small {d} B)\n",
-        .{ fixtures.keys_only.len, fixtures.expr_keys.len, fixtures.full_small.len },
+        "negatives: full fixtures 4/4 status 0 (keys-only {d} B, expr-keys {d} B, full-small {d} B, host-join {d} B)\n",
+        .{ fixtures.keys_only.len, fixtures.expr_keys.len, fixtures.full_small.len, fixtures.host_join.len },
     );
 
     // 2. Every proper prefix of the actual small fixture.
@@ -892,36 +920,45 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
 
     // Internal consistency: the partition must reconstruct `attempted` and
     // the names list exactly, from the execution counters alone.
-    if (counters.attempted != counters.named + counters.bad_calls + counters.prefix) {
+    if (counters.attempted != counters.named + counters.bad_calls + counters.prefix + counters.positive) {
         try out.print(
-            "negatives: counter partition mismatch: attempted {d} != {d} named + {d} bad-call + {d} prefix\n",
-            .{ counters.attempted, counters.named, counters.bad_calls, counters.prefix },
+            "negatives: counter partition mismatch: attempted {d} != {d} named + {d} bad-call + {d} prefix + {d} positive\n",
+            .{ counters.attempted, counters.named, counters.bad_calls, counters.prefix, counters.positive },
         );
         return error.CounterMismatch;
     }
-    if (names.items.len != counters.named + counters.bad_calls + counters.family_labels) {
+    if (names.items.len != counters.named + counters.bad_calls + counters.positive + counters.family_labels) {
         try out.print(
-            "negatives: name partition mismatch: {d} names != {d} mutations + {d} bad-calls + {d} family label(s)\n",
-            .{ names.items.len, counters.named, counters.bad_calls, counters.family_labels },
+            "negatives: name partition mismatch: {d} names != {d} mutations + {d} bad-calls + {d} positives + {d} family label(s)\n",
+            .{ names.items.len, counters.named, counters.bad_calls, counters.positive, counters.family_labels },
         );
         return error.CounterMismatch;
     }
 
     try out.print(
-        "negatives: partition {d} named + {d} bad-call + {d} prefix = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} family label(s) (T6b payload/meta/registry/dry-run work is excluded from T6a)\n",
+        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (B2b numeric/dry-run remains excluded)\n",
         .{
             counters.named,
             counters.bad_calls,
             counters.prefix,
+            counters.positive,
             counters.attempted,
             names.items.len,
             counters.named,
             counters.bad_calls,
+            counters.positive,
             counters.family_labels,
         },
     );
+    // The superseded T6a-only summary, kept as a DATED baseline: the
+    // totals below are the reviewed B1 inventory at d2644eb, printed as
+    // history — the live partition above is the one that must be true.
     try out.print(
-        "negatives: exact status/reason and transactional preservation PASS; T6a only, T6/P3 remain incomplete\n",
+        "negatives: T6a baseline at d2644eb (2026-10-22): 35 named + 3 bad-call + 3700 prefix = 3738 attempted; 39 names = 35 mutation name(s) + 3 bad-call name(s) + 1 family label(s)\n",
+        .{},
+    );
+    try out.print(
+        "negatives: exact status/reason and transactional preservation PASS; B2b numeric/dry-run and T6/P3 remain open\n",
         .{},
     );
 }
