@@ -254,6 +254,7 @@ const Frame = struct {
     frees: u64,
     bytes: i64,
     frame_len: u32,
+    hash: u64,
 };
 
 const PathKind = enum { text, binary };
@@ -274,6 +275,10 @@ fn sweep(
             .binary => NativeRt.evalSeconds(t),
         };
         const end = rdtsc();
+        const hash = switch (path) {
+            .text => fnv1a(NativeText.writesPtr()[0..len]),
+            .binary => fnv1a(NativeRt.writesPtr()[0..len]),
+        };
         const after = counter.snapshot();
         if (len == 0) return error.EmptyFrame;
         frame.* = .{
@@ -283,6 +288,7 @@ fn sweep(
             .frees = after.frees - before.frees,
             .bytes = after.live - before.live,
             .frame_len = len,
+            .hash = hash,
         };
     }
 }
@@ -354,6 +360,23 @@ fn scriptedTime(kind: ScoreKind, i: usize, total: usize) f64 {
     };
 }
 
+fn fnv1a(bytes: []const u8) u64 {
+    var h: u64 = 0xcbf29ce484222325;
+    for (bytes) |b| {
+        h ^= b;
+        h *%= 0x100000001b3;
+    }
+    return h;
+}
+
+fn expectFrameParity(text: []const Frame, binary: []const Frame) !void {
+    if (text.len != binary.len) return error.FrameParityMismatch;
+    for (text, binary) |a, b| {
+        if (a.frame_len != b.frame_len or a.hash != b.hash)
+            return error.FrameParityMismatch;
+    }
+}
+
 fn sceneSeek(j: usize, bases: []const f64) f64 {
     const base = bases[j % bases.len];
     const jitter = @as(f64, @floatFromInt((j / bases.len) % 7)) * 0.0001;
@@ -366,10 +389,10 @@ fn writeFrames(io: std.Io, path: []const u8, data: []const Frame) !void {
     var buf: [64 * 1024]u8 = undefined;
     var fw = file.writer(io, &buf);
     const w = &fw.interface;
-    try w.writeAll("frame\tt_seconds\tns\tallocs\tfrees\tbytes\tframe_len\n");
+    try w.writeAll("frame\tt_seconds\tns\tallocs\tfrees\tbytes\tframe_len\tfnv1a64\n");
     for (data, 0..) |f, i| {
-        try w.print("{d}\t{d:.9}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
-            i, f.t, f.ns, f.allocs, f.frees, f.bytes, f.frame_len,
+        try w.print("{d}\t{d:.9}\t{d}\t{d}\t{d}\t{d}\t{d}\t{x}\n", .{
+            i, f.t, f.ns, f.allocs, f.frees, f.bytes, f.frame_len, f.hash,
         });
     }
     try w.flush();
