@@ -374,3 +374,11 @@ byte-exact GREEN. Cold gates: 56/56, 1236/1236 aggregate (845 native +
 binary-replayed, 0 skipped. Evidence:
 `.agent/control/prod-four-b2a-cont-final-gates.log` and
 `prod-four-b2a-report.md`.)*
+
+
+*(2026-10-22, B2a ACCEPTED at `2abe403`.)* Parent cold gate rerun green at the fix commit
+(1236/1236; parity 44/0; node 182/0) and independent confirmation READY after the review's
+single HIGH was retracted: the frozen `full-small.pacb` carries no `'SNAM'`, so the count-break
+case always reached the parallelism gate and the hardening (`replaceTlv`, count-2 names) only
+makes the removed-gate flip clean. B2b numeric matrix + pattern dry-run and P3 acceptance stay
+open.

@@ -1453,3 +1453,19 @@ reran 845/845 + parity 44/0 (`prod-four-b2a-fix-calib-restored-*.log`).
 Committed-tree cold six-gate evidence:
 `.agent/control/prod-four-b2a-fix-cold-gates.log`. Report:
 `.agent/control/prod-four-b2a-report.md` (dated errata section).
+
+
+*(2026-10-22, B2a ACCEPTED at `2abe403`; append-only.)* Parent cold six-gate rerun at the
+fix commit, new cache dir `cache-b2a-fix-parent-2abe403`: EXIT 0, 56/56 steps, 1236/1236
+aggregate (845 native + 391 fuzz), node 182 pass / 0 skipped, parity 44/0 with five pattern
+cases binary-replayed, negatives partition 3773 attempted / 78 names (67 mutation + 3
+bad-call + 3 positive + 5 family labels), audit 12 pacer + 18 SJON. The single review HIGH was
+**retracted as factually false** after the parent parsed the committed fixture: `full-small.pacb`
+is pre-`'SNAM'` (PACM payload 2879 B = `'SCEN'` 28 / `'EASE'` 2338 / `'TMPO'` 36, exact end;
+zero `'SNAM'`), so the pre-fix count-0 append was the first and only names frame and did reach
+`Pacm.zig:589` — removing `:589` flips it, removing `:581` does not. The case was not vacuous.
+The hardening nonetheless landed (`replaceTlv`, count-2 well-formed SNAM, same name/status/
+reason/reader oracle; `:589` removal now flips cleanly to status 0) and the errata is dated and
+accurate. Independent narrow confirmation: READY with retraction. **B2b (numeric/finite matrix
+and pattern dry-run budgets), Group B exit, P3 acceptance, C/D/E remain open.** Evidence:
+`prod-four-b2a-fix-parent-gates.log`, `prod-four-b2a-fix-confirm-report.md`.
