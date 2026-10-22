@@ -354,3 +354,24 @@ also remains owner-notified.
   `corpus/registry-mismatch/times.sjon`. No gate, wire, or acceptance
   identity changes; the same corrections commit restores `tools/` to
   the npm lint gate (LOW-1) — see the plan-06 corrections append.
+
+- 2026-10-22 — **Group C measurement checkpoint: class (b) fires; Group D
+  is not started.** The binding post-pattern report
+  (`docs/binary-perf-20261022.md`, committed with raw
+  `docs/perf-data-20261022/`) measured 100,000 frames per path per
+  representative score through the approved native counting-GPA harness.
+  Binary eval p50 is +341 ns on Meridian-minimal (text 492±14 ns vs binary
+  833±14 ns) and +358 ns on all-features (2,418±41 vs 2,776±57); both
+  median±MAD intervals are disjoint. No frame-path allocations occurred
+  (0/100,000), and 100,000/100,000 frame hashes matched on both scores, so
+  parity (a) and nondeterminism (c) do not fire. The supplementary
+  real-shipped-WASM batch confirms the Meridian regression (+733 ns/frame,
+  beyond MAD) and does not confirm all-features (overlapping MAD). Per the
+  frozen protocol this is a **stop/escalation**: the 2026-10-20
+  four-stage authorization is **not** carried into D by this record, and
+  no `size-check` verb, numeric budget or ratchet was created. C1–C5 data,
+  the C7 pacer-local page (browser pass still the parent's) and the cold
+  gates exist; D awaits an explicit parent/user ruling on the measured
+  binary eval delta. Gates on `4d46a5a`: cold six-gate EXIT 0, 56/56,
+  1238/1238 (847+391), node 182/0/0, parity 44/0 skipped 0, negatives
+  3775/81, audit 12+18.

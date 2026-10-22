@@ -1621,3 +1621,91 @@ snapshot; this dated append supersedes its "P3 open / P4 open" status. The exit 
 (status file one acceptance behind) and two LOWs (stale `packCase` comment; pinned `T6/P3` strings)
 are folded into this acceptance record with no behaviour, case, expectation, product, wire or
 fixture change. **Open: Groups C (measurement), D (export), E (QA) — C next.**
+
+## Group C executed status append (dated — not plan prose)
+
+2026-10-22 — **Group C (C1–C7) executed on obs; measurement complete, the
+C6 decision point is an ESCALATION because class (b) fires.** Group D is
+NOT started. Report of record: `docs/binary-perf-20261022.md`, committed
+with its raw data in `docs/perf-data-20261022/` (environment, C2 sizes and
+groups, C3 load samples, C4 100k-frame samples/summaries, C5 memory, both
+ablation artifacts and fixtures). Source commits: `55e6f45` (native
+counting-GPA harness + C2/C3 scripts), `d2605e7` (C7 page), `4d46a5a`
+(per-frame FNV parity), `3bcb527` (report + raw data). Measurement source
+tree: C2/C3 on `d2605e7`, C4/C5 on `4d46a5a` (hash-only harness delta).
+pacer `4d46a5a` / SJON `c9a90d85`; artifacts unchanged from the accepted
+baseline (`pacer.wasm` 668,852 B `9736a41b…`, `pacer-rt.wasm` 189,506 B
+`4e2f2100…`).
+
+- **C1.** OpenBSD 7.9 amd64, Intel Skylake 8 CPU, 24 GiB RAM; zig 0.16.0;
+  artifacts ReleaseSmall, native C4/C5 harness ReleaseFast; node v22.23.2;
+  gzip 1.3.2, brotli 1.2.0; load 0.82–1.34, 97–99% idle; the host's
+  `clock_gettime` costs ~19–26 µs, so C4 uses calibrated `rdtsc`
+  (2.304 GHz). Full row set: `docs/perf-data-20261022/environment.tsv`.
+- **C2 (binding full-capability column).** `pacer-rt.wasm` **189,506 /
+  73,618 / 62,930** raw/gzip9/brotli11; `pacer.wasm` **668,852 / 241,544 /
+  196,534**. Pattern-free P2 rebuild (trend-only) 171,667 / 66,764 /
+  57,746. Pacm-reader controlled ablation: 189,506 → 184,858 ⇒ **Δ 4,648 /
+  2,533 / 1,995** (same HEAD, same recipe; ablated `Pacm.decode` +
+  `Pacb.verifyRouting` only). JS: `index.js` 16,452; `index.js`+shared
+  31,824; `rt.js` 15,911; `rt.js`+shared 31,283; player glue 39,075;
+  published JS 75,327; published package set 992,422. Meridian score pair
+  **2,657 → 11,361** raw with the **5,651-byte PACM embedded verbatim**
+  (Δ +8,704 includes that metadata copy). Meridian program total, music
+  excluded: **778,864 / 284,862 / 235,507**; pacer-local programs 232,150
+  (rt) and 703,333 (text), no music. Note: published `npm/pacer/pacer.wasm`
+  is stale (666,873 B), only the rt copy is refreshed by verify.
+- **C3 (real shipped WASM, reference).** N=50 interleaved cold/warm.
+  Warm medians: all-features text 308,977 ns / binary 108,952 ns;
+  Meridian text 265,117 / binary 81,016 (binary ~2.8–3.3× faster).
+  Cold is instantiate-dominated (MAD 46–69%); raw + p10/p90 committed.
+- **C4 (native counting-GPA harness, binding C4 instrument).** 100,000
+  frames per path per score, scripted monotonic/scene-seek/non-monotonic/
+  wrap. **Meridian: text p50 0.492 µs (MAD 0.014) vs binary 0.833 µs
+  (MAD 0.014); all-features: text 2.418 µs (MAD 0.041) vs binary 2.776 µs
+  (MAD 0.057).** Allocations: **0** frame-path allocations on both paths
+  (0/100,000). Frame hashes: **100,000/100,000 equal** on each score.
+  Supplementary real-WASM batches: Meridian text 3,050 ns vs binary
+  3,783 ns (+733, beyond MAD); all-features overlaps within MAD.
+- **C5 (same instrument).** Meridian: text cold peak 517,294 B / binary
+  cold 1,623,602 B; steady frames allocate 0; `DecodedScore` ownership
+  copy **10,804 B** (2 allocs), deinit returns live to 0. All-features:
+  text cold 1,732,786 B / binary cold 8,294,480 B (prepared pattern
+  state); warm binary peak 16,588,960 (transactional overlap); steady
+  frames allocate 0; ownership copy **21,472 B** (3 allocs), deinit 0.
+- **C6 blocker evaluation (04:87-92 verbatim).** (a) parity — does NOT
+  fire (C4 hashes all equal; parity gate 24+5+15, skipped 0, 0 failed).
+  (b) frame-path allocation/latency regression beyond noise — **FIRES**:
+  Meridian +341 ns (+69.3%), intervals [478,506] vs [819,847] disjoint;
+  all-features +358 ns (+14.8%), [2,377,2,459] vs [2,719,2,833] disjoint;
+  no allocations. (c) nondeterminism — does NOT fire. **Verdict: stop, do
+  not start D, escalate with evidence.** The 2026-10-20 authorization is
+  not carried into D by this record; the parent/user decides whether to
+  fix the binary eval leaf or explicitly accept the delta. No
+  `size-check` verb exists or was created; no numeric budget/ratchet.
+- **C7 (04 P3 page).** `examples/player/` (`index.html`, `player.mjs`,
+  `score.pacb/.sjon`, `check.mjs`, `README.md`) loads `score.pacb` +
+  `pacer-rt.wasm` through `PacerRt.load` with the pack-time join, runs
+  `eval(0)`, drives `eval(t)` from `perfClock`, routes through the
+  unchanged `route.js`, and reloads/re-applies held controls on Restart.
+  Node proof: `C7 PASS: load=0 tracks=beat,heroPos,heroTurn,heroTint
+  controls=hero-speed eval(0)=4 entries heroTint=0.5 scene-seek=0.7000`.
+  Browser pass remains the parent browser-tester's; no browser result is
+  claimed. Server: `python3 -m http.server 8073 --directory .` →
+  `http://localhost:8073/examples/player/`. No examples gate exists or was
+  invented; `node examples/player/check.mjs` and the browser pass are C7's
+  evidence.
+- **Gates (committed `4d46a5a`, cold `.agent/control/cache-c-final-gates`).**
+  `zig build test verify cli-golden parity fuzz audit-rt-imports --summary
+  all` EXIT 0: **56/56 steps, 1238/1238 tests (847 native + 391 fuzz),
+  node 182/0/0, corpus 44/0, parity 24+5+15 skipped 0, negatives 3775/81,
+  audit 12 pacer + 18 SJON**, cli-golden + score-docs current. npm in
+  `npm/pacer`: typecheck exit 0, `npm test` 182/182 0 skipped on obs; lint
+  no OpenBSD Biome binary, pinned Linux Biome 2.5.0 exit 0 over 31 files
+  (A5 precedent; no npm source changed). Logs:
+  `prod-four-c-final-gates.log`, `prod-four-c-final-npm-obs.log`,
+  `prod-four-c-final-npm-lint-linux.log`.
+
+**Still open / not claimed:** Group D, any fix to the measured binary eval
+regression, browser execution/design review, integration, push/merge/
+publish. Plan 04 P2 is an escalation, not a proceed checkpoint.

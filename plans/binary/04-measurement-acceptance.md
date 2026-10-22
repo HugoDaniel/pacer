@@ -139,3 +139,45 @@ commits by this plan's phases — none of them exist today.
 ## Progress log
 
 _(created 2026-10-18; entries appended per phase)_
+
+- 2026-10-22 — **Group C executed once on obs; measurement complete, the
+  P2 checkpoint is an ESCALATION.** Report of record:
+  `docs/binary-perf-20261022.md` with raw data in
+  `docs/perf-data-20261022/` (committed together; environment record,
+  C2 sizes/groups, C3 interleaved samples, C4 100k-frame samples,
+  C5 memory, ablation artifacts and fixtures). pacer `4d46a5a`, SJON
+  `c9a90d85`; the P1 procedure's environment record is
+  `docs/perf-data-20261022/environment.tsv`.
+  - **P1 (report + harness):** done with both capability columns. Binding
+    `pacer-rt.wasm` 189,506 / 73,618 / 62,930; `pacer.wasm` 668,852 /
+    241,544 / 196,534; pattern-free P2 rebuild 171,667 / 66,764 / 57,746
+    (trend-only); Pacm-reader Δ 4,648 / 2,533 / 1,995 by controlled
+    ablation; Meridian score 2,657 → 11,361 with the 5,651-byte PACM
+    embedded; program totals exclude music (Meridian 778,864 / 284,862 /
+    235,507). C3 real-shipped-WASM N=50 interleaved cold/warm; C4/C5
+    native-only counting-GPA harness over the production `drv_*`/`prt_*`
+    objects, no new shipped exports.
+  - **P2 (user checkpoint):** **class (b) fires.** 100,000 frames per path
+    per score: Meridian text p50 0.492 µs (MAD 0.014) vs binary 0.833 µs
+    (MAD 0.014); all-features text 2.418 µs (MAD 0.041) vs binary 2.776 µs
+    (MAD 0.057) — both median±MAD intervals disjoint, +341/+358 ns. No
+    frame-path allocations (0/100,000); 100,000/100,000 frame hashes equal
+    on both scores; supplementary real-WASM confirms Meridian (+733 ns,
+    beyond MAD) and is inconclusive on all-features. Classes (a) parity
+    and (c) nondeterminism do not fire. **Stop; Group D not started;
+    escalate with evidence.** No `size-check`, no committed baseline, no
+    invented budget/ratchet; the 2026-10-20 authorization is not carried
+    into D by this record.
+  - **P3 (pacer-local page):** `examples/player/` landed; Node proof PASS
+    (fixture/join/meta/binary load/eval(0)/live control/reload+re-apply);
+    the real browser pass remains the parent browser-tester's, not claimed
+    here. No examples gate existed and none was invented.
+  - **Gates:** cold six-gate on `4d46a5a` EXIT 0 — 56/56 steps, 1238/1238
+    (847 native + 391 fuzz), node 182/0/0, corpus 44/0, parity 24+5+15
+    skipped 0, negatives 3775/81, audit 12+18; npm typecheck + 182/182 on
+    obs, pinned Linux Biome lint 31 files (OpenBSD Biome unavailable).
+    Logs: `prod-four-c-final-gates.log`,
+    `prod-four-c-final-npm-obs.log`,
+    `prod-four-c-final-npm-lint-linux.log`.
+  - **Not done:** D, any fix to the binary eval regression, browser
+    execution/design review, push/merge/publish, any numeric ratchet.
