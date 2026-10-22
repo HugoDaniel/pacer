@@ -1,0 +1,49 @@
+label	path	bytes	gzip9	brotli11
+pacer.wasm (full driver, current HEAD)	zig-out/bin/pacer.wasm	668852	241544	196534
+pacer-rt.wasm (full capability, binding)	zig-out/bin/pacer-rt.wasm	189506	73618	62930
+pacer-rt.wasm (pattern-free, P2 trend rebuild)	.agent/control/cache-c/fixtures/pacer-rt-pattern-free.wasm	171667	66764	57746
+pacer-rt.wasm (Pacm-reader ablation)	.agent/control/cache-c/fixtures/pacer-rt-ablate-pacm.wasm	184858	71085	60935
+js audio.js	npm/pacer/src/audio.js	3438	1566	1324
+js clock.js	npm/pacer/src/clock.js	1941	894	735
+js host-check.js	npm/pacer/src/host-check.js	7718	2663	2287
+js index.js	npm/pacer/src/index.js	16452	5909	5121
+js lane.js	npm/pacer/src/lane.js	616	413	344
+js meta.js	npm/pacer/src/meta.js	13088	4427	3843
+js pact.js	npm/pacer/src/pact.js	2284	1078	946
+js route.js	npm/pacer/src/route.js	1797	842	718
+js rt.js	npm/pacer/src/rt.js	15911	5788	5009
+js types.js	npm/pacer/src/types.js	12082	3964	3391
+published src/audio.js	npm/pacer/src/audio.js	3438	1566	1324
+published src/clock.js	npm/pacer/src/clock.js	1941	894	735
+published src/host-check.js	npm/pacer/src/host-check.js	7718	2663	2287
+published src/index.js	npm/pacer/src/index.js	16452	5909	5121
+published src/lane.js	npm/pacer/src/lane.js	616	413	344
+published src/meta.js	npm/pacer/src/meta.js	13088	4427	3843
+published src/pact.js	npm/pacer/src/pact.js	2284	1078	946
+published src/route.js	npm/pacer/src/route.js	1797	842	718
+published src/rt.js	npm/pacer/src/rt.js	15911	5788	5009
+published src/types.js	npm/pacer/src/types.js	12082	3964	3391
+published types/audio.d.ts	npm/pacer/types/audio.d.ts	3587	1065	886
+published types/audio.d.ts.map	npm/pacer/types/audio.d.ts.map	965	367	355
+published types/clock.d.ts	npm/pacer/types/clock.d.ts	1254	618	486
+published types/clock.d.ts.map	npm/pacer/types/clock.d.ts.map	331	208	192
+published types/host-check.d.ts	npm/pacer/types/host-check.d.ts	1033	549	457
+published types/host-check.d.ts.map	npm/pacer/types/host-check.d.ts.map	294	212	190
+published types/index.d.ts	npm/pacer/types/index.d.ts	7187	2649	2244
+published types/index.d.ts.map	npm/pacer/types/index.d.ts.map	1361	499	455
+published types/lane.d.ts	npm/pacer/types/lane.d.ts	337	227	192
+published types/lane.d.ts.map	npm/pacer/types/lane.d.ts.map	235	185	169
+published types/meta.d.ts	npm/pacer/types/meta.d.ts	2169	1115	921
+published types/meta.d.ts.map	npm/pacer/types/meta.d.ts.map	332	222	194
+published types/pact.d.ts	npm/pacer/types/pact.d.ts	282	209	200
+published types/pact.d.ts.map	npm/pacer/types/pact.d.ts.map	178	155	142
+published types/route.d.ts	npm/pacer/types/route.d.ts	1080	527	450
+published types/route.d.ts.map	npm/pacer/types/route.d.ts.map	344	215	195
+published types/rt.d.ts	npm/pacer/types/rt.d.ts	7314	2764	2331
+published types/rt.d.ts.map	npm/pacer/types/rt.d.ts.map	1259	479	440
+published types/types.d.ts	npm/pacer/types/types.d.ts	11450	3729	3192
+published types/types.d.ts.map	npm/pacer/types/types.d.ts.map	2926	679	630
+published README.md	npm/pacer/README.md	9750	4256	3685
+published LICENSE	npm/pacer/LICENSE	7048	2824	2118
+published pacer.wasm	npm/pacer/pacer.wasm	666873	240642	195623
+published pacer-rt.wasm	npm/pacer/pacer-rt.wasm	189506	73618	62930

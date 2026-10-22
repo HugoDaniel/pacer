@@ -1,0 +1,8 @@
+key	value
+node	v22.23.2
+wasm_text_bytes	668852
+wasm_rt_bytes	189506
+wasm_text_gzip9	241544
+cold_definition	fresh WebAssembly instance + load call; module precompiled once
+warm_definition	second load on the live instance
+n_per_cell	50

@@ -1,0 +1,21 @@
+; Meridian-shape minimal measurement score (plan 06 Group C, C4/C5).
+; Keys + expr + controls + three named scenes + a hold transport, matching
+; the shape of the exported Meridian score without its full key density.
+; The C4/C5 harness times the same production text and binary paths on it.
+(transport :bpm 82 :meter [4 4] :dur 12bar :end hold)
+(scene :name one :at 0bar :dur 4bar)
+(scene :name two :at 4bar :dur 4bar)
+(scene :name three :at 8bar :dur 4bar)
+(control :id hero-speed :min 0 :max 2 :value 1)
+(track :target beat :expr beat)
+(track :target heroPos
+  (key :at 0bar :value [0.1 0.6])
+  (key :at 4bar :value [0.6 0.64] :ease out-cubic)
+  (key :at 8bar :value [0.735 0.49])
+  (key :at 12bar :value [0.72 0.5]))
+(track :target heroTurn
+  (key :at 0bar :value 0 :ease linear)
+  (key :at 4bar :value 0.7 :ease in-out-sine)
+  (key :at 8bar :value 1.55 :ease in-out-sine)
+  (key :at 12bar :value 1.85 :ease linear))
+(track :target heroTint :expr (* hero-speed 0.5))

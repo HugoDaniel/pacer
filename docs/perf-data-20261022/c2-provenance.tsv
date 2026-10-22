@@ -1,0 +1,6 @@
+key	value
+node	v22.23.2
+method	per-file raw + node:zlib gzip level 9 + brotli quality 11; not an archive
+pattern_free_source	pacer aac3eda (P2 trend) rebuilt with the current toolchain and sibling SJON; pattern capability absent; incomplete/trend-only
+pacm_ablation	HEAD f7fa639; only Pacm.decode and Pacb.verifyRouting stubbed (return null); same recipe
+meridian_size_json	../animader/animader/.agent/releases/meridian.size.json

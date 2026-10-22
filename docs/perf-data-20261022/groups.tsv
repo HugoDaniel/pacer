@@ -1,0 +1,8 @@
+label	files	bytes	gzip9	brotli11
+text glue: index.js alone	1	16452	5909	5121
+text glue: index.js + shared (pact,meta)	3	31824	11414	9910
+rt glue: rt.js alone	1	15911	5788	5009
+rt glue: rt.js + shared (pact,meta)	3	31283	11293	9798
+player glue: rt.js + pact/meta/route/lane/clock/audio	7	39075	15008	12919
+all published JS sources	10	75327	27544	23718
+published package file set (JS + types + wasm + docs)	34	992422	365557	302395

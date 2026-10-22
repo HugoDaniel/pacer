@@ -1,0 +1,4 @@
+label	path	bytes	gzip9	brotli11
+Meridian score.sjon	.agent/control/cache-c/fixtures/meridian.score.sjon	2657	598	528
+Meridian score.pacb	.agent/control/cache-c/fixtures/meridian.score.pacb	11361	1236	1094
+Meridian PACM embedded in PACB (from pack report)	(embedded)	5651		

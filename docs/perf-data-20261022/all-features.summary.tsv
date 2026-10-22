@@ -1,0 +1,3 @@
+path	frames	p50_ns	p95_ns	p99_ns	max_ns	median_abs_dev_ns	mean_ns	alloc_frames	total_allocs
+text	100000	2418	2681	3687	720639	41	2585	0	0
+binary	100000	2776	3204	4518	709899	57	2978	0	0
