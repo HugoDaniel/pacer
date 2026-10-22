@@ -1,0 +1,30 @@
+; Meridian-shape keys-only attribution control (plan 06 Group C, supplementary
+; C4). This is the same transport, scenes, control and four-track shape as
+; meridian-minimal.score.sjon, but every track is a key track: no expr leaf
+; exists on either path. It is measured only to test whether the text/binary
+; eval delta is present on a non-expr frame path; it is not a binding C4 row.
+(transport :bpm 82 :meter [4 4] :dur 12bar :end hold)
+(scene :name one :at 0bar :dur 4bar)
+(scene :name two :at 4bar :dur 4bar)
+(scene :name three :at 8bar :dur 4bar)
+(control :id hero-speed :min 0 :max 2 :value 1)
+(track :target beat
+  (key :at 0bar :value 0 :ease linear)
+  (key :at 4bar :value 4 :ease linear)
+  (key :at 8bar :value 8 :ease linear)
+  (key :at 12bar :value 12 :ease linear))
+(track :target heroPos
+  (key :at 0bar :value [0.1 0.6])
+  (key :at 4bar :value [0.6 0.64] :ease out-cubic)
+  (key :at 8bar :value [0.735 0.49])
+  (key :at 12bar :value [0.72 0.5]))
+(track :target heroTurn
+  (key :at 0bar :value 0 :ease linear)
+  (key :at 4bar :value 0.7 :ease in-out-sine)
+  (key :at 8bar :value 1.55 :ease in-out-sine)
+  (key :at 12bar :value 1.85 :ease linear))
+(track :target heroTint
+  (key :at 0bar :value 0.5 :ease linear)
+  (key :at 4bar :value 0.7 :ease in-out-sine)
+  (key :at 8bar :value 1.0 :ease in-out-sine)
+  (key :at 12bar :value 0.5 :ease linear))

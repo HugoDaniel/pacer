@@ -12,8 +12,8 @@
 //! summary TSV. The report recomputes nothing it can read from here.
 //!
 //! Usage:
-//!   perf-harness --score all-features --doc PATH --pacb PATH \
-//!     --target NAME[:ncomp[:registry]] ... --out DIR [--frames N]
+//!   perf-harness --score all-features|meridian-minimal|meridian-keys-only \
+//!     --doc PATH --pacb PATH --target NAME[:ncomp[:registry]] ... --out DIR [--frames N]
 //!
 //! The scripted-time generator is deliberately deterministic:
 //!   phase 0 (N/4): monotonic 0 -> 10 s (crosses scene and loop wrap)
@@ -131,7 +131,7 @@ const Options = struct {
     targets: []const pacer.Compile.Target = &.{},
 };
 
-const ScoreKind = enum { all_features, meridian_minimal };
+const ScoreKind = enum { all_features, meridian_minimal, meridian_keys_only };
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -140,6 +140,8 @@ pub fn main(init: std.process.Init) !void {
         .all_features
     else if (std.mem.eql(u8, opts.score, "meridian-minimal"))
         .meridian_minimal
+    else if (std.mem.eql(u8, opts.score, "meridian-keys-only"))
+        .meridian_keys_only
     else
         return error.UnknownScore;
 
@@ -211,6 +213,11 @@ pub fn main(init: std.process.Init) !void {
     const bin_frames = try init.gpa.alloc(Frame, opts.frames);
     defer init.gpa.free(bin_frames);
     try sweep(kind, .binary, bin_frames, &binary_counter, tsc_hz);
+
+    // Enforce parity after both timed sweeps and before any raw TSV is
+    // written: a divergent frame aborts the run with no partial data. The
+    // comparison is outside the timed region, so it does not move a number.
+    try expectFrameParity(text_frames, bin_frames);
 
     binary_counter.resetPhase();
     try steady(kind, .binary, 1000);
@@ -351,7 +358,7 @@ fn scriptedTime(kind: ScoreKind, i: usize, total: usize) f64 {
             2 => 6.5 - @as(f64, @floatFromInt(j % 200)) * 0.01, // descending revisits
             else => 5.9 + @as(f64, @floatFromInt(j % 20)) * 0.01, // wrap crossings
         },
-        .meridian_minimal => switch (phase) {
+        .meridian_minimal, .meridian_keys_only => switch (phase) {
             0 => @as(f64, @floatFromInt(j)) * 0.0014, // 0 -> 35 s; 4bar/8bar scenes
             1 => sceneSeek(j, &.{ 0.0, 11.707317, 23.414634, 35.121951 }),
             2 => 30.0 - @as(f64, @floatFromInt(j % 200)) * 0.01,

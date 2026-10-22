@@ -10,6 +10,19 @@ zig build run -- pack tools/testdata/perf/meridian-minimal.score.sjon \
   --out .agent/control/cache-c/fixtures/meridian-minimal.pacb
 ```
 
+`meridian-keys-only.score.sjon` is the supplementary C4 attribution control:
+the same transport, scenes, control and four-track shape with **no expr
+track** (every track is a key track). Pack it against the same join:
+
+```sh
+zig build run -- pack tools/testdata/perf/meridian-keys-only.score.sjon \
+  --target beat --target heroPos:2 --target heroTurn --target heroTint \
+  --out docs/perf-data-20261022/fixtures/meridian-keys-only.pacb
+```
+
+It is not a binding C4 row; its provenance is
+`docs/perf-data-20261022/keys-only-provenance.tsv`.
+
 The all-features representative is `corpus/all-features/doc.sjon`, packed
 against the `times.sjon` join in flat order:
 
