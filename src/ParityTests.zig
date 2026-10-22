@@ -105,6 +105,15 @@ test "negatives: production prt_load exact refusals and transactional state" {
         "ease-ref-range",          "ease-ref-disagrees",   "ease-stage-domain",
         "ease-op-padding",
         "ease-program-cap",        "ease-degenerate-present", "ease-refs-count-mismatch",
+        // B2a compact-payload family (2026-10-22): the compact-IR
+        // structural classes over a genuine packed payload's copy, each
+        // reaching the payload walk / presence / cap gate exactly — the
+        // directory and byte_size are always repaired so reason 3/4 can
+        // never mask the claimed stage.
+        "payload-zero-root",       "payload-multi-root",   "payload-corrupt-node",
+        "payload-inspan-slack",
+        "payload-region-degenerate", "payload-section-absent", "payload-presence-without-track",
+        "payload-span-cap",        "payload-total-cap",
     };
     const expected_bad_calls = [_][]const u8{
         "bad-call-pacb-overcap", "bad-call-targets-overcap", "bad-call-pact-malformed",
@@ -112,8 +121,10 @@ test "negatives: production prt_load exact refusals and transactional state" {
     // B2a status-0 characterization attempts (named v1 tolerances and
     // honest-rewrite controls). Each must appear EXACTLY once as an
     // acceptance line; a refusal here is a failed gate.
-    const expected_positive = [_][]const u8{};
-    const expected_family_labels = [_][]const u8{"prefixes"};
+    const expected_positive = [_][]const u8{
+        "payload-region-slack-tolerated", "payload-reassembly-identity",
+    };
+    const expected_family_labels = [_][]const u8{ "prefixes", "compact-payload" };
     const expected_prefix_cases: usize = 3700;
 
     // Every named mutation and bad call executed EXACTLY once: a removed or

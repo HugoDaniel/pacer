@@ -100,6 +100,18 @@ const TRAN_BPM_OFF: usize = 0;
 const TMPO_REC_BPM_OFF: usize = 8;
 const KEY_REC_VALUE_OFF: usize = 8;
 const CTRL_REC_MIN_OFF: usize = 28;
+// Frozen 'TRAK' field positions (40-byte record) used by the payload
+// families: the per-track compact-IR span address.
+const TRAK_REC_SOURCE_OFF: usize = 4;
+const TRAK_REC_PAYLOAD_OFF_OFF: usize = 16;
+const TRAK_REC_PAYLOAD_LEN_OFF: usize = 20;
+/// Frozen track-source ordinal (docs/binary-score.md; test-asserted
+/// against the source enum in src/root.zig).
+const SOURCE_EXPR: u8 = 1;
+/// Frozen compact-IR header field: the roots block's offset (u32) —
+/// the wire layout is `[magic "SJ1\n"][wire_version][flags][reserved]
+/// [pool_offset u32][roots_offset u32]` (SJON Binary.zig).
+const BINARY_ROOTS_OFFSET_OFF: usize = 12;
 const EASE_STAGE_TEND_OFF: usize = 0;
 const EASE_OP_CODE_OFF: usize = 0;
 const EASE_OP_PARAM_OFF: usize = 4;
@@ -315,6 +327,51 @@ const Family = struct {
             .{ name, reason_before },
         );
     }
+
+    /// Require a status-0 acceptance of a mutated copy (B2a positive
+    /// category): a named v1 tolerance or an honest-rewrite control.
+    /// The acceptance SWAPS the live score, so held dynamic state is
+    /// reset by the documented swap semantics — the pins here are score
+    /// identity (the complete 'PACM' must be byte-unchanged: a positive
+    /// mutation may never touch metadata) and a still-nonempty frame.
+    /// Positive cases run LAST in their family; nothing after them may
+    /// assume the pre-swap held state.
+    fn expectAccepted(
+        self: *Family,
+        name: []const u8,
+        bytes: []const u8,
+    ) !void {
+        if (bytes.len > NativeRt.pacbCap()) {
+            try self.out.print(
+                "negatives: {s}: mutation is {d} bytes, over the production PACB cap {d}\n",
+                .{ name, bytes.len, NativeRt.pacbCap() },
+            );
+            return error.NegativeMismatch;
+        }
+
+        @memcpy(NativeRt.pacbPtr()[0..bytes.len], bytes);
+        const status = NativeRt.load(@intCast(bytes.len), @intCast(self.pact.len));
+        if (status != 0) {
+            try self.out.print(
+                "negatives: {s}: expected status 0 (accepted), got status {d} reason {d} ({d} bytes)\n",
+                .{ name, status, NativeRt.loadError(), bytes.len },
+            );
+            return error.NegativeMismatch;
+        }
+        if (NativeRt.metaLen() != self.snap.meta.len or
+            !std.mem.eql(u8, self.snap.meta, NativeRt.metaPtr()[0..NativeRt.metaLen()]))
+        {
+            try self.out.print("negatives: {s}: accepted mutation changed the 'PACM' surface\n", .{name});
+            return error.StateMismatch;
+        }
+        if (NativeRt.evalSeconds(FRAME_SECONDS) == 0) {
+            try self.out.print("negatives: {s}: accepted score produced no frame\n", .{name});
+            return error.StateMismatch;
+        }
+
+        // Restore the clean fixture bytes for whatever follows.
+        @memcpy(NativeRt.pacbPtr()[0..self.base.len], self.base);
+    }
 };
 
 /// Summary partition counters, one increment per operation AT the place the
@@ -376,6 +433,24 @@ fn runBadCall(
     counters.bad_calls += 1;
     counters.attempted += 1;
     try fam.expectBadCall(name, pacb_len, targets_len);
+}
+
+/// Count and require one status-0 characterization (B2a positive
+/// category). The printed line carries the tolerance/control's meaning
+/// so the literal inventory can pin it verbatim.
+fn runPositive(
+    fam: *Family,
+    names: *std.ArrayList([]const u8),
+    counters: *Counters,
+    name: []const u8,
+    bytes: []const u8,
+    detail: []const u8,
+) !void {
+    try addName(fam.a, names, name);
+    counters.positive += 1;
+    counters.attempted += 1;
+    try fam.expectAccepted(name, bytes);
+    try fam.out.print("negatives: {s}: status 0 (accepted; {s})\n", .{ name, detail });
 }
 
 // ---------------------------------------------------------------------------
@@ -730,6 +805,215 @@ fn easeRefsCountMismatch(a: Allocator, base: []const u8) ![]u8 {
 }
 
 // ---------------------------------------------------------------------------
+// Compact payloads (B2a) — structural edits over a GENUINE packed
+// payload's copy. The packer is never weakened and no second decoder
+// exists: every mutator either patches bytes in place (size-preserving
+// header/node lies) or reassembles the canonical container so the
+// directory arithmetic can never mask the claimed stage.
+// ---------------------------------------------------------------------------
+
+/// The 'TRAK' record of the fixture's (single) expr track: the span
+/// address of its genuine compact-IR payload inside the 'PAYL' region.
+const PayloadSpan = struct { rec: usize, off: u32, len: u32 };
+
+fn trakPayloadSpan(base: []const u8) !PayloadSpan {
+    const section = findSection(base, .trak);
+    const n = readU32(base, section.off);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const rec = section.off + 4 + i * Pb.TRAK_REC_LEN;
+        if (base[rec + TRAK_REC_SOURCE_OFF] == SOURCE_EXPR) {
+            return .{
+                .rec = rec,
+                .off = readU32(base, rec + TRAK_REC_PAYLOAD_OFF_OFF),
+                .len = readU32(base, rec + TRAK_REC_PAYLOAD_LEN_OFF),
+            };
+        }
+    }
+    return error.FixtureMissingSection;
+}
+
+/// Canonical container reassembly with several sections replaced at
+/// once (the `replaceSection` generalization the resized-payload
+/// mutations need: 'PAYL' growth moves 'PACM', a span growth moves
+/// both).
+fn reassemble(a: Allocator, base: []const u8, patches: []const SectionSpec) ![]u8 {
+    const specs = try collectSections(a, base);
+    for (specs) |*spec| {
+        for (patches) |patch| {
+            if (spec.kind == patch.kind) spec.payload = patch.payload;
+        }
+    }
+    return rebuild(a, specs, 0);
+}
+
+fn removeSection(a: Allocator, base: []const u8, kind: Pb.SectionKind) ![]u8 {
+    const specs = try collectSections(a, base);
+    var kept: std.ArrayList(SectionSpec) = .empty;
+    var removed = false;
+    for (specs) |spec| {
+        if (spec.kind == kind) {
+            removed = true;
+        } else {
+            try kept.append(a, spec);
+        }
+    }
+    if (!removed) return error.FixtureMissingSection;
+    return rebuild(a, kept.items, 0);
+}
+
+/// The payload's own header lie: the roots block's varint count. A
+/// payload is ONE subtree — zero roots and multiple roots are the same
+/// defect class (the walk's `remaining != 1` rule). Size-preserving.
+fn payloadRoots(a: Allocator, base: []const u8, count: u8) ![]u8 {
+    const out = try duplicate(base, a);
+    const section = findSection(base, .payl);
+    const span = try trakPayloadSpan(base);
+    const payload_at = section.off + 4 + span.off;
+    const roots_off = readU32(out, payload_at + BINARY_ROOTS_OFFSET_OFF);
+    putU8(out, payload_at + roots_off, count);
+    return out;
+}
+
+/// A node-tag byte inside the roots block flipped to an ordinal no
+/// variant owns: the root iterator or the width-exact walk refuses.
+/// Size-preserving.
+fn payloadCorruptNode(a: Allocator, base: []const u8) ![]u8 {
+    const out = try duplicate(base, a);
+    const section = findSection(base, .payl);
+    const span = try trakPayloadSpan(base);
+    const payload_at = section.off + 4 + span.off;
+    const roots_off = readU32(out, payload_at + BINARY_ROOTS_OFFSET_OFF);
+    putU8(out, payload_at + roots_off + 1, 0xFF);
+    return out;
+}
+
+/// The probe-G shape: the span itself grows +4 junk bytes AFTER the
+/// drained comment tail. The walk must drain the legal tail, then hit
+/// the exact-end rule on the residual — never a directory lie, so
+/// byte_size, the span fields and the directory are all repaired here.
+fn payloadInSpanSlack(a: Allocator, base: []const u8) ![]u8 {
+    const section = findSection(base, .payl);
+    const span = try trakPayloadSpan(base);
+    const byte_size = readU32(base, section.off);
+    const old_region = base[section.off + 4 ..][0..byte_size];
+
+    const new_size = byte_size + 4;
+    const payl = try a.alloc(u8, 4 + new_size);
+    putU32(payl, 0, @intCast(new_size));
+    @memcpy(payl[4..][0..old_region.len], old_region);
+    @memset(payl[4 + old_region.len ..], 0xAA);
+
+    const trak = findSection(base, .trak);
+    const trak_out = try a.dupe(u8, sectionPayload(base, .trak));
+    putU32(
+        trak_out,
+        span.rec - trak.off + TRAK_REC_PAYLOAD_LEN_OFF,
+        span.len + 4,
+    );
+
+    return reassemble(a, base, &.{
+        .{ .kind = .payl, .payload = payl },
+        .{ .kind = .trak, .payload = trak_out },
+    });
+}
+
+/// The probe-F tolerance: +4 junk bytes beyond the last span, byte_size
+/// grown to match, spans untouched. decodePayloads checks per-span
+/// cap/bounds/overlap but never region coverage — the loader must
+/// ACCEPT this (a named v1 tolerance, senior probe F, measured
+/// status 0), and the positive category records it as such.
+fn payloadRegionSlack(a: Allocator, base: []const u8) ![]u8 {
+    const section = findSection(base, .payl);
+    const byte_size = readU32(base, section.off);
+    const old_region = base[section.off + 4 ..][0..byte_size];
+
+    const new_size = byte_size + 4;
+    const payl = try a.alloc(u8, 4 + new_size);
+    putU32(payl, 0, @intCast(new_size));
+    @memcpy(payl[4..][0..old_region.len], old_region);
+    @memset(payl[4 + old_region.len ..], 0x55);
+
+    return reassemble(a, base, &.{.{ .kind = .payl, .payload = payl }});
+}
+
+/// The degenerate region: byte_size 0. The reader treats a zero region
+/// as the OMITTED section (non_canonical, reason 4) — the presence
+/// discipline, not a payload-walk defect.
+fn payloadRegionDegenerate(a: Allocator, base: []const u8) ![]u8 {
+    const payload = try a.alloc(u8, 4);
+    @memset(payload, 0);
+    return replaceSection(a, base, .payl, payload);
+}
+
+/// 'PAYL' absent while an expr track remains: the cross-section
+/// presence pair is CHECKED both directions (non_canonical, reason 4).
+fn payloadSectionAbsent(a: Allocator, base: []const u8) ![]u8 {
+    return removeSection(a, base, .payl);
+}
+
+/// The reverse presence lie: the expr track's complete 'TRAK' record is
+/// removed (count repaired, directory rebuilt) while 'PAYL' stays —
+/// PAYL-present with no payload track refuses (non_canonical, reason 4)
+/// at the payload stage, before the PACM close can speak.
+fn payloadPresenceWithoutTrack(a: Allocator, base: []const u8) ![]u8 {
+    const trak = findSection(base, .trak);
+    const span = try trakPayloadSpan(base);
+    const n = readU32(base, trak.off);
+
+    const out = try a.alloc(u8, trak.len - Pb.TRAK_REC_LEN);
+    putU32(out, 0, n - 1);
+    var src: usize = 4;
+    var dst: usize = 4;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const rec_at = trak.off + src;
+        if (rec_at != span.rec) {
+            @memcpy(out[dst..][0..Pb.TRAK_REC_LEN], base[rec_at..][0..Pb.TRAK_REC_LEN]);
+            dst += Pb.TRAK_REC_LEN;
+        }
+        src += Pb.TRAK_REC_LEN;
+    }
+
+    return reassemble(a, base, &.{.{ .kind = .trak, .payload = out }});
+}
+
+/// The per-payload cap: the span's own length field past
+/// `MAX_PAYLOAD_BYTES`. The cap gate fires at the span scan — before
+/// bounds and before any walk — so the region stays untouched; the
+/// reason is cap_exceeded (6), never a directory or walk refusal.
+fn payloadSpanCap(a: Allocator, base: []const u8) ![]u8 {
+    const out = try duplicate(base, a);
+    const span = try trakPayloadSpan(base);
+    putU32(out, span.rec + TRAK_REC_PAYLOAD_LEN_OFF, @intCast(Pb.MAX_PAYLOAD_BYTES + 1));
+    return out;
+}
+
+/// The 'PAYL' region cap: a REAL byte_size past `MAX_PAYL_BYTES` (the
+/// size arithmetic is checked first, so the region must actually carry
+/// the bytes), refusing at the cap gate (6) before any span is read.
+fn payloadTotalCap(a: Allocator, base: []const u8) ![]u8 {
+    const new_size: usize = Pb.MAX_PAYL_BYTES + 1;
+
+    const payl = try a.alloc(u8, 4 + new_size);
+    putU32(payl, 0, @intCast(new_size));
+    @memset(payl[4..], 0);
+
+    return reassemble(a, base, &.{.{ .kind = .payl, .payload = payl }});
+}
+
+/// The harness-validity positive: canonical reassembly of the
+/// committed blob must be byte-IDENTICAL (the real CLI's output is
+/// canonical), so every reassembled mutation above differs from the
+/// base by exactly its claimed edit — nothing else.
+fn reassemblyIdentity(a: Allocator, base: []const u8) ![]u8 {
+    const specs = try collectSections(a, base);
+    const rebuilt = try rebuild(a, specs, 0);
+    if (!std.mem.eql(u8, rebuilt, base)) return error.FixtureInvalid;
+    return rebuilt;
+}
+
+// ---------------------------------------------------------------------------
 // Suite
 // ---------------------------------------------------------------------------
 
@@ -871,6 +1155,46 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         try runNamed(&fam, &names, &counters, "ease-program-cap", try easeProgramCap(a, fixtures.full_small), 6);
         try runNamed(&fam, &names, &counters, "ease-degenerate-present", try easeDegeneratePresent(a, fixtures.full_small), 4);
         try runNamed(&fam, &names, &counters, "ease-refs-count-mismatch", try easeRefsCountMismatch(a, fixtures.full_small), 4);
+    }
+
+    // 4. Compact-payload family (B2a) over expr-keys' genuine packed
+    //    payload: the structural walk classes (8), the presence
+    //    discipline (4), the caps (6) — then the status-0 positive
+    //    characterizations LAST (an accepted load swaps the live score).
+    {
+        try addName(a, &names, "compact-payload");
+        counters.family_labels += 1; // a family label, never an attempt
+        var fam = try Family.begin(a, out, fixtures.expr_keys, pact);
+        defer fam.end();
+
+        try runNamed(&fam, &names, &counters, "payload-zero-root", try payloadRoots(a, fixtures.expr_keys, 0), 8);
+        try runNamed(&fam, &names, &counters, "payload-multi-root", try payloadRoots(a, fixtures.expr_keys, 2), 8);
+        try runNamed(&fam, &names, &counters, "payload-corrupt-node", try payloadCorruptNode(a, fixtures.expr_keys), 8);
+        try runNamed(&fam, &names, &counters, "payload-inspan-slack", try payloadInSpanSlack(a, fixtures.expr_keys), 8);
+
+        try runNamed(&fam, &names, &counters, "payload-region-degenerate", try payloadRegionDegenerate(a, fixtures.expr_keys), 4);
+        try runNamed(&fam, &names, &counters, "payload-section-absent", try payloadSectionAbsent(a, fixtures.expr_keys), 4);
+        try runNamed(&fam, &names, &counters, "payload-presence-without-track", try payloadPresenceWithoutTrack(a, fixtures.expr_keys), 4);
+
+        try runNamed(&fam, &names, &counters, "payload-span-cap", try payloadSpanCap(a, fixtures.expr_keys), 6);
+        try runNamed(&fam, &names, &counters, "payload-total-cap", try payloadTotalCap(a, fixtures.expr_keys), 6);
+
+        try runPositive(
+            &fam,
+            &names,
+            &counters,
+            "payload-region-slack-tolerated",
+            try payloadRegionSlack(a, fixtures.expr_keys),
+            "region bytes beyond every span are a named v1 tolerance",
+        );
+        try runPositive(
+            &fam,
+            &names,
+            &counters,
+            "payload-reassembly-identity",
+            try reassemblyIdentity(a, fixtures.expr_keys),
+            "canonical reassembly is byte-identical to the producer output",
+        );
     }
 
     // 4. Status-2 bad calls: a prior status-1 reason must survive.
