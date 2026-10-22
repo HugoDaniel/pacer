@@ -181,3 +181,21 @@ _(created 2026-10-18; entries appended per phase)_
     `prod-four-c-final-npm-lint-linux.log`.
   - **Not done:** D, any fix to the binary eval regression, browser
     execution/design review, push/merge/publish, any numeric ratchet.
+
+- 2026-10-22 — **Group C rerun correction (dated — the append above stays
+  verbatim; its C4/C5 figures are superseded).** With the harness at
+  `7a20d0b` enforcing every-frame text/binary parity before any TSV is
+  written, C4/C5 were regenerated (data commit `4cac49f`); C2/C3 are
+  unchanged. P1 remains done; the report's binding numbers are now
+  Meridian-minimal text 411 ± 10 vs binary 722 ± 29 ns (**+311 ns,
+  +75.7%**) and all-features text 2,082 ± 28 vs binary 2,376 ± 25 ns
+  (**+294 ns, +14.1%**), both median ± MAD intervals disjoint. The
+  supplementary keys-only control is 92 ± 5 vs 95 ± 3 ns (**+3 ns,
+  +3.3%**, overlapping intervals): it localizes the delta to the
+  expr-bearing path but does not prove the mechanism. **P2 is still an
+  escalation: class (b) fires, D is not started, the 2026-10-20
+  authorization is not carried into D, and no size-check/budget/ratchet
+  exists.** C3's cold-load noise statement is corrected to the observed
+  MAD range 32.1–75.9% (all-features 52.2/68.8; Meridian 32.1/75.9). The
+  corrected-tree cold gate and C7 proof are in
+  `.agent/control/prod-four-c-fix-report.md`.

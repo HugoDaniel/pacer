@@ -375,3 +375,23 @@ also remains owner-notified.
   binary eval delta. Gates on `4d46a5a`: cold six-gate EXIT 0, 56/56,
   1238/1238 (847+391), node 182/0/0, parity 44/0 skipped 0, negatives
   3775/81, audit 12+18.
+
+- 2026-10-22 — **Group C rerun correction (dated — the Group C checkpoint
+  append above stays verbatim; its C4/C5 figures are superseded).** The C4
+  harness at `7a20d0b` enforces per-frame text/binary parity after both
+  timed sweeps and aborts before writing any TSV; all binding C4/C5 rows
+  were regenerated from that harness (data commit `4cac49f`). C2/C3 data is
+  unchanged from `d2605e7`. Regenerated p50: Meridian-minimal text
+  411 ± 10 ns vs binary 722 ± 29 ns, **+311 ns (+75.7%)**, intervals
+  [401, 421] vs [693, 751] disjoint; all-features text 2,082 ± 28 ns vs
+  binary 2,376 ± 25 ns, **+294 ns (+14.1%)**, [2,054, 2,110] vs
+  [2,351, 2,401] disjoint. The supplementary Meridian keys-only control
+  (same shape, no expr track) is 92 ± 5 vs 95 ± 3 ns, **+3 ns (+3.3%)**,
+  intervals overlapping — not materially different — which localizes the
+  delta to the expr-bearing path without proving the mechanism. Class (b)
+  still fires on both binding scores; (a) and (c) do not (100,000/100,000
+  frame hashes equal per score, enforced before the TSV write). Group D
+  remains not started, the 2026-10-20 authorization is not carried into D,
+  and no threshold or ratchet was created. The corrected-tree cold gate
+  and C7 node proof are recorded in
+  `.agent/control/prod-four-c-fix-report.md`.

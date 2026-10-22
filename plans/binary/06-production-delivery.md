@@ -1709,3 +1709,29 @@ baseline (`pacer.wasm` 668,852 B `9736a41b…`, `pacer-rt.wasm` 189,506 B
 **Still open / not claimed:** Group D, any fix to the measured binary eval
 regression, browser execution/design review, integration, push/merge/
 publish. Plan 04 P2 is an escalation, not a proceed checkpoint.
+
+## Group C rerun correction (dated — the append above stays verbatim)
+
+2026-10-22 — **The C4/C5 figures in the Group C append above are
+superseded by the parity-enforced rerun at `7a20d0b`; C2/C3 are unchanged.**
+The harness now compares every text/binary frame hash and length after
+both timed sweeps and aborts before writing any TSV. Data commit
+`4cac49f` carries the regenerated binding rows plus the supplementary
+Meridian keys-only control and its provenance. Binding p50: Meridian
+text 411 ± 10 ns vs binary 722 ± 29 ns (**+311 ns, +75.7%**, intervals
+[401,421] vs [693,751] disjoint); all-features text 2,082 ± 28 ns vs
+binary 2,376 ± 25 ns (**+294 ns, +14.1%**, [2,054,2,110] vs
+[2,351,2,401] disjoint). Keys-only (no expr track) 92 ± 5 vs 95 ± 3 ns
+(**+3 ns, +3.3%**, overlapping) — not materially different — which
+localizes the regression to the expr-bearing path, consistent with the
+binary leaf's per-frame payload re-decode; it does not prove the
+mechanism. C5 memory rows are unchanged (Meridian 517,294 / 1,623,602
+cold; all-features 1,732,786 / 8,294,480 cold; warm exactly 2× cold;
+DecodedScore 10,804 / 21,472; deinit to 0); keys-only memory is
+supplementary (text cold peak 469,120, binary 31,832). C3 cold-load MAD
+range is 32.1–75.9% (all-features 52.2/68.8, Meridian 32.1/75.9).
+**Class (b) still fires; (a) and (c) do not** (100,000/100,000 frame
+hashes per score, enforced before write). Group D remains not started, no
+authorization is carried into D, and no threshold/ratchet was created.
+Corrected-tree gate and C7 evidence:
+`.agent/control/prod-four-c-fix-report.md`.

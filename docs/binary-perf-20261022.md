@@ -13,12 +13,17 @@ lives beside this report in `docs/perf-data-20261022/`; that directory's
 `README.md` names each file and the reproduction commands. Nothing is
 carried over from an earlier report row.
 
-- **pacer:** `4d46a5a63e15b5fb4555a35eb7dc0bfce102c616` (`agent/animader-init`)
+- **pacer:** `7a20d0b` (`agent/animader-init`) — C4/C5 rows from the
+  parity-enforced harness re-run; C2/C3 unchanged from the first Group C run.
 - **Group C start:** `f7fa639` (Group B exited, P3 accepted at `bb0ba56`)
 - **SJON:** `c9a90d85ad0f9306f7c085048118db15248b5e3b`
-- **Measurement source tree:** C2/C3 on `d2605e7`; C4/C5 on `4d46a5a`.
-  The only difference is the C4 per-frame FNV parity check, which does not
-  touch the timed loop. Artifacts are unchanged by both commits.
+- **Measurement source tree:** C2/C3 on `d2605e7`; C4/C5 on `7a20d0b`.
+  The C4 harness now **enforces** per-frame text/binary parity after both
+  timed sweeps and before it writes any TSV; a divergent frame aborts the
+  run with no raw data. The check sits outside the timed region. This
+  report's C4/C5 numbers come from three enforced runs (binding scores plus
+  the supplementary keys-only control); the earlier hash-only run is
+  superseded, not mixed in.
 
 ## C1 — environment record
 
@@ -39,7 +44,7 @@ Source: `docs/perf-data-20261022/environment.tsv`.
 | brotli | 1.2.0 |
 | Idleness | load average 0.82–1.34 on 8 CPUs before/after; `vmstat` 97–99% idle; no concurrent heavy job; runs serialized foreground |
 | Clock caveat | `clock_gettime`/`performance.now` cost ~19–26 µs per call on this host (measured); C4 uses a calibrated `rdtsc` instead |
-| TSC calibration | 2,304,003,676 Hz (Meridian run) / 2,303,992,869 Hz (all-features run) |
+| TSC calibration | 2,303,965,731 Hz (Meridian) / 2,303,971,098 Hz (all-features) / 2,303,974,535 Hz (keys-only control) |
 
 `C1` is the environment record for **every** table below. No historical
 size or timing row is reused.
@@ -154,9 +159,10 @@ order-alternated to decorrelate drift. Values are ns; divide by 1,000 for
 
 Warm reload is faster on the binary path on both scores (binary median
 ~2.8–3.3× lower than text). Cold includes `WebAssembly.instantiate`, whose
-variance dominates the cell (MAD 46–69% of the median); the raw samples and
-p10/p90 are committed rather than summarized away. The text path's compile
-is inside `drv_load`, as the protocol requires.
+variance dominates the cell (MAD **32.1–75.9%** of the median: all-features
+cold 52.2% text / 68.8% binary; Meridian cold 32.1% text / 75.9% binary);
+the raw samples and p10/p90 are committed rather than summarized away. The
+text path's compile is inside `drv_load`, as the protocol requires.
 
 ## C4 — eval latency and allocations (native harness; binding C4 instrument)
 
@@ -169,28 +175,50 @@ comptime-native allocator seam at a counting GPA. Per-frame time is an
 (`*.meta.tsv`); allocations are counted by the GPA. Both paths receive the
 identical deterministic 100,000-frame script: monotonic run (scene + loop
 wrap), scene seeks, non-monotonic revisits, wrap/hold crossings. Every
-frame's `'PACW'` bytes are FNV-1a hashed on both paths and compared before
-the raw data is written.
+frame's `'PACW'` bytes are FNV-1a hashed on both paths; after both timed
+sweeps the harness compares frame length and hash on **every** frame and
+**aborts before writing any TSV** on a mismatch. A negative calibration
+(deliberate one-frame binary time shift) exited `FrameParityMismatch` with
+zero output files, so the gate is live, not just declared.
 
-### Meridian-shape minimal (keys + expr + controls + 3 scenes, hold)
-
-| Path | p50 | p95 | p99 | max | MAD | mean | alloc frames | total allocs |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| text (µs) | 0.492 | 0.543 | 1.048 | 276.610 | 0.014 | 0.520 | 0 | 0 |
-| binary (µs) | 0.833 | 0.924 | 1.400 | 622.693 | 0.014 | 0.868 | 0 | 0 |
-
-### All-features (expr + pattern + controls + scenes + tempo + emit + trigger)
+### Meridian-shape minimal (keys + expr + controls + 3 scenes, hold; binding)
 
 | Path | p50 | p95 | p99 | max | MAD | mean | alloc frames | total allocs |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| text (µs) | 2.418 | 2.681 | 3.687 | 720.639 | 0.041 | 2.585 | 0 | 0 |
-| binary (µs) | 2.776 | 3.204 | 4.518 | 709.899 | 0.057 | 2.978 | 0 | 0 |
+| text (µs) | 0.411 | 0.475 | 0.888 | 1059.542 | 0.010 | 0.473 | 0 | 0 |
+| binary (µs) | 0.722 | 0.843 | 1.288 | 531.428 | 0.029 | 0.839 | 0 | 0 |
+
+### All-features (expr + pattern + controls + scenes + tempo + emit + trigger; binding)
+
+| Path | p50 | p95 | p99 | max | MAD | mean | alloc frames | total allocs |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| text (µs) | 2.082 | 2.450 | 3.805 | 1120.682 | 0.028 | 2.423 | 0 | 0 |
+| binary (µs) | 2.376 | 2.754 | 4.281 | 1161.910 | 0.025 | 2.698 | 0 | 0 |
 
 Raw 100,000-frame files and summaries:
 `meridian-minimal.{text,binary}.frames.tsv`,
 `all-features.{text,binary}.frames.tsv`, `*.summary.tsv`, `*.meta.tsv`.
 `max` includes scheduler pauses; p50/p95/p99 and the raw distribution are
 the comparison.
+
+### Supplementary attribution control — Meridian shape, keys-only (NOT a binding C4 row)
+
+Same transport, three scenes, `hero-speed` control and four-track join as
+Meridian-minimal, but **every track is a key track**: there is no expr leaf
+on either path. Source and provenance:
+`tools/testdata/perf/meridian-keys-only.score.sjon`,
+`docs/perf-data-20261022/keys-only-provenance.tsv`. This row asks whether
+the text/binary delta is present without the expr leaf; it does not
+decompose expr work per operation, and it does not change the binding rows
+or their labels.
+
+| Path | p50 | p95 | p99 | max | MAD | mean | alloc frames | total allocs |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| text (µs) | 0.092 | 0.116 | 0.295 | 207.880 | 0.005 | 0.097 | 0 | 0 |
+| binary (µs) | 0.095 | 0.127 | 0.312 | 654.507 | 0.003 | 0.111 | 0 | 0 |
+
+Raw: `meridian-keys-only.{text,binary}.frames.tsv`,
+`meridian-keys-only.summary.tsv`, `meridian-keys-only.meta.tsv`.
 
 ### Supplementary real-shipped-WASM batch timing (not the C4 instrument)
 
@@ -211,11 +239,12 @@ it is not independent confirmation there.
 
 ### Allocations and determinism
 
-Both paths: **0 allocations in 100,000 frames** on both scores
-(`alloc_frames 0`, `total_allocs 0`). Frame-byte hashes compare **100,000 /
-100,000 equal** on each score (the harness fails the run on any mismatch).
-No frame-path allocation and no nondeterminism the text path lacks was
-observed.
+Both paths: **0 allocations in 100,000 frames** on both binding scores
+and the keys-only control (`alloc_frames 0`, `total_allocs 0`). Frame-byte
+hashes compare **100,000 / 100,000 equal** on each score (the harness
+enforces this before writing any TSV; independently re-derived from the
+committed `fnv1a64` and `frame_len` columns). No frame-path allocation and
+no nondeterminism the text path lacks was observed.
 
 ## C5 — memory (same native harness)
 
@@ -260,27 +289,46 @@ The all-features binary cold load's ~8.29 MB is the prepared pattern state
 old+new overlap (16,588,960 B). No steady-state frame allocates on either
 path.
 
+Supplementary keys-only control (not a binding C5 row): text cold peak
+469,120 B (256 allocs / 241 frees), binary cold **31,832 B** (4/0), warm
+binary peak 63,664 B (transactional overlap), steady frames allocate 0,
+`DecodedScore` copy 12,724 B (2 allocs) → live 0. The smaller binary
+footprint reflects the absence of expr/pattern prepared state, which is
+why it is not compared to the binding memory rows as a saving.
+
 ## C6 — blocker evaluation and decision point
 
 The three pre-declared classes from `04:87-92`, verbatim:
 
 **(a) any parity failure of any class.** **Does not fire.** The C4 harness
-compared 100,000/100,000 frame hashes per score; the committed parity gate
-is 24 clean non-pattern + 5 clean pattern replayed (binary leg) + 15
-load-failing, **skipped 0**, 0 failed (see §Gates).
+compared 100,000/100,000 frame hashes per score and **enforces that
+equality before writing any TSV**; the committed parity gate is 44 cases,
+0 failed (24 clean non-pattern + 5 clean pattern replayed on the binary leg
++ 15 load-failing), **skipped 0** (see §Gates).
 
 **(b) any frame-path allocation or latency REGRESSION beyond measured
 noise (median ± MAD over N=50/100k frames, same machine).** **FIRES.**
 
-- Meridian-minimal: text 492 ± 14 ns vs binary 833 ± 14 ns; **+341 ns
-  (+69.3%)**. The median ± MAD intervals [478, 506] and [819, 847] are
+- Meridian-minimal: text 411 ± 10 ns vs binary 722 ± 29 ns; **+311 ns
+  (+75.7%)**. The median ± MAD intervals [401, 421] and [693, 751] are
   disjoint.
-- All-features: text 2,418 ± 41 ns vs binary 2,776 ± 57 ns; **+358 ns
-  (+14.8%)**. Intervals [2,377, 2,459] and [2,719, 2,833] are disjoint.
+- All-features: text 2,082 ± 28 ns vs binary 2,376 ± 25 ns; **+294 ns
+  (+14.1%)**. Intervals [2,054, 2,110] and [2,351, 2,401] are disjoint.
 - No frame-path allocation was observed on either path (0/100,000 both).
 - Supplementary real-WASM: Meridian +733 ns/frame (+24.0%), intervals
   [2,794, 3,306] and [3,538, 4,028] disjoint. All-features WASM medians
   overlap within MAD (no independent confirmation there).
+
+**Attribution (supplementary; not a binding row).** The keys-only control
+— the same transport, scenes, control and four-track join with **no expr
+track** on either path — measures text 92 ± 5 ns vs binary 95 ± 3 ns:
+**+3 ns (+3.3%)**, with overlapping median ± MAD intervals ([87, 97] vs
+[92, 98]), so the two paths are not materially different there. Against
+the same-shape Meridian-minimal row's **+311 ns with expr**, the delta
+nearly disappears when the expr leaf is removed. That localizes the
+regression to the expr-bearing frame path, consistent with the binary
+leaf's per-frame payload re-decode; it is not a proven mechanism
+decomposition and does not change the binding rows or their verdict.
 
 **(c) a non-determinism the text path doesn't have.** **Does not fire.**
 Both paths produced byte-identical frames at all 100,000 scripted times on
@@ -290,10 +338,11 @@ allocated on the frame path.
 **Verdict.** Class (b) fires. Per the frozen plan: **stop, do not start
 Group D, escalate with evidence.** This report does not carry the
 2026-10-20 authorization into D; the parent/user decides whether to fix
-the binary eval leaf (the constant ~340–360 ns/frame delta is consistent
-with the binary expr/pattern leaf work on the measured scores) or to
-accept it by an explicit ruling. No `zig build size-check` verb exists and
-none was created; no numeric budget, ratchet or threshold was invented.
+the binary eval leaf (the ~300 ns/frame delta sits on the expr-bearing
+path; the keys-only control above localizes it but does not prove the
+mechanism) or to accept it by an explicit ruling. No `zig build size-check`
+verb exists and none was created; no numeric budget, ratchet or threshold
+was invented.
 
 ## C7 — pacer-local vertical smoke (04 P3)
 
@@ -368,15 +417,16 @@ Both are unchanged by Group C; the wasm seam is comptime-dead.
   wasm artifact. The supplementary real-WASM batch confirms the Meridian
   regression but not all-features; the report does not claim otherwise.
 - **Load noise.** The C3 cold cell includes `WebAssembly.instantiate`,
-  whose MAD is 46–69% of the median. Raw samples and p10/p90 are committed;
-  cold medians should be read with that spread.
+  whose MAD is **32.1–75.9%** of the median (all-features 52.2% text /
+  68.8% binary; Meridian 32.1% text / 75.9% binary). Raw samples and
+  p10/p90 are committed; cold medians should be read with that spread.
 - **One machine, no isolation.** Single OpenBSD host, load average
   0.82–1.34, no CPU pinning or real-time scheduling. The per-frame p50/MAD
   intervals are the reproducible noise statement the plan asks for.
 - **Clock.** The host's clock call is ~19–26 µs; C4 uses calibrated
   `rdtsc` (2.304 GHz, calibrated against `CLOCK_MONOTONIC` at run start),
   not the event-loop clock. The timer overhead is well below the measured
-  330–360 ns delta but is not zero.
+  ~300–310 ns delta but is not zero.
 - **Pacm row.** The ablation measures linked bytes; it cannot load, so its
   load-time share is inside the binary C3 rows, not separately attributed.
 - **Pattern-free column.** Rebuilt P2 source with the current toolchain,
