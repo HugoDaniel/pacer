@@ -1,10 +1,11 @@
 key	value
 record	plan 06 Group C environment record (C1) — every table below cites this row set
-date_utc	2026-10-22 (measurements 13:05–13:29 UTC)
-pacer_head	4d46a5a63e15b5fb4555a35eb7dc0bfce102c616
+date_utc	2026-10-22 (C2/C3 13:05–13:29 UTC; C4/C5 rerun 14:18–14:19 UTC)
+pacer_head	7a20d0b55697bf846e69bc3a439e4beb8fdff69b (C4/C5 rerun; C2/C3 recorded at d2605e7)
 pacer_branch	agent/animader-init
 pacer_base	f7fa639a53bf451039c581a07b40750cd06d2f40 (Group C start, Group B exited at bb0ba56)
-measurement_source_tree	d2605e7 (C2/C3) and 4d46a5a (C4/C5; the only difference from d2605e7 is the per-frame FNV parity check, which does not touch the timed loop)
+measurement_source_tree	d2605e7 (C2/C3, not rerun) and 7a20d0b (C4/C5; parity-enforced harness, three enforced runs: binding scores plus the keys-only control)
+superseded_first_run	4d46a5a (C4/C5, hash-only parity) — replaced by the 7a20d0b enforced rerun; not cited by any table
 sjon_sha	c9a90d85ad0f9306f7c085048118db15248b5e3b
 pngine	not used by Group C
 os	OpenBSD obs-dev.home.arpa 7.9 GENERIC.MP#15 amd64
@@ -21,10 +22,10 @@ gzip_version	1.3.2 (OpenBSD /usr/bin/gzip)
 brotli_version	1.2.0
 machine_idleness	load average 0.82–1.34 on 8 CPUs before/after; vmstat 97–99% idle; no concurrent heavy job; measurements serialized foreground
 clock_gettime_cost	~19–26 us/call on this host (measured; see per-run meta.tsv); the native harness uses calibrated rdtsc instead
-tsc_hz_c4c5	2,304,003,676 (meridian final run) / 2,303,992,869 (all-features final run)
+tsc_hz_c4c5	2,303,965,731 (meridian-minimal) / 2,303,971,098 (all-features) / 2,303,974,535 (meridian-keys-only control); from each run's committed meta.tsv
 c4c5_instrument	native-only counting-GPA harness (`zig build perf-measure`), production drv_*/prt_* objects linked through native_rt_bridge/native_text_bridge; no shipped export
 c3_instrument	real shipped wasm artifacts (pacer.wasm 668,852 B sha256 9736a41b…; pacer-rt.wasm 189,506 B sha256 4e2f2100…), Node v22 batch/interleaved load samples
 c2_instrument	per-file raw + node:zlib gzip level 9 + brotli quality 11 (meridian.size.json method)
 repeats	C3 N=50 per cell interleaved; C4 100,000 frames per score per path; C4 repetitions via the same deterministic script; C5 1,000 steady frames after load
-cache_dirs	.agent/control/cache-c-final-post (C4/C5), .agent/control/cache-c-fixtures (pack), .agent/control/cache-c-pacm-{base,abl} (Pacm ablation), .agent/control/cache-c-p2 (pattern-free P2 rebuild)
+cache_dirs	.agent/control/cache-c-fix-measure-build (C4/C5 rerun), .agent/control/cache-c-fix-pack (keys-only fixture pack), .agent/control/cache-c-fixtures (first-run pack), .agent/control/cache-c-pacm-{base,abl} (Pacm ablation), .agent/control/cache-c-p2 (pattern-free P2 rebuild)
 raw_data	docs/perf-data-20261022/ (frames, summaries, memory, loads, sizes, fixtures, ablations)

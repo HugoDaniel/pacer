@@ -31,7 +31,9 @@ Source: `docs/perf-data-20261022/environment.tsv`.
 
 | Field | Value |
 |---|---|
-| Date (UTC) | 2026-10-22, measurements 13:05–13:29 |
+| Date (UTC) | 2026-10-22; C2/C3 13:05–13:29, C4/C5 rerun 14:18–14:19 |
+| Measurement trees | C2/C3 at `d2605e7` (not rerun); C4/C5 at `7a20d0b` (parity-enforced harness, three enforced runs) |
+| C4/C5 run cache | `.agent/control/cache-c-fix-measure-build` (keys-only fixture packed via `cache-c-fix-pack`) |
 | OS | `OpenBSD obs-dev.home.arpa 7.9 GENERIC.MP#15 amd64` |
 | Kernel | `OpenBSD 7.9 (GENERIC.MP) #15: Sun Sep 27 02:47:36 MDT 2026` |
 | CPU | Intel Core Processor (Skylake), 8 CPUs |
@@ -371,23 +373,37 @@ parent's browser-tester's, against a parent-started server. There is no
 repository gate dedicated to `examples/`; `node examples/player/check.mjs`
 and the browser pass are the C7 evidence, and no gate was invented.
 
-## Gates (committed source tree `4d46a5a`, cold caches)
+## Gates (corrected tree; code unchanged since `7a20d0b`; parent cold gate at `af6a785`)
 
-OpenBSD `obs`, foreground, `ulimit -c 0 && ulimit -s 32768`, new cache
-`.agent/control/cache-c-final-gates`:
+OpenBSD `obs`, foreground, `ulimit -c 0 && ulimit -s 32768`. The parent's
+cold six-gate ran at `af6a785` in a new cache
+`.agent/control/cache-c-fix-parent-af6a785`:
 
 ```
 zig build test verify cli-golden parity fuzz audit-rt-imports --summary all
 ```
 
-**EXIT 0** — Build Summary **56/56 steps**, **1238/1238 tests** (847 native
+**EXIT 0** (parent-recorded; every step in the captured log ended
+`success`) — Build Summary **56/56 steps**, **1238/1238 tests** (847 native
 + 391 fuzz), node **182 pass / 0 fail / 0 skipped**, corpus **44/0**,
-parity **24 non-pattern + 5 pattern replayed + 15 load-failing, skipped 0,
-0 failed**, negatives **68 named + 3 bad-call + 3700 prefix + 4 positive =
-3775 attempted / 81 names**, audit closure **12 pacer + 18 SJON** (16
-linked, 2 comptime-excluded), `cli-golden` and `score-docs` current, tree
-clean afterwards except the pre-existing untracked `zig-pkg/`. Log:
-`.agent/control/prod-four-c-final-gates.log`.
+parity **44/0** (24 non-pattern + 5 pattern replayed on the binary leg +
+15 load-failing, skipped 0, 0 failed), negatives **68 named + 3 bad-call +
+3700 prefix + 4 positive = 3775 attempted / 81 names**, audit closure
+**12 pacer + 18 SJON** (16 linked, 2 comptime-excluded), `cli-golden` and
+`score-docs` current, tree clean afterwards except the pre-existing
+untracked `zig-pkg/`. Log:
+`.agent/control/prod-four-c-fix-parent-gates.log`.
+
+The worker cold gate on the same measured code (tree `11afb54`,
+docs/data-only commits after `7a20d0b`) with
+`.agent/control/cache-c-fix-gates` showed the same profile: 56/56 steps,
+1238/1238 tests (847 native + 391 fuzz), node 182/0/0, corpus 44/0,
+parity 44/0, negatives 3775/81, audit 12+18. Log:
+`.agent/control/prod-four-c-fix-gates.log`.
+
+`node examples/player/check.mjs` — exit 0, `C7 PASS: load=0
+tracks=beat,heroPos,heroTurn,heroTint controls=hero-speed eval(0)=4
+entries heroTint=0.5 scene-seek=0.7000`.
 
 npm gates in `npm/pacer`:
 
@@ -408,7 +424,10 @@ Artifacts after the gate (python3 hashlib and openssl agree):
 `9736a41b61e2fa4ae2e37388bd36d8953fcdd41feb465d5805125867706e3258`;
 `zig-out/bin/pacer-rt.wasm` 189,506 B
 `4e2f2100fecc1e7a4657261867a26993c1e3e98bc3a29c4a319fab730b792515`.
-Both are unchanged by Group C; the wasm seam is comptime-dead.
+Both are unchanged by Group C; the wasm seam is comptime-dead. The earlier
+`4d46a5a` gate run (`.agent/control/cache-c-final-gates`,
+`prod-four-c-final-gates.log`) is **superseded**: it predates the
+parity-enforced harness and does not cover the measured tree.
 
 ## Honest limits
 
