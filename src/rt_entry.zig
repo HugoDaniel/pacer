@@ -73,6 +73,7 @@
 //! `prt_abiVersion` if the contract itself must change.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const RtSjon = @import("RtSjon.zig");
 const PactCodec = @import("PactCodec.zig");
 const Pacb = @import("Pacb.zig");
@@ -86,7 +87,44 @@ const Writes = @import("Writes.zig");
 /// `isWasm`); natively it is PageAllocator — one spelling, both targets.
 /// Page-granule frees make a stale read after teardown fault instead of
 /// silently resurrecting old bytes (the ownership tests lean on this).
-const gpa = std.heap.page_allocator;
+/// Native-only counting seam (C4/C5): `native_rt_bridge.zig` exports a
+/// setter for the allocator in use; a native perf harness can point it at
+/// a counting GPA without changing one byte of the shipped wasm32 artifact
+/// (the whole seam is comptime-eliminated there). The default is
+/// page_allocator, so every existing native consumer is unchanged.
+const gpa = if (builtin.target.cpu.arch.isWasm())
+    std.heap.page_allocator
+else
+    NativeGpa.allocator;
+
+var gpa_dummy: u8 = 0;
+
+pub const NativeGpa = struct {
+    pub var gpa_ptr: *anyopaque = @ptrCast(&gpa_dummy);
+    pub var gpa_vtable: *const std.mem.Allocator.VTable = std.heap.page_allocator.vtable;
+
+    const allocator: std.mem.Allocator = .{ .ptr = undefined, .vtable = &vtable };
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        return gpa_vtable.alloc(gpa_ptr, len, alignment, ret_addr);
+    }
+    fn resize(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        return gpa_vtable.resize(gpa_ptr, memory, alignment, new_len, ret_addr);
+    }
+    fn remap(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        return gpa_vtable.remap(gpa_ptr, memory, alignment, new_len, ret_addr);
+    }
+    fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        gpa_vtable.free(gpa_ptr, memory, alignment, ret_addr);
+    }
+};
 
 /// Per-id byte allowance for the PACB zone's worst-case sum — the
 /// `wasm_entry.zig:93-97` precedent verbatim: the format allows 64 KiB

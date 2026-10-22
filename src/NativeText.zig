@@ -21,6 +21,8 @@
 //! (`pacer_native_text_reset`), defined by `src/native_text_bridge.zig`; it
 //! is never part of a wasm artifact and is not reachable from public `pacer`.
 
+const std = @import("std");
+
 pub extern fn drv_abiVersion() callconv(.c) u32;
 pub extern fn drv_docPtr() callconv(.c) [*]u8;
 pub extern fn drv_docCap() callconv(.c) u32;
@@ -40,6 +42,7 @@ pub extern fn drv_registerControl(target_id: u32, registry: u32, ncomp: u32) cal
 pub extern fn drv_setBpm(value: f64) callconv(.c) u32;
 pub extern fn drv_exprFailures() callconv(.c) u32;
 pub extern fn pacer_native_text_reset() callconv(.c) void;
+pub extern fn pacer_native_text_set_gpa(ptr: *anyopaque, vtable: *const std.mem.Allocator.VTable) callconv(.c) void;
 
 /// Short names used by lifecycle replay code.
 pub const abiVersion = drv_abiVersion;
@@ -61,6 +64,7 @@ pub const registerControl = drv_registerControl;
 pub const setBpm = drv_setBpm;
 pub const exprFailures = drv_exprFailures;
 pub const reset = pacer_native_text_reset;
+pub const setGpa = pacer_native_text_set_gpa;
 
 comptime {
     if (@TypeOf(drv_abiVersion) != fn () callconv(.c) u32)
@@ -101,4 +105,6 @@ comptime {
         @compileError("NativeText: drv_exprFailures ABI drift");
     if (@TypeOf(pacer_native_text_reset) != fn () callconv(.c) void)
         @compileError("NativeText: pacer_native_text_reset ABI drift");
+    if (@TypeOf(pacer_native_text_set_gpa) != fn (*anyopaque, *const std.mem.Allocator.VTable) callconv(.c) void)
+        @compileError("NativeText: set_gpa ABI drift");
 }

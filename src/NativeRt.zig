@@ -20,6 +20,8 @@
 //! defined by `src/native_rt_bridge.zig`; it is never part of a wasm
 //! artifact and is not reachable from public `pacer`.
 
+const std = @import("std");
+
 pub extern fn prt_abiVersion() callconv(.c) u32;
 pub extern fn prt_pacbPtr() callconv(.c) [*]u8;
 pub extern fn prt_pacbCap() callconv(.c) u32;
@@ -38,6 +40,7 @@ pub extern fn prt_registerControl(target_id: u32, registry: u32, ncomp: u32) cal
 pub extern fn prt_setBpm(value: f64) callconv(.c) u32;
 pub extern fn prt_exprFailures() callconv(.c) u32;
 pub extern fn pacer_native_rt_reset() callconv(.c) void;
+pub extern fn pacer_native_rt_set_gpa(ptr: *anyopaque, vtable: *const std.mem.Allocator.VTable) callconv(.c) void;
 
 /// Short names used by replay code.
 pub const abiVersion = prt_abiVersion;
@@ -58,6 +61,7 @@ pub const registerControl = prt_registerControl;
 pub const setBpm = prt_setBpm;
 pub const exprFailures = prt_exprFailures;
 pub const reset = pacer_native_rt_reset;
+pub const setGpa = pacer_native_rt_set_gpa;
 
 comptime {
     if (@TypeOf(prt_abiVersion) != fn () callconv(.c) u32)
@@ -96,4 +100,6 @@ comptime {
         @compileError("NativeRt: prt_exprFailures ABI drift");
     if (@TypeOf(pacer_native_rt_reset) != fn () callconv(.c) void)
         @compileError("NativeRt: pacer_native_rt_reset ABI drift");
+    if (@TypeOf(pacer_native_rt_set_gpa) != fn (*anyopaque, *const std.mem.Allocator.VTable) callconv(.c) void)
+        @compileError("NativeRt: set_gpa ABI drift");
 }

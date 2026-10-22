@@ -58,6 +58,7 @@
 //! `drv_abiVersion` if the contract itself must change.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sjon = @import("sjon");
 const Abi = @import("Abi.zig");
 const Compile = @import("Compile.zig");
@@ -71,8 +72,45 @@ const Writes = @import("Writes.zig");
 /// `isWasm`); natively it is PageAllocator — one spelling, both targets.
 /// The wasm instance owns its schema for life; the native text harness
 /// (`NativeHarness.reset` below) tears the schema down after its Driver.
-/// See `src/rt_entry.zig:82–86` for the same portability seam.
-const gpa = std.heap.page_allocator;
+/// See the same portability seam in `src/rt_entry.zig`.
+/// Native-only counting seam (C4/C5), the `rt_entry.zig` twin:
+/// `native_text_bridge.zig` exports the two allocator words a native perf
+/// harness may point at a counting GPA; the whole seam is comptime-
+/// eliminated in the shipped wasm32 artifact, and the default is
+/// page_allocator so existing native consumers are unchanged.
+const gpa = if (builtin.target.cpu.arch.isWasm())
+    std.heap.page_allocator
+else
+    NativeGpa.allocator;
+
+var gpa_dummy: u8 = 0;
+
+pub const NativeGpa = struct {
+    pub var gpa_ptr: *anyopaque = @ptrCast(&gpa_dummy);
+    pub var gpa_vtable: *const std.mem.Allocator.VTable = std.heap.page_allocator.vtable;
+
+    const allocator: std.mem.Allocator = .{ .ptr = undefined, .vtable = &vtable };
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        return gpa_vtable.alloc(gpa_ptr, len, alignment, ret_addr);
+    }
+    fn resize(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        return gpa_vtable.resize(gpa_ptr, memory, alignment, new_len, ret_addr);
+    }
+    fn remap(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        return gpa_vtable.remap(gpa_ptr, memory, alignment, new_len, ret_addr);
+    }
+    fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        gpa_vtable.free(gpa_ptr, memory, alignment, ret_addr);
+    }
+};
 
 const MAX_DOC_SIZE: usize = 256 * 1024;
 const MAX_TARGETS_BLOB: usize = 64 * 1024;

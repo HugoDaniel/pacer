@@ -423,6 +423,31 @@ pub fn build(b: *std.Build) void {
     verify_step.dependOn(&run_probe.step);
     verify_step.dependOn(&run_probe_tests.step);
 
+    // `zig build perf-measure` — plan 06 Group C's native-only counting-GPA
+    // harness (C4/C5). It links the SAME production objects as
+    // `native-composition` and points their comptime-native allocator seams
+    // at counting GPAs; no shipped export or artifact changes. Arguments
+    // after `--` are forwarded (see `src/perf_harness.zig`).
+    const perf_mod = b.createModule(.{
+        .root_source_file = b.path("src/perf_harness.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "pacer", .module = pacer_mod },
+        },
+    });
+    perf_mod.addObject(native_rt_object);
+    perf_mod.addObject(native_text_object);
+    const perf_exe = b.addExecutable(.{
+        .name = "perf-harness",
+        .root_module = perf_mod,
+    });
+    const run_perf = b.addRunArtifact(perf_exe);
+    if (b.args) |args| run_perf.addArgs(args);
+    run_perf.has_side_effects = true;
+    const perf_step = b.step("perf-measure", "Run the native counting-GPA measurement harness (args after `--`)");
+    perf_step.dependOn(&run_perf.step);
+
     // `zig build parity` — binary03 T3 (plan 03 P1): the native playback
     // parity runner. A public-`pacer` consumer, exactly like the CLI: it
     // imports the actual `pacer` module + named `corpus_harness` leaf and

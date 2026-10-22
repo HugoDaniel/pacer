@@ -23,6 +23,7 @@
 //! mismatched call site.
 
 const builtin = @import("builtin");
+const std = @import("std");
 const Rt = @import("rt_entry.zig");
 
 /// Pin one producer alias to the C surface `NativeRt.zig` declares. Kept
@@ -83,6 +84,14 @@ comptime {
     // `reset` is the object-local teardown called by the cleanup export
     // below, not an extern declaration; it keeps Zig's default convention.
     expectProducer("NativeHarness.reset", @TypeOf(Rt.NativeHarness.reset), fn () void);
+}
+
+/// Native-only injection point for the counting-GPA harness (C4/C5). The
+/// entry's `NativeGpa` defaults to the page allocator; this setter replaces
+/// both words. Never part of the wasm artifact.
+export fn pacer_native_rt_set_gpa(ptr: *anyopaque, vtable: *const std.mem.Allocator.VTable) callconv(.c) void {
+    Rt.NativeGpa.gpa_ptr = ptr;
+    Rt.NativeGpa.gpa_vtable = vtable;
 }
 
 /// The one native-only C symbol: ordered teardown of the production
