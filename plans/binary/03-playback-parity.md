@@ -382,3 +382,21 @@ single HIGH was retracted: the frozen `full-small.pacb` carries no `'SNAM'`, so 
 case always reached the parallelism gate and the hardening (`replaceTlv`, count-2 names) only
 makes the removed-gate flip clean. B2b numeric matrix + pattern dry-run and P3 acceptance stay
 open.
+*(2026-10-22, B2b dated append — the native negative-suite leg now includes the numeric/finite matrix and the
+pattern dry-run budget family, but **P3 is still OPEN** and no Group B exit is claimed.)* The numeric domain is
+characterized in the parity test root's `src/numeric_domain_tests.zig` — 74 named cells over the real loader:
+KEYS active lanes (finite/NaN/±inf/−0 across all four lanes, self-consistent on both wires → status 0 with
+bit-exact frame writes), KEYS pad lanes (nonzero → 1/5, zero accepted), CTRL value lanes (same five values,
+status 0 with bit-exact control writes; pad nonzero 1/5), CTRL min/max with flags SET (non-finite 1/5, finite
+accepted) and CLEAR (zero and −0 accepted; finite-nonzero/NaN 1/5), the `Pacm.decode` reader oracle on
+structurally valid non-finite payloads (non-null, bits preserved), and the BL-1 pair: one-sided non-finite only
+in PACB → **1/10** via `lanesEq`, while self-consistent non-finite bits on both wires load **0**. The counted
+`parity_negatives` partition gains the pattern dry-run family: `(fast 8000 (pure 1))` spliced over the committed
+`pattern-silence` pack refuses **1/11** transactionally on `pattern-live` (frames/ticks/meta pointer/counter
+unchanged, both zones restored) and the `(fast 10 …)` boundary loads **0** and plays. Live partition: **68 named
++ 3 bad-call + 3700 prefix + 4 positive = 3775 attempted; 81 names (6 family labels)**; the `d2644eb` T6a
+baseline remains as dated history. RED was inventory-only (`prod-four-b2b-red1.log`); GREEN 846/846 test,
+parity 44/0; cold 56/56 steps, 1237/1237 aggregate (846 native + 391 fuzz), node 182/0-skip. Three scratch
+gate-removal calibrations flipped the one-sided-key, min-nonfinite and key-pad cells and the restored tree
+reran byte-exact. Evidence: `.agent/control/prod-four-b2b-{report.md,green4.log,parity2.log,cold-gates2.log}`;
+the T6/P3 remainder (Group B exit) stays open.

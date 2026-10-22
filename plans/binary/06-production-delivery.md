@@ -1469,3 +1469,60 @@ reason/reader oracle; `:589` removal now flips cleanly to status 0) and the erra
 accurate. Independent narrow confirmation: READY with retraction. **B2b (numeric/finite matrix
 and pattern dry-run budgets), Group B exit, P3 acceptance, C/D/E remain open.** Evidence:
 `prod-four-b2a-fix-parent-gates.log`, `prod-four-b2a-fix-confirm-report.md`.
+*(2026-10-22, B2b executed at source `8be53b9`; append-only.)* The remainder of Group B now exists as an executable
+characterization + negative-suite slice. **B2b task work is complete; Group B exit and P3 acceptance remain separate
+reviewed steps and are NOT claimed.**
+
+- **Numeric/finite matrix — 74 independently named cells** in the new parity-root module
+  `src/numeric_domain_tests.zig` (wired through `src/ParityTests.zig`, not part of the
+  `parity_negatives` counter partition), all through the real `prt_load`/`prt_evalTicks` exports over the new
+  committed `tools/testdata/pacb/numeric-matrix.{score.sjon,pacb}` (regenerate with
+  `zig build run -- pack tools/testdata/pacb/numeric-matrix.score.sjon --out tools/testdata/pacb/numeric-matrix.pacb`):
+  - KEYS active lanes: 4 lanes × {finite, NaN, +inf, -inf, -0.0} = **20** cells, mutating PACB and the PACM
+    spelling in lockstep (FNV recomputed) → status 0, and the tick-0 frame writes the key record's own four
+    lanes **bit-exactly** (verified for all four lanes, no sanitizer).
+  - KEYS pad lanes: each of lanes 1..3 on the scalar key, nonzero → **1/5** and zero → status 0 with the frame's
+    pad lane zero = **6** cells.
+  - CTRL `value`: 4 active lanes × the same five values = **20** status-0 cells with the tick-0 frame control
+    value bit-exact; scalar-control pad lanes 1..3 nonzero → **1/5**, zero → status 0 = **6** more cells.
+  - CTRL `min`/`max`: flags SET — finite min and max accepted (**2**), NaN/+inf/-inf on min and on max refuse
+    **1/5** (**6**); flags CLEAR — zero accepted (**2**), `-0.0` accepted (**2**, it compares equal to zero),
+    finite nonzero refuses **1/5** (**2**), NaN refuses **1/5** (**2**). Total **16** cells. The finiteness gate
+    exists only when the flag is set; with flags clear the lanes are zero-required.
+  - PACM reader: structurally valid PACM with a NaN key lane, +inf control value, −inf min, NaN max each returns
+    a **non-null** `Pacm.decode` view that preserves the bits = **4** reader-oracle cells.
+  - BL-1 cross-check: one-sided non-finite only on the PACB side (key NaN, control value +inf) refuses
+    **status 1 reason 10** through the `lanesEq` bit-equality cross-check = **2** cells. On both wires the same
+    bits load **0** and are written bit-exactly (the 40 active-lane cells above) — the named v1 domain fact.
+  No cell contradicted the approved spec/source; the matrix is characterization/preservation, not a new
+  guarantee, and reason 7 remains unemitted.
+- **Pattern dry-run budget family — counted in the negatives partition.** The test-(p) producer class is lifted
+  into `parity_negatives` over new committed `pattern-silence` (282 B, one `(silence)` payload; regen spelled in
+  its `.score.sjon`) and `pattern-live` (408 B, silence pattern + singular `/ 1 (- beat 1)` expr, empty host join)
+  fixtures. A hand-encoded `(fast 8000 (pure 1))` body spliced over the single pattern payload (compile refuses
+  the same text, so no packer weakening) loads over a live old score with held control, 90 bpm nudge, captured
+  seconds/ticks frames and a primed NONZERO expr-failure counter and refuses **status 1 reason 11** (not 3 OOM,
+  not 8 decode). Frames/ticks, meta pointer and bytes, the control/bpm state and the expr counter are unchanged;
+  both input zones are restored. The within-budget boundary `(fast 10 (pure 1))` loads **0** and plays target 0
+  value `1.0` at tick 0 — the trip is the 1 MiB dry-run budget, not pattern complexity.
+- **Derived partition (executed, printed).** `68 named + 3 bad-call + 3700 prefix + 4 positive = 3775 attempted;
+  81 names = 68 mutation name(s) + 3 bad-call name(s) + 4 positive name(s) + 6 family label(s)` (new family label
+  `pattern-dry-run`). The `d2644eb` T6a `3738 / 39 names` line remains verbatim as dated history; the old
+  all-of-T6b exclusion qualifier stays absent and the B2a remainder qualifier is replaced by the landed statement
+  (no Group B/P3 claim).
+- **RED then GREEN.** `prod-four-b2b-red1.log`: 845/846, inventory-only RED — the literal inventory expected the
+  new `pattern-dry-run-budget` line once and found 0 (the numeric probe found no behavioral contradiction).
+  `prod-four-b2b-green4.log`: 846/846. `prod-four-b2b-parity2.log`: parity 44/0 with five pattern binary replays;
+  the suite printed `pattern-dry-run-budget: status 1 reason 11` and the boundary acceptance line. Cold
+  `prod-four-b2b-cold-gates2.log` (fresh `.agent/control/cache-b2b-cold2*` dirs): **56/56 steps, 1237/1237
+  aggregate = 846 native + 391 fuzz**, node **182 pass / 0 skipped**, parity 44/0, corpus 44/0, audit closure
+  unchanged (12 pacer + 18 SJON).
+- **Calibration (isolated worktree, sibling `../SJON` intact, restored byte-exact).** Removing the key `lanesEq`
+  compare (`Pacb.zig:2329`) flipped the one-sided key cell (`prod-four-b2b-cal-no-key-laneseq.log`, failure at
+  `numeric_domain_tests.zig:609`); removing the flag-set min finiteness loop (`:1782`) flipped the min NaN cell
+  (`prod-four-b2b-cal-no-ctrl-min-finite.log`, failure at `:515`); removing the key pad-lane zero loop
+  (`:1320-1325`) flipped the pad-nonzero cell (`prod-four-b2b-cal-no-key-pad-zero.log`, failure at `:428`).
+  Restored tree diff-identical to the committed files and reran 846/846
+  (`prod-four-b2b-cal-restored.log`). These three are gate-proven; the remaining cells are characterization.
+- **Still open.** Group B exit, P3 acceptance, C/D/E, independent review + parent gate. Report:
+  `.agent/control/prod-four-b2b-report.md`.
