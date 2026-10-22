@@ -1,10 +1,11 @@
-//! Production `prt_load` negative suite — binary03 T6a.
+//! Production `prt_load` negative suite — binary03 T6a, extended by B2a
+//! (compact payloads, `'PACM'` structural/coherence, registry identity).
 //!
-//! This is the FIRST bounded slice of T6: the negative-suite MECHANISM plus
-//! the container-envelope and record-domain refusals. It deliberately does
-//! NOT cover the T6b workload (compact payloads, PACM structural/coherence
-//! mutation families, the registry-identity matrix, checksum-only lies, the
-//! expr dry-run, or cross-section PACM divergence). Those stay unclaimed.
+//! This is the bounded T6 negative-suite MECHANISM plus the container-
+//! envelope and record-domain refusals (T6a), the compact-payload family,
+//! and the B2a metadata/registry families. It deliberately does NOT cover
+//! the B2b workload (the numeric/finite matrix, the expr dry-run, the
+//! pattern dry-run budget). Those stay unclaimed.
 //!
 //! Every case calls the ACTUAL production loader through the std-only
 //! `NativeRt` C facade. There is no decoder, evaluator, materializer, or
@@ -52,6 +53,7 @@ const pacer = @import("pacer");
 const NativeRt = @import("NativeRt.zig");
 
 const Pb = pacer.Pacb;
+const Pacm = pacer.Pacm;
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
@@ -112,6 +114,23 @@ const SOURCE_EXPR: u8 = 1;
 /// the wire layout is `[magic "SJ1\n"][wire_version][flags][reserved]
 /// [pool_offset u32][roots_offset u32]` (SJON Binary.zig).
 const BINARY_ROOTS_OFFSET_OFF: usize = 12;
+/// Frozen 'TRAN' field: the embedded-'PACM' FNV-1a-64 fast-reject
+/// checksum (`Pacb.decode` reads it at `tran.off + 48`; the record is
+/// 56 bytes, `Pacb.TRAN_REC_LEN`).
+const TRAN_PACM_FNV_OFF: usize = 48;
+// Frozen 'PACM' header field positions (40-byte header; src/Pacm.zig).
+const PACM_VERSION_OFF: usize = 4;
+const PACM_BPM_OFF: usize = 8;
+const PACM_TRACK_COUNT_OFF: usize = 28;
+const PACM_KEY_COUNT_OFF: usize = 32;
+const PACM_CONTROL_COUNT_OFF: usize = 36;
+// Frozen 'PACM' record fields.
+const PACM_TRACK_TARGET_OFF: usize = 0;
+const PACM_TRACK_REGISTRY_OFF: usize = 2;
+const PACM_TRACK_SOURCE_OFF: usize = 4;
+const PACM_KEY_VALUE_OFF: usize = 8;
+const PACM_CONTROL_REGISTRY_OFF: usize = 2;
+const PACM_CONTROL_VALUE_OFF: usize = 8;
 const EASE_STAGE_TEND_OFF: usize = 0;
 const EASE_OP_CODE_OFF: usize = 0;
 const EASE_OP_PARAM_OFF: usize = 4;
@@ -372,6 +391,51 @@ const Family = struct {
         // Restore the clean fixture bytes for whatever follows.
         @memcpy(NativeRt.pacbPtr()[0..self.base.len], self.base);
     }
+
+    /// Require a status-0 acceptance whose metadata is a KNOWN rewrite of
+    /// the committed `'PACM'`: the loader must serve exactly the mutated
+    /// blob's embedded payload (proving the honest FNV rewrite reached
+    /// the served surface, not a stale or re-encoded copy). The acceptance
+    /// swaps the live score, so this runs LAST in its family.
+    fn expectAcceptedPacm(
+        self: *Family,
+        name: []const u8,
+        bytes: []const u8,
+    ) !void {
+        if (bytes.len > NativeRt.pacbCap()) {
+            try self.out.print(
+                "negatives: {s}: mutation is {d} bytes, over the production PACB cap {d}\n",
+                .{ name, bytes.len, NativeRt.pacbCap() },
+            );
+            return error.NegativeMismatch;
+        }
+
+        @memcpy(NativeRt.pacbPtr()[0..bytes.len], bytes);
+        const status = NativeRt.load(@intCast(bytes.len), @intCast(self.pact.len));
+        if (status != 0) {
+            try self.out.print(
+                "negatives: {s}: expected status 0 (accepted), got status {d} reason {d} ({d} bytes)\n",
+                .{ name, status, NativeRt.loadError(), bytes.len },
+            );
+            return error.NegativeMismatch;
+        }
+        const expected = sectionPayload(bytes, .pacm);
+        if (NativeRt.metaLen() != expected.len or
+            !std.mem.eql(u8, expected, NativeRt.metaPtr()[0..NativeRt.metaLen()]))
+        {
+            try self.out.print(
+                "negatives: {s}: served 'PACM' is not the honest-rewritten payload ({d} vs {d} bytes)\n",
+                .{ name, NativeRt.metaLen(), expected.len },
+            );
+            return error.StateMismatch;
+        }
+        if (NativeRt.evalSeconds(FRAME_SECONDS) == 0) {
+            try self.out.print("negatives: {s}: accepted score produced no frame\n", .{name});
+            return error.StateMismatch;
+        }
+
+        @memcpy(NativeRt.pacbPtr()[0..self.base.len], self.base);
+    }
 };
 
 /// Summary partition counters, one increment per operation AT the place the
@@ -451,6 +515,58 @@ fn runPositive(
     counters.attempted += 1;
     try fam.expectAccepted(name, bytes);
     try fam.out.print("negatives: {s}: status 0 (accepted; {s})\n", .{ name, detail });
+}
+
+/// Count and require one status-0 acceptance whose served `'PACM'` is the
+/// honest-rewritten payload (checksum repair discipline: the fast reject
+/// must pass, the structural reader must accept it, and coherence must
+/// still hold).
+fn runPositivePacm(
+    fam: *Family,
+    names: *std.ArrayList([]const u8),
+    counters: *Counters,
+    name: []const u8,
+    bytes: []const u8,
+    detail: []const u8,
+) !void {
+    try addName(fam.a, names, name);
+    counters.positive += 1;
+    counters.attempted += 1;
+    try fam.expectAcceptedPacm(name, bytes);
+    try fam.out.print("negatives: {s}: status 0 (accepted; {s})\n", .{ name, detail });
+}
+
+/// Count and require one status-1 `'PACM'`-family refusal, and assert the
+/// INDEPENDENT reader oracle on the mutated blob's embedded payload: the
+/// same status/reason (10) covers checksum, structural, and coherence
+/// classes, so the line records which gate the independent `Pacm.decode`
+/// sees. `want_reader_null` pins structural garbage (null) vs an honest
+/// PACM whose loader refusal is checksum/coherence (non-null).
+fn runPacmNamed(
+    fam: *Family,
+    names: *std.ArrayList([]const u8),
+    counters: *Counters,
+    name: []const u8,
+    bytes: []const u8,
+    reason: u32,
+    want_reader_null: bool,
+) !void {
+    try addName(fam.a, names, name);
+    const reader_null = Pacm.decode(sectionPayload(bytes, .pacm)) == null;
+    if (reader_null != want_reader_null) {
+        try fam.out.print(
+            "negatives: {s}: reader oracle expected {s}, got {s}\n",
+            .{ name, if (want_reader_null) "null" else "nonnull", if (reader_null) "null" else "nonnull" },
+        );
+        return error.NegativeMismatch;
+    }
+    counters.named += 1;
+    counters.attempted += 1;
+    try fam.expectRefusal(name, bytes, reason);
+    try fam.out.print(
+        "negatives: {s}: status 1 reason {d}; reader {s}\n",
+        .{ name, reason, if (reader_null) "null" else "nonnull" },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +657,10 @@ fn putU32(bytes: []u8, at: usize, value: u32) void {
 
 fn putI64(bytes: []u8, at: usize, value: i64) void {
     std.mem.writeInt(i64, bytes[at..][0..8], value, .little);
+}
+
+fn putU64(bytes: []u8, at: usize, value: u64) void {
+    std.mem.writeInt(u64, bytes[at..][0..8], value, .little);
 }
 
 fn putF32(bytes: []u8, at: usize, value: f32) void {
@@ -1014,6 +1134,237 @@ fn reassemblyIdentity(a: Allocator, base: []const u8) ![]u8 {
 }
 
 // ---------------------------------------------------------------------------
+// 'PACM' structural family (B2a) — every edit is made to the GENUINE
+// embedded metadata payload and then closed with the honest
+// `'TRAN'+48` FNV-1a-64 over that payload, so the checksum fast-reject
+// cannot mask the structural gate. The independent `Pacm.decode`
+// reader oracle is asserted separately for each case (the loader's
+// reason 10 is one word for three distinct stages).
+// ---------------------------------------------------------------------------
+
+const PacmTlv = struct { hdr: usize, payload: usize, len: usize, id: u32 };
+
+/// Byte offset just past the `'PACM'` control stream (the first TLV
+/// frame, or end-of-buffer when there is no section stream). Mirrors
+/// `Pacm.decode`'s own walk of the header's counts and inline id
+/// lengths; never a second decoder, just stream arithmetic.
+fn pacmControlsEnd(p: []const u8) usize {
+    const tc = readU32(p, PACM_TRACK_COUNT_OFF);
+    const kc = readU32(p, PACM_KEY_COUNT_OFF);
+    const cc = readU32(p, PACM_CONTROL_COUNT_OFF);
+    var pos: usize = Pacm.META_HEADER_LEN +
+        @as(usize, tc) * Pacm.META_TRACK_LEN +
+        @as(usize, kc) * Pacm.META_KEY_LEN;
+    var i: usize = 0;
+    while (i < cc) : (i += 1) {
+        const id_len = std.mem.readInt(u16, p[pos + 6 ..][0..2], .little);
+        pos += Pacm.META_CONTROL_LEN + id_len;
+    }
+    return pos;
+}
+
+/// One TLV frame by section id: header offset, payload offset, length.
+fn pacmFindTlv(p: []const u8, want: u32) ?PacmTlv {
+    var pos = pacmControlsEnd(p);
+    while (pos + Pacm.META_SECTION_HEADER_LEN <= p.len) {
+        const id = readU32(p, pos);
+        const len = readU32(p, pos + 4);
+        const payload = pos + Pacm.META_SECTION_HEADER_LEN;
+        if (payload + @as(usize, len) > p.len) return null;
+        if (id == want) return .{ .hdr = pos, .payload = payload, .len = @intCast(len), .id = id };
+        pos = payload + @as(usize, len);
+    }
+    return null;
+}
+
+fn pacmCopy(a: Allocator, base: []const u8) ![]u8 {
+    return a.dupe(u8, sectionPayload(base, .pacm));
+}
+
+/// Recompute the `'TRAN'` fast-reject checksum over the (possibly
+/// replaced) `'PACM'` section payload. The edit itself is never a
+/// checksum shortcut: an honest rewrite must reach the structural and
+/// coherence gates with a valid FNV.
+fn recomputePacmFnv(bytes: []u8) void {
+    const tran = findSection(bytes, .tran);
+    var h = std.hash.Fnv1a_64.init();
+    h.update(sectionPayload(bytes, .pacm));
+    putU64(bytes, tran.off + TRAN_PACM_FNV_OFF, h.final());
+}
+
+/// Replace the `'PACM'` payload in the canonical container. A same-size
+/// edit patches in place (directory untouched); a resize reassembles so
+/// the directory arithmetic cannot mask the claimed gate. Either way the
+/// honest checksum is recomputed.
+fn pacmAssemble(a: Allocator, base: []const u8, payload: []const u8) ![]u8 {
+    const old = sectionPayload(base, .pacm);
+    const out = if (payload.len == old.len) blk: {
+        const d = try duplicate(base, a);
+        const sec = findSection(base, .pacm);
+        @memcpy(d[sec.off..][0..payload.len], payload);
+        break :blk d;
+    } else try reassemble(a, base, &.{.{ .kind = .pacm, .payload = payload }});
+    recomputePacmFnv(out);
+    return out;
+}
+
+/// A pure checksum lie over an HONEST PACM: flip one FNV bit and touch
+/// nothing else. The reader oracle stays non-null, proving reason 10
+/// here is the fast-reject, not structure or coherence.
+fn pacmChecksumLie(a: Allocator, base: []const u8) ![]u8 {
+    const out = try duplicate(base, a);
+    const tran = findSection(base, .tran);
+    out[tran.off + TRAN_PACM_FNV_OFF] ^= 1;
+    return out;
+}
+
+/// The reader's version domain: a version byte it does not understand
+/// (structural null), with the honest checksum.
+fn pacmVersionInvalid(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    putU32(p, PACM_VERSION_OFF, Pacm.META_VERSION + 1);
+    return pacmAssemble(a, base, p);
+}
+
+/// The reader's enum domain: a track `source` byte outside the frozen
+/// ordinal family (keys/expr/trigger/pattern).
+fn pacmEnumInvalid(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    putU8(p, Pacm.META_HEADER_LEN + PACM_TRACK_SOURCE_OFF, 0xFF);
+    return pacmAssemble(a, base, p);
+}
+
+/// The reader's transport domain: bpm 0 is outside finite 1..1000.
+fn pacmBpmZero(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    putF64(p, PACM_BPM_OFF, 0.0);
+    return pacmAssemble(a, base, p);
+}
+
+/// A count lie past the reader's divide-first bound: a hostile
+/// track_count cannot wrap, so the length arithmetic refuses it.
+fn pacmTrackCountInflated(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    putU32(p, PACM_TRACK_COUNT_OFF, std.math.maxInt(u32));
+    return pacmAssemble(a, base, p);
+}
+
+/// Truncation inside the section stream: the final TLV frame header no
+/// longer has its payload (the reader walks to exact end-of-buffer).
+fn pacmTruncated(a: Allocator, base: []const u8) ![]u8 {
+    const old = sectionPayload(base, .pacm);
+    if (old.len < 8) return error.FixtureInvalid;
+    const p = try a.dupe(u8, old[0 .. old.len - 8]);
+    return pacmAssemble(a, base, p);
+}
+
+/// Trailing slack after the last TLV frame: a partial frame header is a
+/// defect (the reader's stream must end EXACTLY at the buffer end).
+fn pacmTlvTrailingSlack(a: Allocator, base: []const u8) ![]u8 {
+    const old = sectionPayload(base, .pacm);
+    const p = try a.alloc(u8, old.len + 4);
+    @memcpy(p[0..old.len], old);
+    @memset(p[old.len..], 0xAA);
+    return pacmAssemble(a, base, p);
+}
+
+/// Section accounting: 'SCEN' claims one more record than its payload
+/// carries (`4 + n×24 != payload_len`).
+fn pacmSectionAccounting(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const tlv = pacmFindTlv(p, Pacm.SCENES_SECTION_ID) orelse
+        return error.FixtureMissingSection;
+    putU32(p, tlv.payload, readU32(p, tlv.payload) + 1);
+    return pacmAssemble(a, base, p);
+}
+
+/// A repeated section id: the fixed encoder emits each id at most once,
+/// and the reader refuses a repeat whose payload is otherwise valid.
+fn pacmDuplicateTlv(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const tlv = pacmFindTlv(p, Pacm.SCENES_SECTION_ID) orelse
+        return error.FixtureMissingSection;
+    const out = try a.alloc(u8, p.len + Pacm.META_SECTION_HEADER_LEN + tlv.len);
+    @memcpy(out[0..p.len], p);
+    putU32(out, p.len, tlv.id);
+    putU32(out, p.len + 4, @intCast(tlv.len));
+    @memcpy(out[p.len + Pacm.META_SECTION_HEADER_LEN ..][0..tlv.len], p[tlv.payload..][0..tlv.len]);
+    return pacmAssemble(a, base, out);
+}
+
+/// A well-formed 'SNAM' payload parallel to `count` scenes: `count`
+/// entries of the given names. Bounds are the reader's only rule.
+fn snamPayload(a: Allocator, names: []const []const u8) ![]u8 {
+    var total: usize = 4;
+    for (names) |n| total += 4 + n.len;
+    const p = try a.alloc(u8, total);
+    putU32(p, 0, @intCast(names.len));
+    var pos: usize = 4;
+    for (names) |n| {
+        putU32(p, pos, @intCast(n.len));
+        @memcpy(p[pos + 4 ..][0..n.len], n);
+        pos += 4 + n.len;
+    }
+    return p;
+}
+
+fn insertTlv(a: Allocator, p: []const u8, at: usize, id: u32, payload: []const u8) ![]u8 {
+    const out = try a.alloc(u8, p.len + Pacm.META_SECTION_HEADER_LEN + payload.len);
+    @memcpy(out[0..at], p[0..at]);
+    putU32(out, at, id);
+    putU32(out, at + 4, @intCast(payload.len));
+    @memcpy(out[at + Pacm.META_SECTION_HEADER_LEN ..][0..payload.len], payload);
+    @memcpy(
+        out[at + Pacm.META_SECTION_HEADER_LEN + payload.len ..][0 .. p.len - at],
+        p[at..],
+    );
+    return out;
+}
+
+fn appendTlv(a: Allocator, p: []const u8, id: u32, payload: []const u8) ![]u8 {
+    return insertTlv(a, p, p.len, id, payload);
+}
+
+/// 'SNAM' before the 'SCEN' it parallelizes: the reader requires the
+/// fixed encoder order, so a names frame first has nothing to parallel.
+fn pacmSnamBeforeScen(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const scen = pacmFindTlv(p, Pacm.SCENES_SECTION_ID) orelse
+        return error.FixtureMissingSection;
+    const names = [_][]const u8{"drop"};
+    const snam = try snamPayload(a, &names);
+    return pacmAssemble(a, base, try insertTlv(a, p, scen.hdr, Pacm.SNAM_SECTION_ID, snam));
+}
+
+/// 'SNAM' count not parallel to 'SCEN' (one scene, zero names).
+fn pacmSnamCountBreak(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const empty = [_][]const u8{};
+    const snam = try snamPayload(a, &empty);
+    return pacmAssemble(a, base, try appendTlv(a, p, Pacm.SNAM_SECTION_ID, snam));
+}
+
+/// 'SNAM' with no 'SCEN' at all: a names frame must follow the scenes it
+/// parallelizes (expr-keys has no scene section).
+fn pacmSnamWithoutScen(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const empty = [_][]const u8{};
+    const snam = try snamPayload(a, &empty);
+    return pacmAssemble(a, base, try appendTlv(a, p, Pacm.SNAM_SECTION_ID, snam));
+}
+
+/// The honest-rewrite positive: a trusted PACM field (a documented track
+/// span, never cross-checked by `verifyRouting`) changes, and the FNV is
+/// recomputed over the new payload. The loader must accept AND serve
+/// exactly that payload — the checksum repair discipline.
+fn pacmHonestRewrite(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const span_end_at = Pacm.META_HEADER_LEN + 20;
+    putU32(p, span_end_at, readU32(p, span_end_at) + 1);
+    return pacmAssemble(a, base, p);
+}
+
+// ---------------------------------------------------------------------------
 // Suite
 // ---------------------------------------------------------------------------
 
@@ -1194,6 +1545,40 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
             "payload-reassembly-identity",
             try reassemblyIdentity(a, fixtures.expr_keys),
             "canonical reassembly is byte-identical to the producer output",
+        );
+    }
+
+    // 5. PACM structural family (B2a) over full-small's genuine embedded
+    //    metadata: every PACM-side edit recomputes 'TRAN'+48 FNV-1a-64 so
+    //    the checksum fast-reject cannot mask the structural gate. The
+    //    independent reader oracle is pinned per case; the honest-rewrite
+    //    positive runs LAST (an accepted load swaps the live score).
+    {
+        try addName(a, &names, "pacm-structural");
+        counters.family_labels += 1; // a family label, never an attempt
+        var fam = try Family.begin(a, out, fixtures.full_small, pact);
+        defer fam.end();
+
+        try runPacmNamed(&fam, &names, &counters, "pacm-checksum-lie", try pacmChecksumLie(a, fixtures.full_small), 10, false);
+        try runPacmNamed(&fam, &names, &counters, "pacm-version-invalid", try pacmVersionInvalid(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-enum-invalid", try pacmEnumInvalid(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-bpm-zero", try pacmBpmZero(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-track-count-inflated", try pacmTrackCountInflated(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-truncated", try pacmTruncated(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-tlv-trailing-slack", try pacmTlvTrailingSlack(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-section-accounting", try pacmSectionAccounting(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-duplicate-tlv", try pacmDuplicateTlv(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-snam-before-scen", try pacmSnamBeforeScen(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-snam-count-break", try pacmSnamCountBreak(a, fixtures.full_small), 10, true);
+        try runPacmNamed(&fam, &names, &counters, "pacm-snam-without-scen", try pacmSnamWithoutScen(a, fixtures.expr_keys), 10, true);
+
+        try runPositivePacm(
+            &fam,
+            &names,
+            &counters,
+            "pacm-fnv-honest-rewrite",
+            try pacmHonestRewrite(a, fixtures.full_small),
+            "trusted span rewritten with the honest FNV; the loader serves that exact payload",
         );
     }
 
