@@ -1526,3 +1526,57 @@ reviewed steps and are NOT claimed.**
   (`prod-four-b2b-cal-restored.log`). These three are gate-proven; the remaining cells are characterization.
 - **Still open.** Group B exit, P3 acceptance, C/D/E, independent review + parent gate. Report:
   `.agent/control/prod-four-b2b-report.md`.
+
+*(2026-10-22, B2b REVIEW CORRECTIONS at source `39ee1f1`; append-only, earlier text verbatim.)*
+The independent B2b review returned one HIGH, one MEDIUM and two LOW items; all four are corrected
+with **no product/wire/reason/export/npm change, no expectation name/status/reason change and no
+new family**. Group B exit and P3 acceptance remain open and unclaimed.
+
+- **HIGH — PACB `'CTRL'` fixed-stride targeting.** `src/numeric_domain_tests.zig`'s `ctrlRecAt`
+  had copied PACM's variable-length control walk (`off += CTRL_REC_LEN + readU16(base, off + 10)`),
+  but PACB control records are fixed 60-byte records: `src/Pacb.zig:1711` uses
+  `at = sec.off + 4 + i * CTRL_REC_LEN`, and the id lives in `'STRS'` (referenced by
+  `id_off`/`id_len` at +6/+10). Control 0 is `tint` (`id_len` 4), so every control-index-1
+  mutation landed 4 bytes late: value-pad l1 hit lane 2, l2 hit lane 3, l3 hit min lane 0, and the
+  eight min/max CLEAR cells claimed lane 0 but hit lane 1. The suite passed before **only because
+  the pad-zero and clear-zero refusals are lane-agnostic loops**, so the cells did not target the
+  lanes/fields their names claimed. The helper is now fixed-stride, and a new test-local assertion
+  pins `ctrlRecAt(0) == ctrl.off + 4` and `ctrlRecAt(1) == ctrl.off + 4 + CTRL_REC_LEN` plus the
+  section end. Fixture evidence: `numeric-matrix.pacb` is 814 B, `'CTRL'` at off 348 / len 124 /
+  count 2; rec0 = 352 (`tint`, ncomp 4, flags 3), rec1 = 412 (`plain`, ncomp 1, flags 0), and
+  412 + 60 = 472 = off + len. The six value-pad cells target rec1 +16/+20/+24 = 428/432/436; the
+  eight CLEAR cells target rec1 +28 (min lane 0) = 440 and rec1 +44 (max lane 0) = 456. RED:
+  `prod-four-b2b-fix-red1.log` (`expected 412, found 416`); GREEN: `prod-four-b2b-fix-green1.log`
+  (846/847 passed, 1 skipped — the new offset test is the 847th).
+- **MEDIUM — calibration parentheticals corrected to the captured outcome.** The original table's
+  `(1/5 → 0)` for the flag-set min finiteness (`Pacb.zig:1782`) and key pad-zero
+  (`Pacb.zig:1320-1325`) calibrations was unverifiable from the cal logs, which only recorded the
+  test-local `error.MatrixMismatch`. Both were rerun in an isolated sibling worktree at `39ee1f1`
+  with the sibling `../SJON` checkout present (the dead-path host workaround noted below was
+  reverted byte-exact), fresh cache per run, with the parity sink dumped so the printed line is
+  captured in `prod-four-b2b-fix-cal-no-ctrl-min-finite.log` and
+  `prod-four-b2b-fix-cal-no-key-pad-zero.log`:
+  `numeric: numeric-ctrl-min-set-nan: expected status 1 reason 5, got status 1 reason 10` and
+  `numeric: numeric-keys-pad-l1-nonzero: expected status 1 reason 5, got status 1 reason 10`.
+  Decode accepts after either gate removal, then the all-lane bit-equality `lanesEq` backstop
+  (`Pacb.zig:2329`/`:2353`) refuses `meta_incoherent` — the correct observation is **1/5 → 1/10,
+  not 0**. The key-`lanesEq` row (`1/10 → 0`) is unchanged. The worktree was restored byte-exact
+  and reran 846/847 passed, 1 skipped (`prod-four-b2b-fix-cal-restored.log`), then removed.
+- **LOW — corpus/comment hygiene.** `src/parity_negatives.zig` now counts **nine** `Family.begin`
+  baseline loads (including the bad-call family's own begin) and **sixteen** uncounted loads; the
+  bad-call section is renumbered `// 9.` after the B2b `// 8.` dry-run block.
+- **Verification.** `zig build test` 846/847 passed (1 skipped; source fix commit); parity 44/0
+  with the partition unchanged at 68 named + 3 bad-call + 3700 prefix + 4 positive = 3775
+  attempted / 81 names. Cold six-gate at the fix tree with fresh `.agent/control/cache-b2b-fix-cold*`
+  dirs: **56/56 steps, 1237/1238 tests passed (1 skipped) = 846 native + 391 fuzz**, node
+  **178 pass / 0 fail / 4 skipped**, parity 44/0, corpus 44/0, audit closure 12 pacer + 18 SJON,
+  cli-golden and score-docs current (`prod-four-b2b-fix-cold-gates.log`). The four node skips are
+  host-only: three pngine bundle legs (sibling CLI not executable here, ENOENT) and one real-CLI
+  SNAM leg (`zig` not on PATH). This rerun host is Linux, whereas the earlier B2b evidence was
+  OpenBSD; the native skip is the OpenBSD-only test at `src/cli/Cli.zig:695`. Two reverted
+  host-only workarounds made the rerun possible: the sibling SJON `build.zig` `dirExists` helper
+  (its `std.c.access` cannot compile into a Linux build runner; restored byte-exact) and
+  ext4-backed cache symlinks at the required `.agent/control/cache-b2b-fix-*` names (the worktree
+  NFS rejects `renameat2(RENAME_NOREPLACE)`). Neither touches pacer source or the committed
+  fixture/record. This is a test-targeting/record fix only: no product semantics moved, and
+  independent review plus the parent gate remain the acceptance steps.
