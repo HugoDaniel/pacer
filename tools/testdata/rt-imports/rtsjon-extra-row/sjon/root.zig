@@ -11,3 +11,4 @@ pub const plugins = struct {
     pub const core = @import("plugins/core.zig");
     pub const pattern = @import("plugins/pattern.zig");
 };
+pub const BinaryDecoder = @import("BinaryDecoder.zig");

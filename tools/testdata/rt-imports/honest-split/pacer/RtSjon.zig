@@ -6,6 +6,7 @@ pub const Expr = sjon.Expr;
 pub const Pattern = sjon.Pattern;
 pub const PatternQuery = sjon.PatternQuery;
 pub const BinaryCursor = sjon.BinaryCursor;
+pub const BinaryDecoder = sjon.BinaryDecoder;
 pub const Schema = sjon.Schema;
 pub const Plugin = sjon.Plugin;
 pub const trig = sjon.trig;

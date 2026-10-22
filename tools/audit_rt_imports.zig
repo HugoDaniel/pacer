@@ -15,8 +15,9 @@
 //!
 //!   (a) `@import("sjon")` is legal ONLY inside `RtSjon.zig` — a direct
 //!       module import anywhere else in the closure fails by name.
-//!   (b) `RtSjon.zig` must match the strict alias grammar: exactly the ten
-//!       frozen rows (`pub const X = sjon.X;`, with `plugins.core` and
+//!   (b) `RtSjon.zig` must match the strict alias grammar: exactly the
+//!       frozen rows — ten at the P4/A2 wave, eleven since the ask30/M4
+//!       BinaryDecoder delta (2026-10-22) — (`pub const X = sjon.X;`, with `plugins.core` and
 //!       `plugins.pattern` nested under `pub const plugins = struct { … }`
 //!       — Zig has no dotted decl names) plus the one
 //!       `const sjon = @import("sjon");` line, and no other `sjon` token
@@ -134,6 +135,11 @@ const SJON_ALLOWED = [_]Allowed{
     // file — the pattern combinator vocabulary the runtime schema now
     // carries for the adopted env-carrying binary pattern query.
     .{ .path = "plugins/pattern.zig", .why = "the pattern combinator vocabulary — the plugins.pattern row's file" },
+    // The ask30/M4 named delta (SJON ask 30 §H, adopted 2026-10-22): the
+    // read-only tree decoder (std + Ast + BinaryFormat) — load-time
+    // prepare. Data construction via `Ast.TreeBuilder`, not a compiler:
+    // no parser/printer/encoder/write-side import, deny cases retained.
+    .{ .path = "BinaryDecoder.zig", .why = "the read-only tree decoder (std + Ast + BinaryFormat) — ask30/M4 named delta for load-time prepare" },
     .{ .path = "wasm_plugin_invoker.zig", .why = "host-invoke bridge; declarative-only with plugin-exec=false" },
     .{ .path = "PluginValueCodec.zig", .why = "plugin value encoding across the ABI" },
     .{ .path = "PluginRuntime.zig", .why = COMPTIME_NOTE, .comptime_excluded = true },
@@ -154,6 +160,10 @@ const NS_MAP = [_]struct { ns: []const u8, file: []const u8 }{
     .{ .ns = "plugins.core", .file = "plugins/core.zig" },
     // The P4/A2 named delta (02:345-353).
     .{ .ns = "plugins.pattern", .file = "plugins/pattern.zig" },
+    // The ask30/M4 named delta (SJON ask 30 §H, adopted 2026-10-22): the
+    // read-only tree decoder — load-time prepare for the runtime's
+    // binary pattern tracks.
+    .{ .ns = "BinaryDecoder", .file = "BinaryDecoder.zig" },
 };
 
 /// The strict alias grammar (rule b): the only lines of `RtSjon.zig` that
@@ -175,6 +185,10 @@ const RTSJON_ROWS = [_][]const u8{
     // The P4/A2 named delta (02:345-353): the runtime schema carries the
     // pattern plugin for the adopted env-carrying binary pattern query.
     "pub const pattern = sjon.plugins.pattern;",
+    // The ask30/M4 named delta (SJON ask 30 §H, adopted 2026-10-22): the
+    // read-only tree decoder behind the runtime's load-time pattern
+    // prepare (`PatternTrack.materializePrepared`).
+    "pub const BinaryDecoder = sjon.BinaryDecoder;",
 };
 const RTSJON_PLUGINS_OPEN = "pub const plugins = struct {";
 
@@ -902,6 +916,7 @@ test "strict grammar: the real spellings pass; laundering fails by name" {
         "pub const Schema = sjon.Schema;\n" ++
         "pub const Plugin = sjon.Plugin;\n" ++
         "pub const trig = sjon.trig;\n" ++
+        "pub const BinaryDecoder = sjon.BinaryDecoder;\n" ++
         "pub const plugins = struct {\n" ++
         "    pub const core = sjon.plugins.core;\n" ++
         "    pub const pattern = sjon.plugins.pattern;\n" ++
@@ -980,6 +995,16 @@ const FIXTURES = [_]Fixture{
     },
     .{ .name = "boundary-crossing", .want_ok = false, .fail_needles = &.{ "Parser.zig", "Expr.zig" } },
     .{ .name = "stale-both-directions", .want_ok = false, .fail_needles = &.{ "Writes.zig", "BinaryFormat.zig" } },
+    // The ask30/M4 named delta's mutation cases (plan §H): the BinaryDecoder
+    // row is load-bearing in all three gate layers — dropping it from the
+    // window breaks the frozen-row grammar; renaming its spelling breaks the
+    // grammar by line; a direct pacer-leg import fails the closure check
+    // (the decoder is reached only through RtSjon); and an SJON root.zig
+    // without the export fails the namespace→file map assert.
+    .{ .name = "binarydecoder-row-dropped", .want_ok = false, .fail_needles = &.{"BinaryDecoder"}, .fail_render_needles = &.{"appears 0 time(s)"} },
+    .{ .name = "binarydecoder-alias-renamed", .want_ok = false, .fail_needles = &.{"BinaryDec"}, .fail_render_needles = &.{"not in the frozen grammar"} },
+    .{ .name = "binarydecoder-smuggled", .want_ok = false, .fail_needles = &.{"BinaryDecoder.zig"} },
+    .{ .name = "binarydecoder-map-drift", .want_ok = false, .fail_needles = &.{"BinaryDecoder"} },
     .{ .name = "honest-split", .want_ok = true },
 };
 
@@ -1077,9 +1102,10 @@ test "the REAL tree passes layer 1 (the gate's own green pin inside `zig build t
         std.debug.print("real tree FAIL:\n{s}\n", .{aw.written()});
         return error.TestUnexpectedResult;
     }
-    // The closure sizes are pinned: 12 pacer + 17 SJON (the pattern
+    // The closure sizes are pinned: 12 pacer + 18 SJON (the pattern
     // plugin row's file joined at P4/A2 — the named, pre-authorized
-    // 02:345-353 delta).
+    // 02:345-353 delta; the read-only BinaryDecoder leaf joined at the
+    // ask30/M4 adoption, 2026-10-22 — SJON ask 30 §H's named delta).
     try testing.expectEqual(@as(usize, 12), report.visited_pacer);
-    try testing.expectEqual(@as(usize, 17), report.visited_sjon);
+    try testing.expectEqual(@as(usize, 18), report.visited_sjon);
 }

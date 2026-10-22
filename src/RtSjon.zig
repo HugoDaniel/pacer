@@ -27,6 +27,20 @@
 //! surfaces (the parser, the binary encoder, document validation, the
 //! host) are reachable in closure files ONLY through indented
 //! test-block imports, never through this window.
+//!
+//! Dated note (2026-10-22, ask30/M4 adoption): an eleventh row,
+//! `BinaryDecoder`, joins under SJON ask 30 §H's named, role-stated
+//! P4/A2-class amendment — the READ-ONLY tree decoder
+//! (`BinaryDecoder.fromBinary`, imports std + Ast + BinaryFormat only)
+//! behind the runtime's load-time pattern prepare: each `'PACB'`
+//! pattern payload is decoded once per loaded track into an owned,
+//! self-contained prepared state, and every frame/dry-run query
+//! forwards to the delivered `PatternQuery.queryPreparedBinaryWithEnv`.
+//! The compiler exclusion is unchanged in letter and spirit: a tree
+//! decoder is data construction via `Ast.TreeBuilder` (the runtime's
+//! third decoder beside `Pacb.zig` and `BinaryCursor.zig`), no
+//! parser/printer/encoder/write-side import appears, and every old deny
+//! check stays exactly as it was.
 
 const sjon = @import("sjon");
 
@@ -37,6 +51,7 @@ pub const PatternQuery = sjon.PatternQuery;
 pub const BinaryCursor = sjon.BinaryCursor;
 pub const Schema = sjon.Schema;
 pub const Plugin = sjon.Plugin;
+pub const BinaryDecoder = sjon.BinaryDecoder;
 pub const trig = sjon.trig;
 pub const plugins = struct {
     pub const core = sjon.plugins.core;
