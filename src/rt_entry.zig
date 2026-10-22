@@ -10,7 +10,8 @@
 //! back. Blob formats live in `Pacb` / `PactCodec` / `Writes`; this
 //! file is zone plumbing, the transactional lifecycle, and the C4/C5
 //! load-time work (table materialization + expr dry-runs, joined since
-//! P4/A2 by the pattern dry-run).
+//! P4/A2 by the pattern dry-run, and since the ask30/M4 adoption of
+//! 2026-10-22 by the per-track prepared state the pattern seams query).
 //!
 //! ## Memory zones
 //!
@@ -149,6 +150,18 @@ const RtScore = struct {
     /// (P4/A2): the table's `.pattern` node index is the inert
     /// `.invalid` sentinel, never read.
     pattern_payloads: []?[]const u8,
+    /// The prepared state, PARALLEL to `table.tracks` (null on every
+    /// non-pattern track) — the ask30/M4 adoption (2026-10-22): each
+    /// `.pattern` track's payload decoded ONCE at load into an owned,
+    /// self-contained prepared object (`PatternTrack.materializePrepared`
+    /// through the audited `RtSjon.BinaryDecoder` window). The slice and
+    /// every tree are score-arena allocations: the ONE free
+    /// (`score.deinit()`) reclaims all of it on every path — success,
+    /// refusal, OOM — transactionally, so no explicit teardown exists
+    /// and none can be missed. The evaluator borrows the pointees
+    /// read-only (`LeafSource.binary.pattern_prepared`); the frame and
+    /// dry-run seams query them under each call's own env.
+    pattern_prepared: []?RtSjon.PatternQuery.PreparedBinary,
     evaluator: EvalCore.Evaluator,
 };
 
@@ -295,6 +308,24 @@ export fn prt_load(pacb_len: u32, targets_len: u32) u32 {
         load_error = DRY_RUN_FAILED;
         return @intFromEnum(LoadStatus.refused);
     }
+    // ask30/M4 (2026-10-22): materialize the prepared state BEFORE the
+    // dry-runs — state building first, acceptance gates second, the
+    // same precedence the decode (8) keeps ahead of the dry-run (11).
+    // A prepare failure is the payload-malformed CLASS (typed set:
+    // unreachable past 01's structural walk, but never a trap).
+    switch (preparePatterns(shell) catch {
+        shell.score.deinit();
+        gpa.destroy(shell);
+        return @intFromEnum(LoadStatus.oom);
+    }) {
+        .ok => {},
+        .malformed => {
+            shell.score.deinit();
+            gpa.destroy(shell);
+            load_error = refusalReason(.payload_malformed);
+            return @intFromEnum(LoadStatus.refused);
+        },
+    }
     const pattern_dry_ok = dryRunPatterns(shell) catch {
         shell.score.deinit();
         gpa.destroy(shell);
@@ -308,7 +339,11 @@ export fn prt_load(pacb_len: u32, targets_len: u32) u32 {
     }
     shell.evaluator = EvalCore.Evaluator.initContext(shell.score.arena.allocator(), .{
         .table = &shell.table,
-        .source = .{ .binary = .{ .expr = shell.expr_payloads, .pattern = shell.pattern_payloads } },
+        .source = .{ .binary = .{
+            .expr = shell.expr_payloads,
+            .pattern = shell.pattern_payloads,
+            .pattern_prepared = shell.pattern_prepared,
+        } },
         .schema = rt_schema,
     }) catch {
         shell.score.deinit();
@@ -469,10 +504,45 @@ fn dryRunExprs(shell: *RtScore) error{OutOfMemory}!bool {
     return true;
 }
 
-/// P4/A2: dry-run every pattern track at its own dry tick — the scene's
+/// ask30/M4 (2026-10-22): materialize the prepared state — ONE
+/// `PatternTrack.materializePrepared` per `.pattern` track, into the
+/// score's own arena, so the slice and every decoded tree die with the
+/// score's one free on every path (transactional by construction: a
+/// refusal's teardown is the same `score.deinit()` the other gates
+/// run). No env is read and no query budget is touched: the decode is
+/// O(payload) once per load, outside the 1 MiB scratch.
+///
+/// `.malformed` = a typed prepare refusal (`BinaryDecoder`'s wire set
+/// or `MultipleRoots`) — the payload-malformed class; unreachable past
+/// the decode's structural walk, typed here so it propagates rather
+/// than traps. `error.OutOfMemory` is the real status-3 class.
+const PrepareOutcome = enum { ok, malformed };
+
+fn preparePatterns(shell: *RtScore) error{OutOfMemory}!PrepareOutcome {
+    const a = shell.score.arena.allocator();
+    const prepared = try a.alloc(?RtSjon.PatternQuery.PreparedBinary, shell.table.tracks.len);
+    for (prepared) |*slot| slot.* = null;
+    for (shell.table.tracks, 0..) |track, ti| {
+        if (track.source != .pattern) continue;
+        // Parallel-slice invariant: a pattern track carries its payload.
+        // A missing slot would be an inconsistent decode — the defensive
+        // mapping is the payload-malformed class, never a trap.
+        const payload = shell.pattern_payloads[ti] orelse return .malformed;
+        prepared[ti] = PatternTrack.materializePrepared(a, payload) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return .malformed,
+        };
+    }
+    shell.pattern_prepared = prepared;
+    return .ok;
+}
+
+/// P4/A2, prepared twin since the ask30/M4 adoption (2026-10-22):
+/// dry-run every pattern track at its own dry tick — the scene's
 /// start tick when scened, else 0 (`Compile.dryRunPattern`'s rule) —
-/// through the SAME `PatternTrack.queryCycleBinary` the frame path will
-/// use, pacer's env bound exactly as the text path's compile dry-run
+/// through the SAME `PatternTrack.queryCyclePrepared` the frame path
+/// will use, over the prepared state materialized by `preparePatterns`,
+/// pacer's env bound exactly as the text path's compile dry-run
 /// binds it (`ExprTrack.buildEnv`: control ids with their document
 /// `:value`s, the time names at the dry tick — the pattern-locals
 /// shadow them), under the frame's own fixed budget: an FBA over
@@ -500,22 +570,25 @@ fn dryRunPatterns(shell: *RtScore) error{OutOfMemory}!bool {
     for (table.controls, 0..) |control, i| bindings_buf[i] = ExprTrack.ControlBinding.fromControl(control);
     const bindings = bindings_buf[0..table.controls.len];
 
-    for (table.tracks, shell.pattern_payloads) |track, pl| {
+    for (table.tracks, 0..) |track, ti| {
         if (track.source != .pattern) continue;
         // `PatValue` has no vector variant: a pattern can only ever
         // drive a scalar target this slice — reject the statically
         // impossible pairing regardless of the pattern's content (the
         // text dry-run's first gate).
         if (track.ncomp != 1) return false;
+        // Parallel-slice invariant: a pattern track carries its
+        // prepared state (preparePatterns ran for every pattern track).
+        const prepared = if (shell.pattern_prepared[ti]) |*p| p else return false;
         const scene: ?TrackTable.Scene = if (track.scene == TrackTable.NO_SCENE) null else table.scenes[track.scene];
         const dry_tick: TrackTable.Tick = if (scene) |s| s.start_tick else 0;
         var env_storage: ExprTrack.EnvStorage = undefined;
         const env = ExprTrack.buildEnv(&env_storage, &table.transport, bindings, dry_tick, scene);
         var fba = std.heap.FixedBufferAllocator.init(scratch);
-        var result = PatternTrack.queryCycleBinary(
+        var result = PatternTrack.queryCyclePrepared(
             fba.allocator(),
             rt_schema,
-            pl.?, // the parallel-slice invariant: a pattern track carries its payload
+            prepared,
             dry_tick,
             env,
         ) catch return false;
@@ -873,6 +946,17 @@ fn captureFrame(a: std.mem.Allocator, secs: f64) ![]u8 {
     const len = prt_eval(secs);
     try t.expect(len > 0);
     return a.dupe(u8, writes_buffer[0..len]);
+}
+
+/// One evaluation at `tick`, captured and DECODED: the failure counter
+/// accumulates per evaluation, so a test that asserts on the counter
+/// must evaluate each frame exactly once and read the capture.
+fn captureFrameDecoded(a: std.mem.Allocator, tick: i64) ![]const Writes.Entry {
+    const len = prt_evalTicks(tick);
+    try t.expect(len > 0);
+    const mem = try a.alignedAlloc(u8, .of(Writes.Entry), len);
+    @memcpy(mem, writes_buffer[0..len]);
+    return Writes.decode(mem) orelse unreachable;
 }
 
 test "rt_entry (a): a refusal is transactional — old score, control, bpm, counters survive" {
@@ -1718,6 +1802,227 @@ test "rt_entry (q): a pattern leaf that fails its cycle-0 dry-run refuses reason
     try t.expectEqual(@as(u32, 1), loadPacB(mutated));
     try t.expectEqual(@as(u32, 11), prt_loadError()); // dry_run_failed
     try t.expectEqualSlices(u8, before, try captureTicks(a, 96));
+}
+
+// ---------------------------------------------------------------------------
+// Group 4 — ask30/M4 prepared-runtime adoption (2026-10-22): the loader
+// tests over the REAL production path. (r) is the named acceptance gate:
+// Repro A — the compile-accepted 98,501 B pattern the A2 one-shot
+// dry-run refused (status 1 reason 11, prod-four-a2-boundary-report.md
+// "Repro A") — loads once the frame/dry-run seams query the prepared
+// state; (s) pins the acceptance frontier's dense edge; (t) pins
+// per-frame env freshness through a live control.
+// ---------------------------------------------------------------------------
+
+/// The Repro A source (prod-four-a2-boundary-report.md "Repro A",
+/// probeB4SrcNondense): `(cat (pure 0.5) s₀ … s₂₃ (pure (+ 1 2)))` where
+/// each sᵢ is a DISTINCT 4-KiB string (8-digit zero-padded index +
+/// 'a'×4088) — 96 KiB of non-dedupable ballast; cycle 0 is exactly one
+/// numeric hap 0.5, and the expr leaf only plays in cycle 25. The text
+/// path ACCEPTS it (floor 753,664 B ≤ the shared 1 MiB); the A2 one-shot
+/// binary dry-run REFUSED it (floor 1,253,376 B — the expr-leaf
+/// retention machinery, ≈5× payload).
+fn reproASource(a: std.mem.Allocator) ![:0]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    try buf.appendSlice(a,
+        \\(target :name glow :arity 1 :registry 0)
+        \\(transport :bpm 120 :meter [4 4] :dur 64bar :end loop)
+        \\(track :target glow :pattern (cat (pure 0.5)
+        \\
+    );
+    for (0..24) |i| {
+        try buf.append(a, '"');
+        const idx = try std.fmt.allocPrint(a, "{d:0>8}", .{i});
+        defer a.free(idx);
+        try buf.appendSlice(a, idx);
+        try buf.appendNTimes(a, 'a', 4088);
+        try buf.appendSlice(a, "\"\n");
+    }
+    try buf.appendSlice(a, "(pure (+ 1 2))))\n");
+    return a.dupeZ(u8, buf.items);
+}
+
+test "rt_entry (r): Repro A — a real-compile-accepted 98,501 B pattern loads (the window closes)" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The text authority: the REAL compile accepts the score (its own
+    // load dry-run queries cycle 0 under the identical 1 MiB) — the
+    // independent oracle the runtime must not refuse.
+    const src = try reproASource(a);
+    var oracle = try compileOracle(a, src);
+    defer oracle.deinit(a);
+
+    // Pack through the T3.1 uniform path (compile + encode, no preflight
+    // — pack's interim :pattern refusal is A3+A4 scope, pinned in
+    // ParityTests) and pin the NAMED payload anchor: 98,501 B.
+    const pacb = try packPatternForTest(a, src, &.{});
+    const span = try soleExprSpan(pacb);
+    try t.expectEqual(@as(usize, 98501), span.len);
+    try t.expect(pacb.len < PACB_CAP);
+
+    // THE WINDOW: through the A2 one-shot this load was status 1 reason
+    // 11 (the retention cost rode every query); through the prepared
+    // runtime it LOADS — the decode happens once at load, outside the
+    // scratch, and the per-query cost is the tree path's.
+    const status = loadPacB(pacb);
+    if (status != 0) {
+        std.debug.print("rt_entry (r): load refused — status={d} reason={d}\n", .{ status, prt_loadError() });
+        return error.LoadRefused; // named in the failure output: 1=refused 3=oom
+    }
+    try t.expectEqual(@as(u32, 0), status);
+    defer unload();
+
+    // Explicit nonempty values (never oracle-only): cycle 0 writes
+    // exactly one entry — glow 0.5 — and cycle 25 writes the expr
+    // leaf's 3.0.
+    const PPC = RtSjon.Pattern.PPC;
+    {
+        const frame = rtFrame(0);
+        try t.expectEqual(@as(usize, 1), frame.len);
+        try t.expectEqual(@as(f32, 0.5), frame[0].value[0]);
+    }
+    {
+        const frame = rtFrame(25 * PPC);
+        try t.expectEqual(@as(usize, 1), frame.len);
+        try t.expectEqual(@as(f32, 3), frame[0].value[0]); // (+ 1 2) evaluated per cycle
+    }
+    // Byte-parity with the tree arm across cycles and a revisit — the
+    // prepared object answers every query under the frame's own env.
+    // The sweep stays on the window's numeric cycles (0 and 25): the
+    // ballast cycles 1–24 carry STRING haps — a documented counted
+    // omission on BOTH arms (the coerce channel) — and cycles past the
+    // cat are the arms' shared exhausted-cat behavior, neither part of
+    // this window proof; the counter must stay 0 here.
+    const sweep = [_]i64{ 0, 25 * PPC, 0 };
+    for (sweep) |tick| {
+        const want = oracle.evaluator.evalTicks(tick);
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(want), std.mem.sliceAsBytes(rtFrame(tick)));
+    }
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+
+    // The prepared state OWNS its decoded tree: clobbering the whole
+    // input zone cannot move a frame (the 98.5 KiB of strings live in
+    // the score-owned prepared tree, never aliased into the zone).
+    @memset(&pacb_buffer, 0);
+    for (sweep) |tick| {
+        const want = oracle.evaluator.evalTicks(tick);
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(want), std.mem.sliceAsBytes(rtFrame(tick)));
+    }
+}
+
+test "rt_entry (s): the dense acceptance frontier does not shrink — fast 64 loads, literal and expr leaf" {
+    // The A2 boundary probe's dense anchors (floors 274,432 B ≪ 1 MiB,
+    // text = binary): the adoption must not narrow what the one-shot
+    // accepted. `fast 64` with a literal hap and with an expr-leaf hap
+    // both load status 0 and evaluate.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const sources = [_][:0]const u8{
+        \\(target :name glow :arity 1 :registry 0)
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(track :target glow :pattern (fast 64 (pure 1)))
+        \\
+        ,
+        \\(target :name glow :arity 1 :registry 0)
+        \\(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+        \\(track :target glow :pattern (fast 64 (pure (+ 1 2))))
+        \\
+        ,
+    };
+    for (sources) |src| {
+        var oracle = try compileOracle(a, src);
+        defer oracle.deinit(a);
+        const pacb = try packPatternForTest(a, src, &.{});
+        try t.expectEqual(@as(u32, 0), loadPacB(pacb));
+        defer unload();
+        for ([_]i64{ 0, RtSjon.Pattern.PPC / 2 }) |tick| {
+            const want = oracle.evaluator.evalTicks(tick);
+            try t.expect(want.len > 0);
+            try t.expectEqualSlices(u8, std.mem.sliceAsBytes(want), std.mem.sliceAsBytes(rtFrame(tick)));
+        }
+        try t.expectEqual(@as(u32, 0), prt_exprFailures());
+    }
+}
+
+test "rt_entry (t): live control valid→invalid→valid through the loaded pattern — per-frame env freshness" {
+    // The prepared object must classify under EACH query's live env,
+    // never a classification cached at prepare/dry-run. Two top-level
+    // pattern tracks, both omission channels:
+    //   - the sway track `(pure (/ 2 sway))`: sway 0.25 writes 8.0;
+    //     sway 0 fails the PER-QUERY leaf capture (diagnostics channel:
+    //     the leaf degrades to silence, a plain silence gap —
+    //     uncounted); sway 0.5 writes 4.0 again, same prepared object.
+    //   - the hole track `(pure (/ 1 (- 1 cycle)))`: ÷0 exactly in
+    //     cycle 1 — the hap DROPS, the write omits, the failure counter
+    //     counts (the EvalCore hole semantics, loader-side); finite
+    //     (1.0, then -1.0) everywhere else.
+    // Every frame AND the failure counter are parity-checked against
+    // the tree arm driven through the identical control sequence.
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const src =
+        \\(target :name glow :arity 1 :registry 0)
+        \\(transport :bpm 120 :meter [4 4] :dur 8bar :end loop)
+        \\(control :id sway :value 0.25)
+        \\(track :target glow :pattern (pure (/ 2 sway)))
+        \\(track :target glow :pattern (pure (/ 1 (- 1 cycle))))
+        \\
+    ;
+    var oracle = try compileOracle(a, src);
+    defer oracle.deinit(a);
+    const pacb = try packPatternForTest(a, src, &.{});
+
+    // The LOAD itself is a dry-run proof under the document value.
+    try t.expectEqual(@as(u32, 0), loadPacB(pacb));
+    defer unload();
+    const PPC = RtSjon.Pattern.PPC;
+
+    // One CAPTURE per tick: the failure counter accumulates per
+    // evaluation, so every frame is captured exactly once and all
+    // asserts read the capture.
+    const c0 = try captureFrameDecoded(a, 7);
+    try t.expectEqualSlices(Writes.Entry, oracle.evaluator.evalTicks(7), c0);
+    try t.expectEqual(@as(usize, 2), c0.len);
+    try t.expectEqual(@as(f32, 8), c0[0].value[0]);
+    try t.expectEqual(@as(f32, 1), c0[1].value[0]);
+
+    const c1 = try captureFrameDecoded(a, PPC + 7); // the drop, counted once
+    try t.expectEqualSlices(Writes.Entry, oracle.evaluator.evalTicks(PPC + 7), c1);
+    try t.expectEqual(@as(usize, 1), c1.len); // the dropped hap's hole
+    try t.expectEqual(@as(u32, 1), prt_exprFailures());
+    try t.expectEqual(@as(u64, 1), oracle.evaluator.expr_failures); // arms agree
+
+    const c2 = try captureFrameDecoded(a, 2 * PPC + 7); // finite again, no new count
+    try t.expectEqualSlices(Writes.Entry, oracle.evaluator.evalTicks(2 * PPC + 7), c2);
+    try t.expectEqual(@as(f32, -1), c2[1].value[0]);
+    try t.expectEqual(@as(u32, 1), prt_exprFailures());
+
+    // INVALID: sway 0 → the sway leaf's per-query capture fails → that
+    // leaf degrades to silence (uncounted) — the same prepared object
+    // classifies afresh under the changed live env.
+    try t.expectEqual(@as(u32, 0), prt_setControl(0, 0, 0, 0, 0));
+    try t.expect(oracle.evaluator.setControl(0, .{ 0, 0, 0, 0 }));
+    const c3 = try captureFrameDecoded(a, 7);
+    try t.expectEqualSlices(Writes.Entry, oracle.evaluator.evalTicks(7), c3);
+    try t.expectEqual(@as(usize, 1), c3.len); // only the hole track writes
+    try t.expectEqual(@as(u32, 1), prt_exprFailures()); // uncounted on both arms
+    try t.expectEqual(@as(u64, 1), oracle.evaluator.expr_failures);
+
+    // VALID again: 2 / 0.5 = 4.0, the counter untouched.
+    try t.expectEqual(@as(u32, 0), prt_setControl(0, 0.5, 0, 0, 0));
+    try t.expect(oracle.evaluator.setControl(0, .{ 0.5, 0, 0, 0 }));
+    const c4 = try captureFrameDecoded(a, 7);
+    try t.expectEqualSlices(Writes.Entry, oracle.evaluator.evalTicks(7), c4);
+    try t.expectEqual(@as(usize, 2), c4.len);
+    try t.expectEqual(@as(f32, 4), c4[0].value[0]);
+    try t.expectEqual(@as(u32, 1), prt_exprFailures());
+    try t.expectEqual(@as(u64, 1), oracle.evaluator.expr_failures);
 }
 
 test "rt_entry: ownership — repeated reloads, eval-after-reload, no stale pointers" {

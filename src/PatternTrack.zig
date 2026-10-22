@@ -133,6 +133,13 @@ pub const BinaryError = PatternQuery.BinaryError;
 /// does; the legacy frozen `queryBinary`/`queryBinaryWithBudget` (a
 /// `(pure …)` leaf is silence there) are never adopted.
 ///
+/// Dated note (2026-10-22, ask30/M4 adoption): the runtime's frame and
+/// dry-run seams no longer call this per query — they query the
+/// prepared state (`materializePrepared` + `queryCyclePrepared`), so a
+/// payload decodes once per loaded track instead of once per frame.
+/// This entry remains the delivered SJON one-shot semantics, unchanged
+/// and pinned by the tests below (the prepared twin's oracle).
+///
 /// `schema` must carry the core vocabulary the payload's expr leaves
 /// evaluate under — the runtime's frozen core ⊕ pattern aggregate.
 ///
@@ -154,6 +161,67 @@ pub fn queryCycleBinary(
 ) BinaryError!PatternQuery.Result {
     const window = try cycleWindowOf(tick);
     return PatternQuery.queryBinaryWithEnv(gpa, payload, schema, window, SEED, outer_env);
+}
+
+/// Materialize one compact single-root pattern payload into an owned,
+/// self-contained prepared state — the ask30/M4 named delta (SJON ask
+/// 30 §H, adopted 2026-10-22): ONE read-only tree decode per loaded
+/// pattern track, at load, through the audited `RtSjon.BinaryDecoder`
+/// window (`BinaryDecoder.fromBinary`, data construction via
+/// `Ast.TreeBuilder` — never a compiler), then the shipped binary
+/// compile's root discipline (`PreparedBinary.fromTree`).
+///
+/// Allocation: the decoded tree is O(payload) ONCE per load, OUTSIDE
+/// the semantic 1 MiB scratch — never charged to any query budget —
+/// and the caller backs it with an allocator that owns it for the
+/// score's whole lifetime (the runtime hands the score's own arena, so
+/// the state dies with the score's one free; a prepare error frees the
+/// decode's partial state internally on the `fromTree` error path).
+/// The caller's bytes may be freed once this returns: the tree owns
+/// its strings.
+///
+/// Errors: `BinaryDecoder`'s typed wire set plus `error.MultipleRoots`.
+/// Through the production loader every variant is unreachable — 01's
+/// structural walk is the preceding proof (same 1024 depth cap, pool
+/// capped at `Cursor.init`, single root, exact-end consumption) — but
+/// on any input they propagate rather than trap (the totality
+/// doctrine), and the loader maps the whole set to the
+/// `payload_malformed` refusal class.
+pub fn materializePrepared(
+    gpa: std.mem.Allocator,
+    payload: []const u8,
+) (RtSjon.BinaryDecoder.Error || error{MultipleRoots})!PatternQuery.PreparedBinary {
+    const tree = try RtSjon.BinaryDecoder.fromBinary(gpa, payload, .{});
+    // Consumes `tree` on success AND on error — the dead local binding
+    // is never touched again.
+    return PatternQuery.PreparedBinary.fromTree(tree);
+}
+
+/// The prepared twin of `queryCycleBinary`: query the enclosing cycle
+/// of `tick` over an already-materialized prepared state — the SAME
+/// `cycleWindowOf` window, the SAME `SEED`, the SAME shared
+/// `sampleAt`/`coerce` contract, forwarded to SJON's delivered
+/// `queryPreparedBinaryWithEnv` (the one `queryTreeFull` body every
+/// tree entry uses — the per-query metered sequence IS the tree path's,
+/// over a logically equal tree; ask 30 §A.2/A.9). The prepared state is
+/// read-only at query and shared across frames; every query classifies
+/// under the call's OWN env (`outer_env` forwarded live, never
+/// inspected or cached by prepare) — control-dependent classification
+/// is recomputed per query, the tree arm's exact freshness contract.
+///
+/// Error set: `PatternQuery.Error` — the decode leg already happened at
+/// prepare, so the wire classes and `MultipleRoots` cannot arise here.
+/// The returned `Result` owns its arena — deinit it (the owning
+/// contract, unchanged).
+pub fn queryCyclePrepared(
+    gpa: std.mem.Allocator,
+    schema: RtSjon.Schema.Schema,
+    prepared: *const PatternQuery.PreparedBinary,
+    tick: Tick,
+    outer_env: ?*const RtSjon.Expr.Env,
+) Error!PatternQuery.Result {
+    const window = try cycleWindowOf(tick);
+    return PatternQuery.queryPreparedBinaryWithEnv(gpa, prepared, schema, window, SEED, outer_env);
 }
 
 /// Point-sample the queried cycle at tick `t`: the hap whose PART span
@@ -387,4 +455,127 @@ test "queryCycleBinary: pacer env threads under the pattern-locals — shadow ru
     }
     try t_bin.expect(saw_six);
     try t_bin.expect(saw_zero);
+}
+
+// ---------------------------------------------------------------------------
+// ask30/M4 (2026-10-22) — the prepared twin: materializePrepared +
+// queryCyclePrepared. Unit pins for the adoption's new seams; the
+// loader-level acceptance lives in rt_entry (r)/(s)/(t).
+// ---------------------------------------------------------------------------
+
+test "queryCyclePrepared: the prepared twin answers like the one-shot — window, shadow, env freshness" {
+    const gpa = t_bin.allocator;
+
+    // Window: cycle 1 returns the SECOND slowcat child through the
+    // prepared state.
+    {
+        const payload = try binaryPayload(gpa, "(slowcat 0.1 0.2)");
+        defer gpa.free(payload);
+        var prepared = try materializePrepared(gpa, payload);
+        defer prepared.deinit();
+        var result = try queryCyclePrepared(gpa, rt_schema, &prepared, Pattern.PPC + 1, null);
+        defer result.deinit();
+        try t_bin.expectEqual(@as(usize, 0), result.diagnostics.len);
+        try t_bin.expectEqual(@as(usize, 1), result.haps.len);
+        try t_bin.expect(result.haps[0].value.eql(.{ .number = 0.2 }));
+    }
+
+    // Shadow + env FRESHNESS: the SAME prepared object under three
+    // different live envs answers each differently — classification is
+    // per query, never cached at prepare.
+    const payload = try binaryPayload(gpa, "(stack (pure (* base 2)) (pure (+ tick 0)))");
+    defer gpa.free(payload);
+    var prepared = try materializePrepared(gpa, payload);
+    defer prepared.deinit();
+    const base3 = [_]RtSjon.Expr.Env.Binding{
+        .{ .name = "base", .value = .{ .number = 3 } },
+        .{ .name = "tick", .value = .{ .number = 999 } },
+    };
+    const base5 = [_]RtSjon.Expr.Env.Binding{
+        .{ .name = "base", .value = .{ .number = 5 } },
+        .{ .name = "tick", .value = .{ .number = 999 } },
+    };
+    const env3: RtSjon.Expr.Env = .{ .bindings = &base3 };
+    const env5: RtSjon.Expr.Env = .{ .bindings = &base5 };
+
+    var r3 = try queryCyclePrepared(gpa, rt_schema, &prepared, 0, &env3);
+    defer r3.deinit();
+    try t_bin.expectEqual(@as(usize, 2), r3.haps.len);
+    var saw_six = false;
+    var saw_zero = false;
+    for (r3.haps) |h| {
+        if (h.value.eql(.{ .number = 6 })) saw_six = true;
+        if (h.value.eql(.{ .number = 0 })) saw_zero = true; // the shadow won, not 999
+    }
+    try t_bin.expect(saw_six and saw_zero);
+
+    // One-shot equivalence over the SAME payload and env.
+    var r_one = try queryCycleBinary(gpa, rt_schema, payload, 0, &env3);
+    defer r_one.deinit();
+    try t_bin.expectEqual(r_one.haps.len, r3.haps.len);
+    for (r_one.haps, r3.haps) |oh, ph| try t_bin.expect(oh.value.eql(ph.value));
+
+    // Fresh env: base 5 → {10, 0} from the SAME prepared object.
+    var r5 = try queryCyclePrepared(gpa, rt_schema, &prepared, 0, &env5);
+    defer r5.deinit();
+    var saw_ten = false;
+    for (r5.haps) |h| {
+        if (h.value.eql(.{ .number = 10 })) saw_ten = true;
+    }
+    try t_bin.expect(saw_ten);
+
+    // Null env: `base` is unbound — that leaf's capture fails into the
+    // diagnostics channel (degrade to silence), while the tick-local
+    // leaf still plays: one hap (the shadow's 0), at least one
+    // diagnostic, never an error.
+    var r_null = try queryCyclePrepared(gpa, rt_schema, &prepared, 0, null);
+    defer r_null.deinit();
+    try t_bin.expect(r_null.diagnostics.len > 0);
+    try t_bin.expectEqual(@as(usize, 1), r_null.haps.len);
+    try t_bin.expect(r_null.haps[0].value.eql(.{ .number = 0 }));
+}
+
+test "materializePrepared: a malformed payload refuses with the typed wire error" {
+    const gpa = t_bin.allocator;
+    const payload = try binaryPayload(gpa, "(slowcat 0.1 0.2)");
+    defer gpa.free(payload);
+    const corrupted = try gpa.dupe(u8, payload);
+    defer gpa.free(corrupted);
+    corrupted[0] ^= 0xFF; // bad magic
+    try t_bin.expectError(error.InvalidMagic, materializePrepared(gpa, corrupted));
+}
+
+test "materializePrepared: a multi-root payload refuses MultipleRoots (typed; unreachable through the loader)" {
+    const sjon = @import("sjon"); // write side (parse + encode): indented test-only
+    const gpa = t_bin.allocator;
+    var tree = try sjon.parse(gpa, "1 2");
+    defer tree.deinit();
+    const bin = try sjon.Binary.toBinary(gpa, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer bin.deinit();
+    try t_bin.expectError(error.MultipleRoots, materializePrepared(gpa, bin.data));
+}
+
+test "materializePrepared: a zero-root payload prepares silent (the prepared entry's own specified behavior)" {
+    const gpa = t_bin.allocator;
+    // Hand-wired wire: header, empty pool at 16, roots at 16, count 0.
+    var wire: [19]u8 = undefined;
+    @memset(&wire, 0);
+    @memcpy(wire[0..4], &RtSjon.BinaryDecoder.wire_magic);
+    wire[4] = RtSjon.BinaryDecoder.wire_version;
+    std.mem.writeInt(u32, wire[8..12], 16, .little); // pool section at 16
+    std.mem.writeInt(u32, wire[12..16], 18, .little); // roots at 18
+    wire[16] = 0; // pool: 0 entries
+    wire[17] = 0; // pool: 0 bytes
+    wire[18] = 0; // roots: count 0
+    var prepared = try materializePrepared(gpa, &wire);
+    defer prepared.deinit();
+    try t_bin.expectEqual(@as(usize, 0), prepared.tree.root.len);
+    try t_bin.expect(prepared.root == null);
+    // Every query answers the silence result — no hap, no diagnostic,
+    // no drop, no error.
+    var result = try queryCyclePrepared(gpa, rt_schema, &prepared, 0, null);
+    defer result.deinit();
+    try t_bin.expectEqual(@as(usize, 0), result.haps.len);
+    try t_bin.expectEqual(@as(usize, 0), result.diagnostics.len);
+    try t_bin.expectEqual(@as(usize, 0), result.dropped);
 }

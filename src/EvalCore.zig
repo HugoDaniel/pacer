@@ -17,10 +17,13 @@
 //!     slices carry each `.expr`/`.pattern` track's decode-validated
 //!     single-root IR, evaluated by `ExprTrack.evalAtBinary` (the T1.1
 //!     twin: same env, same coerce, bit-equal by test pin) and — since
-//!     P4/A2 (2026-10-21) — `PatternTrack.queryCycleBinary` (the
-//!     delivered env-carrying binary query: same window, same env, same
-//!     sample/coerce). The table's `.expr`/`.pattern` node indices are
-//!     INERT sentinels on this arm — never read (C4).
+//!     P4/A2 (2026-10-21), prepared twin since the ask30/M4 adoption
+//!     (2026-10-22) — `PatternTrack.queryCyclePrepared` over each
+//!     `.pattern` track's prepared state (decoded once per loaded track
+//!     through the read-only `BinaryDecoder`, SJON ask 30 §H; per-query
+//!     cost is the tree path's, env freshness per query). The table's
+//!     `.expr`/`.pattern` node indices are INERT sentinels on this arm
+//!     — never read (C4).
 //!
 //! Per-arm schema contract: the tree arm's schema is bound by the
 //! context venter (the compile result's core ⊕ user-plugins aggregate
@@ -123,6 +126,15 @@ pub const LeafSource = union(enum) {
         /// track's payload at its track position, null on every other
         /// track. Same length as `expr` — one slot per track either way.
         pattern: []const ?[]const u8 = &.{},
+        /// The prepared state, PARALLEL to `table.tracks` (the ask30/M4
+        /// adoption, 2026-10-22): each `.pattern` track's owned decoded
+        /// tree — materialized ONCE per loaded track
+        /// (`PatternTrack.materializePrepared`) and read-only at
+        /// query — at its track position, null on every other track.
+        /// Same length as `pattern`; every `.pattern` track's slot is
+        /// non-null (asserted at init). The pointees are borrowed
+        /// whole: the score owns the prepared objects, ordered teardown.
+        pattern_prepared: []const ?RtSjon.PatternQuery.PreparedBinary = &.{},
     },
 };
 
@@ -263,6 +275,13 @@ pub const Evaluator = struct {
             .binary => |bin| {
                 std.debug.assert(bin.expr.len == table.tracks.len);
                 std.debug.assert(bin.pattern.len == table.tracks.len);
+                // The prepared state is parallel too (ask30/M4), and
+                // every `.pattern` track carries its prepared object —
+                // the frame seam dereferences it per query.
+                std.debug.assert(bin.pattern_prepared.len == table.tracks.len);
+                for (table.tracks, bin.pattern_prepared) |tr, *slot| {
+                    if (tr.source == .pattern) std.debug.assert(slot.* != null);
+                }
             },
             .tree => {},
         }
@@ -661,23 +680,30 @@ pub const Evaluator = struct {
                 };
             },
             .binary => |bin| blk: {
-                // P4/A2: the parallel payload slice is the leaf — the
-                // binary parallel of the tree arm's node, through the
-                // SAME shared window/sample/coerce helpers (no second
-                // interpreter). The env is built identically (transport
-                // clock + live control values, scene-locals when
-                // scened), so the shadow rule and the hap semantics
-                // cannot drift from the text path.
-                const payload = bin.pattern[track_index] orelse {
+                // P4/A2, prepared twin since the ask30/M4 adoption
+                // (2026-10-22): the parallel payload slice's PREPARED
+                // STATE is the leaf — decoded once per loaded track
+                // (`PatternTrack.materializePrepared`), read-only at
+                // query, forwarded to `queryPreparedBinaryWithEnv` (the
+                // one tree-path body — SJON ask 30 §A.2's code identity).
+                // The SAME shared window/sample/coerce helpers (no
+                // second interpreter). The env is built identically per
+                // frame (transport clock + live control values,
+                // scene-locals when scened) and forwarded LIVE — the
+                // prepared object classifies under EACH query's env,
+                // never a classification cached at prepare — so the
+                // shadow rule and the hap semantics cannot drift from
+                // the text path.
+                const prepared = if (bin.pattern_prepared[track_index]) |*p| p else {
                     // Parallel-slice invariant: a `.pattern` track
-                    // carries its payload. A missing one is a
+                    // carries its prepared state. A missing one is a
                     // context-construction bug — the same
                     // omit-and-count as any leaf failure, never a
                     // silent empty write.
                     self.expr_failures += 1;
                     return null;
                 };
-                break :blk PatternTrack.queryCycleBinary(fba.allocator(), self.schema, payload, t, env) catch {
+                break :blk PatternTrack.queryCyclePrepared(fba.allocator(), self.schema, prepared, t, env) catch {
                     self.expr_failures += 1;
                     return null;
                 };
@@ -890,6 +916,7 @@ test "EvalCore: initContext evaluates a binary-arm context bit-equal to the faca
     defer t_.allocator.free(payload);
     const payloads = [_]?[]const u8{payload};
     const pattern_nulls = [_]?[]const u8{null};
+    const prepared_nulls = [_]?RtSjon.PatternQuery.PreparedBinary{null};
 
     // The tree arm through the PRESERVED public spelling (the facade
     // alias — pins it against this file's typed spelling).
@@ -898,7 +925,7 @@ test "EvalCore: initContext evaluates a binary-arm context bit-equal to the faca
     // The binary arm through the runtime's typed spelling.
     var bin_ev = try Evaluator.initContext(t_.allocator, .{
         .table = table,
-        .source = .{ .binary = .{ .expr = &payloads, .pattern = &pattern_nulls } },
+        .source = .{ .binary = .{ .expr = &payloads, .pattern = &pattern_nulls, .pattern_prepared = &prepared_nulls } },
         .schema = binary_schema,
     });
     defer bin_ev.deinit();
@@ -955,9 +982,12 @@ test "EvalCore: binary arm ≡ tree arm over one table — tick sweep, held cont
     const pattern_nulls = try t_.allocator.alloc(?[]const u8, table.tracks.len);
     defer t_.allocator.free(pattern_nulls);
     @memset(pattern_nulls, null);
+    const prepared_nulls = try t_.allocator.alloc(?RtSjon.PatternQuery.PreparedBinary, table.tracks.len);
+    defer t_.allocator.free(prepared_nulls);
+    @memset(prepared_nulls, null);
     const ctx: Context = .{
         .table = table,
-        .source = .{ .binary = .{ .expr = payloads, .pattern = pattern_nulls } },
+        .source = .{ .binary = .{ .expr = payloads, .pattern = pattern_nulls, .pattern_prepared = prepared_nulls } },
         .schema = binary_schema,
     };
 
@@ -1091,9 +1121,10 @@ test "EvalCore: per-arm schema — the tree arm carries the document's user plug
     defer t_.allocator.free(payload);
     const payloads = [_]?[]const u8{payload};
     const pattern_nulls = [_]?[]const u8{null};
+    const prepared_nulls = [_]?RtSjon.PatternQuery.PreparedBinary{null};
     var bin_ev = try Evaluator.initContext(t_.allocator, .{
         .table = table,
-        .source = .{ .binary = .{ .expr = &payloads, .pattern = &pattern_nulls } },
+        .source = .{ .binary = .{ .expr = &payloads, .pattern = &pattern_nulls, .pattern_prepared = &prepared_nulls } },
         .schema = binary_schema,
     });
     defer bin_ev.deinit();
@@ -1107,10 +1138,14 @@ test "EvalCore: per-arm schema — the tree arm carries the document's user plug
 }
 
 test "EvalCore: binary pattern arm ≡ tree pattern arm — env, shadow, dropped counting" {
-    // P4/A2: the `.pattern` arm over a binary LeafSource evaluates
-    // through `queryCycleBinary` with the SAME buildEnv scope as the
-    // tree arm — byte-equal frames over a control-reading, shadow-using
-    // pattern score, and the same omit-and-count on a dropped hap.
+    // P4/A2, prepared twin since the ask30/M4 adoption (2026-10-22):
+    // the `.pattern` arm over a binary LeafSource evaluates through
+    // `queryCyclePrepared` (the prepared state materialized by
+    // `PatternTrack.materializePrepared`) with the SAME buildEnv scope
+    // as the tree arm — byte-equal frames over a control-reading,
+    // shadow-using pattern score, and the same omit-and-count on a
+    // dropped hap. The env changes BETWEEN frames on both arms (the
+    // held control below): the prepared object classifies per query.
     const Compile = @import("Compile.zig");
     const Eval = @import("Eval.zig");
     const test_support = @import("test_support.zig");
@@ -1135,8 +1170,10 @@ test "EvalCore: binary pattern arm ≡ tree pattern arm — env, shadow, dropped
 
     const table = &r.table.?;
     const tree = &r.validated.result.tree;
-    // Binary payloads, parallel to table.tracks (C4): each `.pattern`
-    // track's compact clone at its position, null elsewhere.
+    // Binary payloads + prepared state, parallel to table.tracks (C4):
+    // each `.pattern` track's compact clone and its prepared twin (the
+    // ask30/M4 materialize — decoded once, read-only at query) at its
+    // position, null elsewhere.
     const expr_nulls = try t_.allocator.alloc(?[]const u8, table.tracks.len);
     defer t_.allocator.free(expr_nulls);
     @memset(expr_nulls, null);
@@ -1145,15 +1182,27 @@ test "EvalCore: binary pattern arm ≡ tree pattern arm — env, shadow, dropped
         for (pattern_payloads) |maybe| if (maybe) |p| t_.allocator.free(@constCast(p));
         t_.allocator.free(pattern_payloads);
     }
+    var pattern_prepared = try t_.allocator.alloc(?RtSjon.PatternQuery.PreparedBinary, table.tracks.len);
+    defer {
+        for (pattern_prepared) |maybe| if (maybe) |p| {
+            var owned = p;
+            owned.deinit();
+        };
+        t_.allocator.free(pattern_prepared);
+    }
     for (table.tracks, 0..) |tr, i| {
         pattern_payloads[i] = switch (tr.source) {
             .pattern => |node| try compactPayloadFor(t_.allocator, tree, node),
             else => null,
         };
+        pattern_prepared[i] = switch (tr.source) {
+            .pattern => try PatternTrack.materializePrepared(t_.allocator, pattern_payloads[i].?),
+            else => null,
+        };
     }
     var bin_ev = try Evaluator.initContext(t_.allocator, .{
         .table = table,
-        .source = .{ .binary = .{ .expr = expr_nulls, .pattern = pattern_payloads } },
+        .source = .{ .binary = .{ .expr = expr_nulls, .pattern = pattern_payloads, .pattern_prepared = pattern_prepared } },
         .schema = binary_schema,
     });
     defer bin_ev.deinit();
