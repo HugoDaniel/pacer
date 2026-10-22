@@ -1800,3 +1800,28 @@ remains unstarted.
   ratchet, and any wire/format change. The prepared expr leaf is the measured
   fix; the arm-symmetric lookup residual and expression-dense/pool-heavy
   shapes remain the decision-table candidates, not this slice.
+
+## Group C re-acceptance after the expr-leaf fix — 2026-10-22 (append-only)
+
+Independent review of `ff481a5..06491e1` (`.agent/control/prod-four-expr-review-report.md`)
+returned **READY WITH CORRECTIONS**: one LOW correction (the ownership test's
+second refusal was labelled "reason 8", but the mutation writes the PACB
+version field and the test asserts `prt_loadError() == 1`) and a Group C
+re-acceptance recommendation. The correction is applied in
+`src/rt_entry.zig:2428` — "reason 1 (decoder version class)" — and the matching
+impl-report test line reads "reason-11/1 refusals". Comment/report wording
+only; no code behaviour, wire, budget or threshold changed.
+
+- **Statistical recomputation (parent, independent).** Recomputing the six
+  100k-row TSVs gives p50/MAD/p95 matching the committed summaries exactly;
+  0 frame-hash and 0 frame-length mismatches per pair; 0/0 alloc columns;
+  exactly 100,000 rows per file. This closes the review's single unverified
+  item.
+- **Parent cold gate at `06491e1`.** 56/56 steps, 1260/1260 tests (863
+  native + 397 fuzz), node 182/0/0, parity 44/0, partition 3775/81, audit 12
+  pacer + 18 SJON. The correction re-run is green at 863/863 native tests
+  (comment-only).
+- **Decision.** **Group C is re-accepted with class (b) cleared on plan 04's
+  frozen median ± MAD statistic, parity enforced**, and **Group D may start**.
+  This section supersedes the earlier C6 numbers; it does not withdraw or
+  erase the historical escalation, which remains on the record.
