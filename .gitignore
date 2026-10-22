@@ -6,6 +6,7 @@ node_modules/
 npm/pacer/pacer.wasm
 npm/pacer/pacer-rt.wasm
 npm/pacer/test/rt-fixture.pacb
+npm/pacer/test/fixtures/
 npm/pacer/types/
 npm/pacer/*.tgz
 

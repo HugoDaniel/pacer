@@ -330,6 +330,30 @@ pub fn build(b: *std.Build) void {
     });
     rt_fixture.has_side_effects = true;
     node_test.step.dependOn(&rt_fixture.step);
+    // A5: the rt-corpus fixtures — the SAME generator the npm pretest hook
+    // runs (one real `pacer pack` per corpus case + the digest manifest the
+    // walk verifies). Depends on the installed CLI and BOTH wasm artifacts
+    // so the manifest's producer identities are fresh, and node --test can
+    // never race a fixture write.
+    const rt_corpus_fixtures = b.addSystemCommand(&.{ "node", "npm/pacer/test/generate-rt-fixtures.js" });
+    rt_corpus_fixtures.setCwd(b.path("."));
+    rt_corpus_fixtures.step.dependOn(&install_cli.step);
+    rt_corpus_fixtures.step.dependOn(&install_wasm.step);
+    rt_corpus_fixtures.step.dependOn(&install_wasm_rt.step);
+    rt_corpus_fixtures.has_side_effects = true;
+    // A5: refresh the shipped runtime copy exactly as the npm pretest's
+    // `build:wasm-rt-copy` hook does, so the walk's copy-identity check
+    // holds under verify too (no missing-sibling/hidden-pretest gap).
+    const wasm_rt_copy = b.addSystemCommand(&.{
+        "node",
+        "-e",
+        "require('node:fs').copyFileSync('zig-out/bin/pacer-rt.wasm','npm/pacer/pacer-rt.wasm')",
+    });
+    wasm_rt_copy.setCwd(b.path("."));
+    wasm_rt_copy.step.dependOn(&install_wasm_rt.step);
+    wasm_rt_copy.has_side_effects = true;
+    node_test.step.dependOn(&rt_corpus_fixtures.step);
+    node_test.step.dependOn(&wasm_rt_copy.step);
     // Verify runs the corpus through its OWN run step, without `b.args`:
     // `zig build verify -- --update` must never regenerate goldens while
     // the parallel node --test step is reading them (regen is the
