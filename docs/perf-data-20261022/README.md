@@ -2,10 +2,14 @@
 
 Companion raw data for `docs/binary-perf-20261022.md`. Environment record:
 `environment.tsv`. All paths are repo-relative; the measurements ran on
-OpenBSD `obs`. C2/C3 ran on pacer `d2605e7`; the C4/C5 rows below come from
-the parity-enforced harness at pacer `7a20d0b` (SJON `c9a90d85`). The
-harness compares every text/binary frame hash and length after both timed
-sweeps and aborts before writing any TSV on divergence.
+OpenBSD `obs`. The current tables are the expr-leaf re-measurement at pacer
+`7182901` (SJON `c9a90d85`); the C2/C3 rows from `d2605e7` and the C4/C5
+rows from `7a20d0b` are superseded for these tables. The C4/C5 rows come
+from the parity-enforced harness, which compares every text/binary frame
+hash and length after both timed sweeps and aborts before writing any TSV
+on divergence. The report's same-session baseline comparison at `ff481a5`
+was measured with a fresh cache in a detached worktree; those numbers are
+reported there, not stored in this directory.
 
 ## Size (C2)
 

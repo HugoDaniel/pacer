@@ -467,3 +467,113 @@ samples, eval distributions, allocations, memory rows and the pacer-local
 page all exist. A parent/user ruling on the measured binary eval
 regression is the next decision point; no D work began, no push/merge/
 publish occurred, and no numeric ratchet was created.
+
+## Expr-leaf re-measurement — 2026-10-22 (prepared tree at load)
+
+**Status: the binary expr leaf is fixed; class (b) no longer fires on either
+binding score.** The historical C6 sections above stay verbatim. This
+section replaces the C4/C5 rows for the current implementation and records
+the same-session baseline that makes the delta attributable. No threshold
+or ratchet was created; Group D was not started; no wire/pack, refusal,
+budget or export surface changed.
+
+**Source and method.** Pacer `7182901` (`agent/animader-init`), SJON
+`c9a90d85`. Each `.expr` payload is now decoded ONCE at load into an owned
+`Ast.Tree` from the score arena (`ExprTrack.materializePrepared`), carried
+through `LeafSource.binary.expr_prepared`, and evaluated per frame by the
+shared tree arm (`ExprTrack.evalAt`). The wire leaf remains the parity
+oracle and a test-only ablation fallback. The enforced C4 harness ran on
+obs at ReleaseFast, 100,000 frames per path per score, with the same
+scripted times and the raw TSVs regenerated in place. Every text/binary
+frame hash and length is equal before the harness writes: **100,000/100,000
+on Meridian-minimal, all-features and the keys-only control** (independently
+re-checked from the committed TSVs: 0 mismatches in each pair). Warm-load
+samples, size columns and the supplementary WASM batch family were rerun
+too. The baseline comparison is a detached `ff481a5` worktree with a fresh
+local and global build cache, so it cannot reuse the fixed runtime object;
+the host was idle (load average 0.8–1.0, vmstat 97–100% idle) for both.
+
+### C4 — eval latency (native, 100k frames, committed rows)
+
+| Score | Path | p50 ns | MAD | p95 ns | mean ns | frame allocs |
+|---|---|---:|---:|---:|---:|---:|
+| Meridian-minimal | text | 467 | 20 | 514 | 521 | 0 |
+| Meridian-minimal | binary | **434** | 32 | 496 | 467 | 0 |
+| all-features | text | 2,118 | 82 | 2,474 | 2,462 | 0 |
+| all-features | binary | **2,061** | 54 | 2,412 | 2,432 | 0 |
+| Meridian keys-only (supplementary) | text | 94 | 3 | 122 | 99 | 0 |
+| Meridian keys-only (supplementary) | binary | 102 | 4 | 133 | 106 | 0 |
+
+Same-session baseline at `ff481a5` (fresh cache; the pre-fix wire leaf):
+
+| Score | text p50 | binary p50 | binary − text |
+|---|---:|---:|---:|
+| Meridian-minimal | 441 | 733 | +292 ns |
+| all-features | 2,140 | 2,464 | +324 ns |
+
+**Delta attributable to the prepared leaf.** Meridian binary
+**733 → 434 ns (−299 ns, −40.8%)**; all-features binary
+**2,464 → 2,061 ns (−403 ns, −16.4%)**. Against the text path the residual
+is now **−33 ns** (Meridian) and **−57 ns** (all-features) — the binary arm
+is at parity and, by point estimate, slightly faster. The p50 intervals
+overlap (Meridian text [447,487] vs binary [402,466]; all-features text
+[2,036,2,200] vs binary [2,007,2,115]), so this is parity, not a claimed
+statistically disjoint win. The keys-only control (no expr leaf) stays
+within **+8 ns** (94 → 102, supplementary, small and not the binding
+signal). Compared with the historical committed rows, Meridian binary is
+722 → 434 ns and all-features 2,376 → 2,061 ns; the text rows moved because
+the host run moved (the same-session baseline is the comparison of record).
+
+### C5 — memory and load
+
+| Row | Before | After |
+|---|---:|---:|
+| Meridian binary cold peak | 1,623,602 B | 1,680,332 B (+56,730, +3.5%) |
+| all-features binary cold peak | 8,294,480 B | 8,400,764 B (+106,284, +1.3%) |
+| keys-only binary cold peak | 31,832 B | 36,194 B (+4,362 B) |
+| Meridian / all-features warm binary peak | 2× cold | 2× cold (transactional overlap) |
+| steady-frame allocations | 0 | **0** on both binding scores, 100k frames |
+| `DecodedScore` ownership copy | 10,804 / 21,472 B | unchanged |
+
+The prepared trees are O(payload) and small; the peak delta is arena/page
+granularity plus the parallel slice, not per-frame state. Warm load (C3,
+real shipped WASM, N=50 interleaved): Meridian binary **82 µs** (was 81),
+all-features **113 µs** (was 109); text **260 / 307 µs** (was 265 / 309).
+The same-session `ff481a5` baseline warm load was 70 / 106 µs binary and
+253 / 295 µs text, so the binary shift is +12 / +7 µs at the same time as
+the text shift is +7 / +12 µs — host-level movement, not a material load
+regression. Cold medians remain instantiate-dominated with large MAD
+(4.44 ms text / 1.92 ms binary Meridian; 6.56 / 5.39 ms all-features).
+
+### WASM and size
+
+Supplementary real-shipped-WASM batches: Meridian text **2,917 ns** vs
+binary **2,672 ns** (binary −245); all-features text **13,830 ns** vs
+binary **13,009 ns** (binary −821). The pre-fix WASM rows were 3,115 / 3,902
+and 13,665 / 14,860 — the same inversion is gone. The binding C4
+instrument remains the native harness.
+
+`pacer-rt.wasm` is **189,321 B** raw (was 189,506; **−185 B**),
+73,659 B gzip9 (was 73,618; +41 B), 63,036 B brotli11 (was 62,930;
++106 B). `pacer.wasm` is 668,296 B raw (was 668,852; −556 B). The only
+code added is the prepare loop/call path; `BinaryDecoder` and the tree
+builder were already linked for pattern prepare.
+
+### Blocker classes after the fix
+
+- **(a) parity:** does **not** fire — 100,000/100,000 frame hashes and
+  lengths equal on both binding scores and keys-only, enforced before write.
+- **(b) frame-path regression beyond noise:** **no longer fires** — binary
+  p50 is at/below text on both binding scores (−33 / −57 ns), a ~300–400 ns
+  recovery against the same-session baseline; zero frame allocations.
+- **(c) nondeterminism:** does not fire — same deterministic script and
+  byte-identical frames.
+
+**Gates (cold).** `zig build --cache-dir .agent/control/cache-expr-cold test
+verify cli-golden parity fuzz audit-rt-imports --summary all` EXIT 0:
+**56/56 steps, 1260/1260 tests (863 native + 397 fuzz; 10 new test blocks)**,
+node 182/0/0, corpus 44/0, parity 44/0, partition 3775/81, audit
+**12 pacer + 18 SJON**. No npm source changed. Evidence:
+`.agent/control/prod-four-expr-impl-cold-gates.log`,
+`.agent/control/prod-four-expr-impl-{final,measure,rep1}-*.log`,
+`.agent/control/base3-*.log` (baseline comparison).

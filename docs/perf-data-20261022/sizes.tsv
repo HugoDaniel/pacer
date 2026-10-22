@@ -1,6 +1,6 @@
 label	path	bytes	gzip9	brotli11
-pacer.wasm (full driver, current HEAD)	zig-out/bin/pacer.wasm	668852	241544	196534
-pacer-rt.wasm (full capability, binding)	zig-out/bin/pacer-rt.wasm	189506	73618	62930
+pacer.wasm (full driver, current HEAD)	zig-out/bin/pacer.wasm	668296	241494	196510
+pacer-rt.wasm (full capability, binding)	zig-out/bin/pacer-rt.wasm	189321	73659	63036
 pacer-rt.wasm (pattern-free, P2 trend rebuild)	.agent/control/cache-c/fixtures/pacer-rt-pattern-free.wasm	171667	66764	57746
 pacer-rt.wasm (Pacm-reader ablation)	.agent/control/cache-c/fixtures/pacer-rt-ablate-pacm.wasm	184858	71085	60935
 js audio.js	npm/pacer/src/audio.js	3438	1566	1324

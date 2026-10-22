@@ -2,5 +2,5 @@ label	bytes	gzip9	brotli11
 Meridian export all files	7691004	2286174	884141
 Meridian export music (excluded)	6912140	2001312	648634
 Meridian export program total (music excluded)	778864	284862	235507
-pacer program total: rt.wasm + rt glue + score.pacb	232150	86147	73822
-pacer program total: pacer.wasm + text glue + score.sjon	703333	253556	206972
+pacer program total: rt.wasm + rt glue + score.pacb	231965	86188	73928
+pacer program total: pacer.wasm + text glue + score.sjon	702777	253506	206948
