@@ -1739,3 +1739,64 @@ Cold six-gate on `11afb54` (code unchanged since `7a20d0b`) EXIT 0:
 (668,852 / `9736a41b…`, 189,506 / `4e2f2100…`). Evidence:
 `.agent/control/prod-four-c-fix-gates.log`,
 `.agent/control/prod-four-c-fix-report.md`.
+
+## Expr-leaf fix EXECUTED — 2026-10-22 (append-only)
+
+The user's ruling "optimise the binary expr leaf before D" is implemented and
+measured at source commit `7182901` (`agent/animader-init`), SJON
+`c9a90d85`. The wire/refusal/budget/export surfaces are unchanged; Group D
+remains unstarted.
+
+- **Implementation.** `ExprTrack.materializePrepared` decodes each `.expr`
+  payload ONCE at load through the audited `RtSjon.BinaryDecoder`, with
+  exactly-one-root discipline (`MultipleRoots` otherwise, zero roots
+  included). `RtScore.expr_prepared` owns the parallel `?Ast.Tree` slice from
+  the score arena (one free, no explicit teardown); `prepareExprs` maps a
+  missing slot to `.malformed` and propagates OOM. The load gate order is
+  decode → registry → materialize → **prepareExprs** → `dryRunExprs` →
+  preparePatterns → `dryRunPatterns` → evaluator init; the ordering comment
+  re-earns the refusal-class analysis (decode's structural walk already
+  refuses prepare's typed set, so class 8 cannot be masked by class 11; typed
+  anyway). `dryRunExprs` now evaluates the prepared tree under the SAME
+  256 KiB FBA; `EvalCore.LeafSource.binary.expr_prepared` is borrowed,
+  score-owned, init-asserted non-null per `.expr` track; the binary frame arm
+  calls `ExprTrack.evalAt` with the same env/coerce. The wire payload leaf
+  (`evalAtBinary`) is retained as the parity oracle and a test-only
+  (`builtin.is_test`) ablation fallback — no shipped switch.
+- **Tests (written first).** RED: compile failure for the new symbols, then
+  the behavioural RED that showed the binary arm writing the wire payload
+  (2) instead of the prepared one (1), and the ablation cost assertion
+  failing before the switch. New pins: prepared-vs-wire bit parity on every
+  expr payload in `corpus/all-features` and Meridian-minimal (scened tracks
+  included) across a tick sweep; `-0` sign and NaN-result parity;
+  multi-root/zero-root/corrupt decode mapping; ownership/one-free on
+  success/refusal; OOM at every allocation index via
+  `checkAllAllocationFailures`; the over-budget expr dry-run still refuses
+  reason 11 with the old score live; a test-only wire-leaf ablation yielding
+  byte-identical frames and measurably greater leaf cost; zero frame-path
+  allocations over 100k frames on both binding scores. T1.1 stays green, the
+  harness enforces 100k/100k hashes, corpus 44/44.
+- **Measurement (obs, enforced C4).** Same-session `ff481a5` fresh-cache
+  baseline vs fixed: Meridian binary **733 → 434 ns** (−299), all-features
+  **2,464 → 2,061 ns** (−403); text 441/2,140 (baseline) vs 467/2,118
+  (fixed), so the residual is **−33 / −57 ns** (parity, intervals overlap).
+  Keys-only control 94 → 102 ns (supplementary). Warm binary load 82/113 µs
+  vs 81/109 committed (same-session baseline 70/106; text moved similarly),
+  memory peaks +56,730 B (Meridian) / +106,284 B (all-features) binary cold,
+  warm exactly 2× cold, zero frame allocations, `pacer-rt.wasm` 189,321 B raw
+  (−185; gzip +41, brotli +106), WASM eval now binary-faster on both scores.
+  **Class (b) no longer fires; (a) and (c) do not.** Raw data and the
+  attributed report live in `docs/perf-data-20261022/` and
+  `docs/binary-perf-20261022.md` §Expr-leaf re-measurement.
+- **Cold gates (new cache `.agent/control/cache-expr-cold`).**
+  `zig build --cache-dir … test verify cli-golden parity fuzz
+  audit-rt-imports --summary all` EXIT 0: **56/56 steps, 1260/1260 tests
+  (863 native + 397 fuzz; 10 new test blocks)**, node 182/0/0, corpus 44/0,
+  parity 44/0, partition 3775/81, audit 12 pacer + 18 SJON. No npm source
+  changed. Evidence: `prod-four-expr-impl-cold-gates.log`,
+  `prod-four-expr-impl-{red1,red2,red3,green1..green6}.log`,
+  `prod-four-expr-impl-{final,measure,rep1}-*.log`, `base3-*.log`.
+- **Still open / not claimed.** Group D, push/merge/publish, any threshold or
+  ratchet, and any wire/format change. The prepared expr leaf is the measured
+  fix; the arm-symmetric lookup residual and expression-dense/pool-heavy
+  shapes remain the decision-table candidates, not this slice.
