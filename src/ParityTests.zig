@@ -132,6 +132,13 @@ test "negatives: production prt_load exact refusals and transactional state" {
         "pacm-coherence-track-registry", "pacm-coherence-control-registry", "pacm-coherence-track-count",
         "pacm-coherence-key-value",      "pacm-coherence-control-value",    "pacm-coherence-ease-param",
         "pacm-coherence-tmpo-bpm",       "pacm-coherence-scene-window",
+        // B2a registry-identity family (2026-10-22): canonical-but-
+        // mismatched host joins over the committed host-join fixture,
+        // produced by the real PactCodec (extra target + a same-shaped
+        // name swap; "glow" and "flow" are both four bytes). Each must
+        // refuse 1/9 and leave the ORIGINAL live score evaluable.
+            "registry-extra-target",
+        "registry-name-swap",
     };
     const expected_bad_calls = [_][]const u8{
         "bad-call-pacb-overcap", "bad-call-targets-overcap", "bad-call-pact-malformed",
@@ -143,7 +150,7 @@ test "negatives: production prt_load exact refusals and transactional state" {
         "payload-region-slack-tolerated", "payload-reassembly-identity",
         "pacm-fnv-honest-rewrite",
     };
-    const expected_family_labels = [_][]const u8{ "prefixes", "compact-payload", "pacm-structural", "pacm-coherence" };
+    const expected_family_labels = [_][]const u8{ "prefixes", "compact-payload", "pacm-structural", "pacm-coherence", "registry-identity" };
     const expected_prefix_cases: usize = 3700;
 
     // Every named mutation and bad call executed EXACTLY once: a removed or

@@ -436,6 +436,59 @@ const Family = struct {
 
         @memcpy(NativeRt.pacbPtr()[0..self.base.len], self.base);
     }
+
+    /// Establish a NONZERO expression-failure counter on the live score
+    /// without changing the documented semantics (one eval at beat 1 of
+    /// host-join's singular flow expr), then make it the snapshot value
+    /// every later refusal must preserve. The frame snapshots are
+    /// untouched: later probes are deterministic re-evaluations.
+    fn primeExprFailure(self: *Family) !void {
+        // Re-assert the family's bpm nudge, then probe ONE BEAT at that
+        // tempo (60/90 s): host-join's flow expr `(/ 1 (- beat 1))` hits
+        // its division by zero exactly there, so the counter is nonzero
+        // without changing any documented semantics.
+        if (NativeRt.setBpm(90) != 0) return error.StateSetupFailed;
+        _ = NativeRt.evalSeconds(60.0 / 90.0);
+        if (NativeRt.exprFailures() == 0) {
+            try self.out.print("negatives: registry counter probe did not trip an expr failure\n", .{});
+            return error.StateSetupFailed;
+        }
+        self.snap.counter = NativeRt.exprFailures();
+    }
+
+    /// Overwrite BOTH input zones (a host join mismatch is a targets-zone
+    /// edit, not a PACB edit), require status 1 + reason 9, prove the old
+    /// live score is intact, then restore BOTH zones from the committed
+    /// bytes. `bytes` and `pact_bytes` are caller-owned copies, never
+    /// borrowed views of the live zones.
+    fn expectRegistryRefusal(
+        self: *Family,
+        name: []const u8,
+        bytes: []const u8,
+        pact_bytes: []const u8,
+    ) !void {
+        if (bytes.len > NativeRt.pacbCap() or pact_bytes.len > NativeRt.targetsCap()) {
+            try self.out.print("negatives: {s}: mutation exceeds the production zone cap\n", .{name});
+            return error.NegativeMismatch;
+        }
+
+        @memcpy(NativeRt.pacbPtr()[0..bytes.len], bytes);
+        @memcpy(NativeRt.targetsPtr()[0..pact_bytes.len], pact_bytes);
+        const status = NativeRt.load(@intCast(bytes.len), @intCast(pact_bytes.len));
+        const got_reason = NativeRt.loadError();
+        if (status != 1 or got_reason != 9) {
+            try self.out.print(
+                "negatives: {s}: expected status 1 reason 9, got status {d} reason {d} ({d} bytes, {d} targets)\n",
+                .{ name, status, got_reason, bytes.len, pact_bytes.len },
+            );
+            return error.NegativeMismatch;
+        }
+
+        try self.assertState(name);
+        // Restore BOTH zones: the refusal path never edits them itself.
+        @memcpy(NativeRt.pacbPtr()[0..self.base.len], self.base);
+        @memcpy(NativeRt.targetsPtr()[0..self.pact.len], self.pact);
+    }
 };
 
 /// Summary partition counters, one increment per operation AT the place the
@@ -566,6 +619,26 @@ fn runPacmNamed(
     try fam.out.print(
         "negatives: {s}: status 1 reason {d}; reader {s}\n",
         .{ name, reason, if (reader_null) "null" else "nonnull" },
+    );
+}
+
+/// Count and require one registry-identity refusal (status 1 reason 9)
+/// under a canonical-but-mismatched host join, restoring BOTH input zones.
+fn runRegistryNamed(
+    fam: *Family,
+    names: *std.ArrayList([]const u8),
+    counters: *Counters,
+    name: []const u8,
+    bytes: []const u8,
+    pact_bytes: []const u8,
+) !void {
+    try addName(fam.a, names, name);
+    counters.named += 1;
+    counters.attempted += 1;
+    try fam.expectRegistryRefusal(name, bytes, pact_bytes);
+    try fam.out.print(
+        "negatives: {s}: status 1 reason 9; live score preserved (expr counter {d}, frames, held control, bpm, meta)\n",
+        .{ name, fam.snap.counter },
     );
 }
 
@@ -1717,6 +1790,56 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         try runPacmNamed(&fam, &names, &counters, "pacm-coherence-ease-param", try pacmCoherenceEaseParam(a, fixtures.full_small), 10, false);
         try runPacmNamed(&fam, &names, &counters, "pacm-coherence-tmpo-bpm", try pacmCoherenceTmpoBpm(a, fixtures.full_small), 10, false);
         try runPacmNamed(&fam, &names, &counters, "pacm-coherence-scene-window", try pacmCoherenceSceneWindow(a, fixtures.full_small), 10, false);
+    }
+
+    // 7. Registry-identity family (B2a) over the committed host-join
+    //    fixture: the host join must BE the pack-time join (canonical
+    //    'PACT' byte equality). Both cases write a PactCodec-produced
+    //    join into the targets zone and assert the ORIGINAL live score
+    //    survives on the same instance (frames, held control, bpm, meta,
+    //    counter), restoring BOTH input zones afterwards.
+    {
+        try addName(a, &names, "registry-identity");
+        counters.family_labels += 1; // a family label, never an attempt
+        var fam = try Family.begin(a, out, fixtures.host_join, join_pact);
+        defer fam.end();
+        try fam.primeExprFailure();
+
+        // A canonical join with one EXTRA target: same spelling rules,
+        // different registry content.
+        const extra_targets = [_]pacer.Compile.Target{
+            HOST_JOIN_TARGETS[0],
+            HOST_JOIN_TARGETS[1],
+            .{ .name = "pulse", .ncomp = 1, .registry = 0 },
+        };
+        const extra_buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(&extra_targets));
+        const extra_pact = try pacer.PactCodec.encodeTargets(&extra_targets, extra_buf);
+
+        // The same-shaped swap: "glow" and "flow" are both four bytes,
+        // and each slot keeps a byte-identical (ncomp, registry) head.
+        const swapped_targets = [_]pacer.Compile.Target{
+            .{ .name = "flow", .ncomp = 1, .registry = 0 },
+            .{ .name = "glow", .ncomp = 1, .registry = 0 },
+        };
+        const swapped_buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(&swapped_targets));
+        const swapped_pact = try pacer.PactCodec.encodeTargets(&swapped_targets, swapped_buf);
+
+        try runRegistryNamed(
+            &fam,
+            &names,
+            &counters,
+            "registry-extra-target",
+            try duplicate(fixtures.host_join, a),
+            extra_pact,
+        );
+        try runRegistryNamed(
+            &fam,
+            &names,
+            &counters,
+            "registry-name-swap",
+            try duplicate(fixtures.host_join, a),
+            swapped_pact,
+        );
     }
 
     // 4. Status-2 bad calls: a prior status-1 reason must survive.
