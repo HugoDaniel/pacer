@@ -2425,7 +2425,7 @@ test "rt_entry: prepared expr trees are score-owned and one free reclaims all" {
     try t.expect(rtFrame(0).len > 0);
 
     // A refusal inside the same allocation epoch must not leak either:
-    // reason 11 (expr dry-run), then reason 8 (decoder class), then the
+    // reason 11 (expr dry-run), then reason 1 (decoder version class), then the
     // live score's one free.
     {
         const mutated = try a.dupe(u8, fx.pacb);
