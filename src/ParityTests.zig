@@ -92,38 +92,46 @@ test "negatives: production prt_load exact refusals and transactional state" {
     // (a label, never an attempt), and one prefix attempt per byte of the
     // committed keys-only blob (3700 proper prefixes).
     const expected_named = [_][]const u8{
-        "forged-magic",              "forged-version",           "forged-features",
-        "directory-overlap",         "directory-overrun",        "directory-reorder",
-        "directory-gap",             "directory-duplicate-id",   "directory-unknown-id",
-        "directory-trailing-slack",  "trak-count-inflated",      "tick-count-cap",
-        "tran-bpm-nan",              "tran-bpm-pos-inf",         "tran-bpm-neg-inf",
-        "tmpo-bpm-nan",              "tmpo-bpm-pos-inf",         "tmpo-bpm-neg-inf",
-        "keys-value-pad-nan",        "keys-value-pad-pos-inf",   "keys-value-pad-neg-inf",
-        "ctrl-min-nan",              "ctrl-min-pos-inf",         "ctrl-min-neg-inf",
-        "ease-stage-nan",            "ease-stage-pos-inf",       "ease-stage-neg-inf",
-        "ease-op-param-nan",         "ease-ref-range",           "ease-ref-disagrees",
-        "ease-stage-domain",         "ease-op-padding",          "ease-program-cap",
-        "ease-degenerate-present",   "ease-refs-count-mismatch",
+        "forged-magic",                  "forged-version",                  "forged-features",
+        "directory-overlap",             "directory-overrun",               "directory-reorder",
+        "directory-gap",                 "directory-duplicate-id",          "directory-unknown-id",
+        "directory-trailing-slack",      "trak-count-inflated",             "tick-count-cap",
+        "tran-bpm-nan",                  "tran-bpm-pos-inf",                "tran-bpm-neg-inf",
+        "tmpo-bpm-nan",                  "tmpo-bpm-pos-inf",                "tmpo-bpm-neg-inf",
+        "keys-value-pad-nan",            "keys-value-pad-pos-inf",          "keys-value-pad-neg-inf",
+        "ctrl-min-nan",                  "ctrl-min-pos-inf",                "ctrl-min-neg-inf",
+        "ease-stage-nan",                "ease-stage-pos-inf",              "ease-stage-neg-inf",
+        "ease-op-param-nan",             "ease-ref-range",                  "ease-ref-disagrees",
+        "ease-stage-domain",             "ease-op-padding",                 "ease-program-cap",
+        "ease-degenerate-present",       "ease-refs-count-mismatch",
         // B2a compact-payload family (2026-10-22): the compact-IR
         // structural classes over a genuine packed payload's copy, each
         // reaching the payload walk / presence / cap gate exactly — the
         // directory and byte_size are always repaired so reason 3/4 can
         // never mask the claimed stage.
-        "payload-zero-root",
-        "payload-multi-root",        "payload-corrupt-node",     "payload-inspan-slack",
-        "payload-region-degenerate", "payload-section-absent",   "payload-presence-without-track",
-        "payload-span-cap",          "payload-total-cap",
+               "payload-zero-root",
+        "payload-multi-root",            "payload-corrupt-node",            "payload-inspan-slack",
+        "payload-region-degenerate",     "payload-section-absent",          "payload-presence-without-track",
+        "payload-span-cap",              "payload-total-cap",
         // B2a pacm-structural family (2026-10-22): embedded-'PACM'
         // structural garbage through the REAL loader, each with the
         // independent `Pacm.decode` reader oracle pinned on the printed
         // line — reason 10 alone cannot distinguish checksum-shortcut
         // from structural from coherence, and removing fnv must never
         // pass as structural proof.
-               "pacm-checksum-lie",
-        "pacm-version-invalid",      "pacm-enum-invalid",        "pacm-bpm-zero",
-        "pacm-track-count-inflated", "pacm-truncated",           "pacm-tlv-trailing-slack",
-        "pacm-section-accounting",   "pacm-duplicate-tlv",       "pacm-snam-before-scen",
-        "pacm-snam-count-break",     "pacm-snam-without-scen",
+                      "pacm-checksum-lie",
+        "pacm-version-invalid",          "pacm-enum-invalid",               "pacm-bpm-zero",
+        "pacm-track-count-inflated",     "pacm-truncated",                  "pacm-tlv-trailing-slack",
+        "pacm-section-accounting",       "pacm-duplicate-tlv",              "pacm-snam-before-scen",
+        "pacm-snam-count-break",         "pacm-snam-without-scen",
+        // B2a pacm-coherence family (2026-10-22): the PACM side stays
+        // structurally valid with an honest checksum (reader non-null);
+        // the loader refuses because the two spellings of one compile
+        // disagree — every line pins reason 10 and the reader oracle.
+                 "pacm-coherence-track-target",
+        "pacm-coherence-track-registry", "pacm-coherence-control-registry", "pacm-coherence-track-count",
+        "pacm-coherence-key-value",      "pacm-coherence-control-value",    "pacm-coherence-ease-param",
+        "pacm-coherence-tmpo-bpm",       "pacm-coherence-scene-window",
     };
     const expected_bad_calls = [_][]const u8{
         "bad-call-pacb-overcap", "bad-call-targets-overcap", "bad-call-pact-malformed",
@@ -135,7 +143,7 @@ test "negatives: production prt_load exact refusals and transactional state" {
         "payload-region-slack-tolerated", "payload-reassembly-identity",
         "pacm-fnv-honest-rewrite",
     };
-    const expected_family_labels = [_][]const u8{ "prefixes", "compact-payload", "pacm-structural" };
+    const expected_family_labels = [_][]const u8{ "prefixes", "compact-payload", "pacm-structural", "pacm-coherence" };
     const expected_prefix_cases: usize = 3700;
 
     // Every named mutation and bad call executed EXACTLY once: a removed or

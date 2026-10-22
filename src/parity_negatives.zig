@@ -675,6 +675,10 @@ fn readU32(bytes: []const u8, at: usize) u32 {
     return std.mem.readInt(u32, bytes[at..][0..4], .little);
 }
 
+fn readF32(bytes: []const u8, at: usize) f32 {
+    return @bitCast(readU32(bytes, at));
+}
+
 // ---------------------------------------------------------------------------
 // Envelope mutations
 // ---------------------------------------------------------------------------
@@ -1365,6 +1369,117 @@ fn pacmHonestRewrite(a: Allocator, base: []const u8) ![]u8 {
 }
 
 // ---------------------------------------------------------------------------
+// 'PACM' ↔ PACB coherence family (B2a) — the PACM side stays
+// structurally valid with an honest checksum (the reader oracle is
+// asserted non-null on every case), so the refusal is the semantic
+// cross-check, never checksum or structure. Count lies remove a WHOLE
+// PACB unit and repair the directory rather than inflating a header into
+// truncation. Finite lanes only: the non-finite matrix is B2b.
+// ---------------------------------------------------------------------------
+
+fn pacmFirstKeyOff(p: []const u8) usize {
+    return Pacm.META_HEADER_LEN +
+        @as(usize, readU32(p, PACM_TRACK_COUNT_OFF)) * Pacm.META_TRACK_LEN;
+}
+
+fn pacmFirstControlOff(p: []const u8) usize {
+    return pacmFirstKeyOff(p) +
+        @as(usize, readU32(p, PACM_KEY_COUNT_OFF)) * Pacm.META_KEY_LEN;
+}
+
+/// PACM track 0's `target_id` disagrees with the PACB track's join id.
+fn pacmCoherenceTrackTarget(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const at = Pacm.META_HEADER_LEN + PACM_TRACK_TARGET_OFF;
+    putU16(p, at, std.mem.readInt(u16, p[at..][0..2], .little) + 1);
+    return pacmAssemble(a, base, p);
+}
+
+/// PACM track 0's registry byte disagrees with the PACB row's.
+fn pacmCoherenceTrackRegistry(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const at = Pacm.META_HEADER_LEN + PACM_TRACK_REGISTRY_OFF;
+    putU8(p, at, p[at] +% 1);
+    return pacmAssemble(a, base, p);
+}
+
+/// PACM control 0's registry byte disagrees with the PACB control row's.
+fn pacmCoherenceControlRegistry(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const at = pacmFirstControlOff(p) + PACM_CONTROL_REGISTRY_OFF;
+    putU8(p, at, p[at] +% 1);
+    return pacmAssemble(a, base, p);
+}
+
+/// A count lie that stays decodable: remove ONE complete 'TRAK' unit
+/// from the PACB side and rebuild the canonical directory. The PACM is
+/// untouched (valid structure, honest checksum); `verifyRouting`'s count
+/// comparison is what refuses. No header is inflated into truncation.
+fn pacbTrackUnitRemoved(a: Allocator, base: []const u8) ![]u8 {
+    const src = sectionPayload(base, .trak);
+    const n = readU32(src, COUNT_OFF);
+    if (n < 2) return error.FixtureInvalid;
+    const kept: usize = n - 1;
+    const payload = try a.alloc(u8, 4 + kept * Pb.TRAK_REC_LEN);
+    putU32(payload, COUNT_OFF, @intCast(kept));
+    @memcpy(payload[4..], src[4..][0 .. kept * Pb.TRAK_REC_LEN]);
+    return reassemble(a, base, &.{.{ .kind = .trak, .payload = payload }});
+}
+
+/// PACM key 0's finite value lane disagrees with the PACB key stream
+/// (one-sided finite lane lie; the PACM reader stays non-null).
+fn pacmCoherenceKeyValue(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const at = pacmFirstKeyOff(p) + PACM_KEY_VALUE_OFF;
+    putF32(p, at, readF32(p, at) + 0.5);
+    return pacmAssemble(a, base, p);
+}
+
+/// PACM control 0's finite value lane disagrees with the PACB control.
+fn pacmCoherenceControlValue(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const at = pacmFirstControlOff(p) + PACM_CONTROL_VALUE_OFF;
+    putF32(p, at, readF32(p, at) + 0.5);
+    return pacmAssemble(a, base, p);
+}
+
+/// PACM 'EASE' program 0 / stage 0 / op 0 param differs from the PACB
+/// program (finite; the op code stays in its domain).
+fn pacmCoherenceEaseParam(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const tlv = pacmFindTlv(p, Pacm.EASE_SECTION_ID) orelse
+        return error.FixtureMissingSection;
+    // payload: [count u32][program: len u8+pad3, 8×stage 96]
+    // stage: [t_end,v_base,v_span 12][ops_len u8+pad3][4×op 20]
+    // op: [code u8+pad3][params 4×f32] — param 0 at +4.
+    const at = tlv.payload + 4 + 4 + 16 + 4;
+    putF32(p, at, readF32(p, at) + 0.5);
+    return pacmAssemble(a, base, p);
+}
+
+/// PACM 'TMPO' segment 1 bpm differs from the PACB segment table
+/// (finite; the PACM reader validates only count accounting here).
+fn pacmCoherenceTmpoBpm(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const tlv = pacmFindTlv(p, Pacm.TEMPO_SECTION_ID) orelse
+        return error.FixtureMissingSection;
+    if (readU32(p, tlv.payload) < 2) return error.FixtureInvalid;
+    putF64(p, tlv.payload + 4 + Pacm.TEMPO_REC_LEN + 8, 100.0);
+    return pacmAssemble(a, base, p);
+}
+
+/// PACM 'SCEN' scene 0's start tick differs from the PACB scene window
+/// (the name spans stay ordered, so the reader accepts).
+fn pacmCoherenceSceneWindow(a: Allocator, base: []const u8) ![]u8 {
+    const p = try pacmCopy(a, base);
+    const tlv = pacmFindTlv(p, Pacm.SCENES_SECTION_ID) orelse
+        return error.FixtureMissingSection;
+    const at = tlv.payload + 4;
+    putI64(p, at, std.mem.readInt(i64, p[at..][0..8], .little) + 1);
+    return pacmAssemble(a, base, p);
+}
+
+// ---------------------------------------------------------------------------
 // Suite
 // ---------------------------------------------------------------------------
 
@@ -1580,6 +1695,28 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
             try pacmHonestRewrite(a, fixtures.full_small),
             "trusted span rewritten with the honest FNV; the loader serves that exact payload",
         );
+    }
+
+    // 6. PACM↔PACB coherence family (B2a): the PACM side is structurally
+    //    valid and checksum-honest (reader oracle non-null), so every
+    //    refusal is the semantic cross-check. The count case removes a
+    //    complete 'TRAK' unit and repairs the directory — never a header
+    //    inflated into truncation.
+    {
+        try addName(a, &names, "pacm-coherence");
+        counters.family_labels += 1; // a family label, never an attempt
+        var fam = try Family.begin(a, out, fixtures.full_small, pact);
+        defer fam.end();
+
+        try runPacmNamed(&fam, &names, &counters, "pacm-coherence-track-target", try pacmCoherenceTrackTarget(a, fixtures.full_small), 10, false);
+        try runPacmNamed(&fam, &names, &counters, "pacm-coherence-track-registry", try pacmCoherenceTrackRegistry(a, fixtures.full_small), 10, false);
+        try runPacmNamed(&fam, &names, &counters, "pacm-coherence-control-registry", try pacmCoherenceControlRegistry(a, fixtures.full_small), 10, false);
+        try runPacmNamed(&fam, &names, &counters, "pacm-coherence-track-count", try pacbTrackUnitRemoved(a, fixtures.full_small), 10, false);
+        try runPacmNamed(&fam, &names, &counters, "pacm-coherence-key-value", try pacmCoherenceKeyValue(a, fixtures.full_small), 10, false);
+        try runPacmNamed(&fam, &names, &counters, "pacm-coherence-control-value", try pacmCoherenceControlValue(a, fixtures.full_small), 10, false);
+        try runPacmNamed(&fam, &names, &counters, "pacm-coherence-ease-param", try pacmCoherenceEaseParam(a, fixtures.full_small), 10, false);
+        try runPacmNamed(&fam, &names, &counters, "pacm-coherence-tmpo-bpm", try pacmCoherenceTmpoBpm(a, fixtures.full_small), 10, false);
+        try runPacmNamed(&fam, &names, &counters, "pacm-coherence-scene-window", try pacmCoherenceSceneWindow(a, fixtures.full_small), 10, false);
     }
 
     // 4. Status-2 bad calls: a prior status-1 reason must survive.
