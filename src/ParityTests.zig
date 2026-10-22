@@ -189,11 +189,12 @@ test "negatives: production prt_load exact refusals and transactional state" {
     // B2a (2026-10-22): the partition gained a `positive` term — status-0
     // characterization attempts are counted, never laundered as refusals.
     // B2b (2026-10-22): the B2a remainder qualifier is replaced — the
-    // numeric matrix and the counted pattern dry-run family now exist;
-    // T6/P3 stay open and no Group B exit is claimed.
+    // numeric matrix and the counted pattern dry-run family now exist.
+    // The acceptance record supersedes the qualifier: T6b is complete, P3
+    // accepted and Group B exited on 2026-10-22; C/D/E remain unclaimed.
     const expected_partition = try std.fmt.allocPrint(
         a,
-        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (B2b numeric matrix + pattern dry-run family landed; T6/P3 remain open)\n",
+        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (T6b complete 2026-10-22; P3 accepted, Group B exited at bb0ba56; C/D/E open)\n",
         .{
             expected_named.len,
             expected_bad_calls.len,
@@ -232,7 +233,7 @@ test "negatives: production prt_load exact refusals and transactional state" {
     // The closing PASS line keeps the remaining-open holds spelled out.
     try t.expectEqual(
         @as(usize, 1),
-        countOccurrences(out, "negatives: exact status/reason and transactional preservation PASS; B2b numeric matrix and pattern dry-run landed; T6/P3 remain open"),
+        countOccurrences(out, "negatives: exact status/reason and transactional preservation PASS; T6b complete; P3 accepted and Group B exited (2026-10-22); C/D/E open"),
     );
 }
 

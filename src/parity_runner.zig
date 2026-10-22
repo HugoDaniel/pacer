@@ -482,7 +482,9 @@ pub fn classify(golden_ok: bool, compile_ok: bool, has_pattern: bool) ClassifyEr
 
 /// Pack orchestration with separate compile and preflight refusal arms. A
 /// dirty result NEVER reaches `PacbEncode.preflight`/`encode` (both assert
-/// `result.ok()`); a pattern result may reach preflight but never encode.
+/// `result.ok()`). Since A3+A4 (accepted binary leg, 2026-10-22) pattern
+/// results reach both preflight and encode — they are packed like any clean
+/// result, and no text fallback exists for a clean case.
 pub fn packCase(
     a: Allocator,
     result: *const pacer.Compile.CompileResult,

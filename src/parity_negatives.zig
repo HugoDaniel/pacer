@@ -9,7 +9,8 @@
 //! numeric/finite matrix is the parity test root's separate
 //! `numeric_domain_tests.zig` module — it characterizes KEYS/CTRL/pad/
 //! cross-check and evaluation-write cells through the same exports.
-//! Remaining T6/P3 work stays unclaimed.
+//! T6b is complete: P3 was accepted and Group B exited on 2026-10-22;
+//! C/D/E remain unclaimed.
 //!
 //! Every case calls the ACTUAL production loader through the std-only
 //! `NativeRt` C facade. There is no decoder, evaluator, materializer, or
@@ -2149,7 +2150,7 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
     }
 
     try out.print(
-        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (B2b numeric matrix + pattern dry-run family landed; T6/P3 remain open)\n",
+        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (T6b complete 2026-10-22; P3 accepted, Group B exited at bb0ba56; C/D/E open)\n",
         .{
             counters.named,
             counters.bad_calls,
@@ -2171,7 +2172,7 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         .{},
     );
     try out.print(
-        "negatives: exact status/reason and transactional preservation PASS; B2b numeric matrix and pattern dry-run landed; T6/P3 remain open\n",
+        "negatives: exact status/reason and transactional preservation PASS; T6b complete; P3 accepted and Group B exited (2026-10-22); C/D/E open\n",
         .{},
     );
 }
