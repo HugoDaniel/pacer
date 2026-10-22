@@ -824,3 +824,83 @@ prod-four-pattern-budget-decision.md. Gates for the cleanup itself:
 parent OBS run on the exact cleanup diff — `zig build test` 829/829 +
 `zig build parity` green, exit0 (prod-four-parent-b1-low.log); no
 additional tests required beyond that log, and none run here.
+
+## ask30/M4 prepared-runtime adoption status append (dated — not plan prose)
+
+2026-10-22 — the approved prepared-runtime adoption (SJON ask 30 §H, the
+bounded H1–H5 slice ONLY) is executed on top of B1 (`3d25ae5`); pack lift
+(A3+A4), skip removal, A5, B2, C, and everything else in this plan remain
+NOT STARTED and the four parity skips remain held.
+
+**Authority (superseding the stale claims below, by evidence — the
+original texts above are preserved, never rewritten):** the B1 low-note
+append's "no SJON edits or asks are filed (the earlier clarify prompt
+timed out with a blank response — not approval)" and A1-era notes that
+the SJON owner decision was outstanding are STALE as of 2026-10-21/22:
+the user explicitly authorized the SJON capability cycle ("yes, extend",
+2026-10-21), SJON ask 30 (binary pattern representation ownership / M4
+decode-once prepared query) was planned, independently reviewed READY
+(D0–D7; final broad review READY at SJON `9b772599`), delivered, and
+closed at SJON `c9a90d85` — see `../SJON/docs/plans/asks/30-validation/`
+(plan.md §H is the approved executable adoption contract; handoff.md the
+consumer packet; closure-report.md the owner-side record). The recorded
+measured blocker (prod-four-a2-boundary-report.md: compile-accepted
+patterns load-refused, binary-only ≈5× payload retention cost, Repro A
+payload 98,501 B floor 1,253,376 > the 1 MiB scratch) is thereby closed
+by the OWNER-DELIVERED mechanism, not by a budget change and not by a
+pack-side gate.
+
+**The exact adopted delta (§H named, P4/A2-class):** (1) the
+`audit-rt-imports` closure gains ONE row — `BinaryDecoder.zig`, SJON's
+read-only tree decoder (imports std + Ast + BinaryFormat only) — in
+NS_MAP, SJON_ALLOWED, RTSJON_ROWS, and `src/RtSjon.zig` (header amended
+by dated note), with four new mutation fixtures (row dropped →
+frozen-row grammar failure; renamed alias → grammar-by-line; direct
+pacer-leg import → closure failure; SJON root.zig without the export →
+map-assert failure); closure is now 12 pacer + 18 SJON (16 linked, 2
+comptime-excluded). (2) The runtime materializes each `'PACB'` pattern
+payload ONCE per loaded track into an owned prepared state
+(`PatternTrack.materializePrepared` = `BinaryDecoder.fromBinary` +
+`PreparedBinary.fromTree`, score-arena backed — the ONE free reclaims
+it transactionally on every path) and the frame seam (`EvalCore`) and
+the load dry-run (`dryRunPatterns`) query it through
+`PatternQuery.queryPreparedBinaryWithEnv` under the exact existing
+1 MiB `SCRATCH_BYTES` FBA and a per-query fresh env. Same
+window/sample/coerce shared — no second interpreter; no budget number,
+wire byte, refusal class, or export changes; `tools/check_rt_artifact.zig`
+UNTOUCHED and green with the decoder linked (pacer-rt.wasm 188,442 B,
+1 import, 17 `prt_*` + memory, markers absent/present-in-control).
+
+**Why the prepared query replaces the A2 one-shot at the seams:** A2's
+`queryCycleBinary` re-decodes and re-compiles per query and rides SJON's
+expr-leaf retention machinery every call — the measured ≈5× payload cost
+that produced the text-accepted/load-refused window. The prepared entry
+is the tree path itself over a logically equal tree (ask 30 §A.2 code
+identity: the per-query metered sequence IS the tree sequence), so the
+per-query cost lands at the tree arm's level (Repro A: 753,664 ≤ 1 MiB)
+while prepare's O(payload) decode happens once per load outside every
+semantic budget. The one-shot entry remains delivered and pinned (the
+twin's oracle in tests); nothing about SJON's legacy one-shot defaults
+changed. The boundary report's §4 "amend the SAME test at the A3+A4 pack
+gate" premise for Repro A has MOVED: Repro A now pins a status-0 LOAD
+(rt_entry (r)); the pack-side A3+A4 scope is unchanged and still not
+started.
+
+**Acceptance gates executed (all through the real loader):** Repro A —
+the real-compile-accepted 98,501 B pattern (payload anchor pinned) —
+loads status 0 with explicit frames, tree-arm byte parity, and
+zone-clobber ownership (rt_entry (r)); the semantic over-budget shape
+still refuses reason 11 transactionally (rt_entry (p), unchanged);
+dense anchors re-pinned — `fast 8000` stays compile-refused
+(Compile.zig pin), `corpus/pattern-budget` stays load-failing on both
+legs, and `fast 64` literal+expr-leaf still loads (rt_entry (s)); live
+control valid→invalid→valid over both omission channels with cross-arm
+counter parity (rt_entry (t)); four PatternTrack unit pins (twin
+window/shadow/env-freshness + one-shot equivalence, typed malformed,
+MultipleRoots, zero-root silence). Mutation teeth proven in an isolated
+scratch worktree (production verified clean): reverting the two seams to
+the one-shot re-REDs (r); dropping the env forwarding REDs (t), (n), the
+EvalCore characterization, and the twin unit pin. Gates: `zig build test`
+840/840; full five-verb gate green (per-gate exits in
+`.agent/control/prod-four-owner-adoption-gates-final.log`). Commits:
+`d084b8a` (gate amendment), `57d6373` (adoption), this append.
