@@ -1363,3 +1363,58 @@ limit is recorded in `.agent/control/prod-four-a5-corrections-report.md`.
    reload-atomicity + summary; pattern-env green in that log), as this
    append's MUT-C paragraph already names. Clarified by a dated errata
    in the worker report; no fixture or golden edits.
+
+## B2a execution append (dated — not plan prose)
+
+2026-10-22 — **B2a is EXECUTED** on branch `agent/animader-init`, source
+HEAD `445e9a3` (this docs record is the commit after it), continuing the
+quota-interrupted run at `c0bc9f1` (inherited `d626c38` + `c0bc9f1`; new
+source commits `86d74e2`, `ee81f34`, `445e9a3`).
+**Group B is still OPEN and B2a acceptance is pending parent review**;
+this append is task/evidence only. No B2b numeric/dry-run work, no C
+measurements, no export/browser work.
+
+- **Families landed.** Compact payload (inherited `c0bc9f1`): zero/
+  multi-root, corrupt node, in-payload exact-end slack (1/8);
+  degenerate/presence (1/4); span/region caps (1/6); two status-0
+  characterizations (region slack tolerance, canonical reassembly
+  identity). New: **PACM structural** (`86d74e2`) — version/source-enum/
+  bpm domains, divide-first count lie, stream truncation, trailing TLV
+  slack, `'SCEN'` accounting, duplicate TLV id, `'SNAM'` order/parallel/
+  without-`'SCEN'` — 12 refusals 1/10 with the independent
+  `Pacm.decode` reader oracle pinned null, plus `pacm-checksum-lie`
+  (reader nonnull: checksum ≠ structure) and the status-0
+  `pacm-fnv-honest-rewrite` (trusted span edited, `'TRAN'+48` FNV
+  recomputed, exact rewritten payload served). **PACM↔PACB coherence**
+  (`ee81f34`) — track target/registry, control registry, one-whole-
+  `'TRAK'`-unit count lie with directory repair, finite key/control
+  lane lies, `'EASE'` param and `'TMPO'` bpm divergence, scene start —
+  9 refusals 1/10, reader nonnull on every case. **Registry identity**
+  (`445e9a3`) — extra-target and same-shaped `glow`↔`flow` swap joins
+  through the real `PactCodec`, both 1/9, with both input zones
+  restored and the original live score pinned (both frames, held
+  control, 90 bpm nudge, complete `'PACM'`, primed nonzero
+  expr-failure counter 1).
+- **Partition (derived).** `67 named + 3 bad-call + 3700 prefix + 3
+  positive = 3773 attempted; 78 names = 67 mutation names + 3 bad-call
+  names + 3 positive names + 5 family labels`; the T6a `d2644eb`
+  baseline line (35 + 3 + 3700 = 3738) is retained verbatim as dated
+  history, and the qualifier is narrowed to the B2b remainder.
+- **Gates (cold, fresh cache).** `zig build test verify cli-golden
+  parity fuzz audit-rt-imports --summary all` exit 0, **56/56 steps,
+  1236/1236 aggregate** (845 native + 391 fuzz), node **182 pass / 0
+  skip**, parity **44/0** with the five pattern cases binary-replayed,
+  audit closure unchanged (12 pacer + 18 SJON). Evidence:
+  `.agent/control/prod-four-b2a-cont-final-gates.log`.
+- **Calibration (scratch worktree, restored byte-exact).** Six compiling
+  gate removals each flipped a named case: payload exact-end →
+  `payload-inspan-slack` 1/8→0; `PACM` SNAM-without-SCEN guard →
+  `pacm-snam-without-scen` reader null→nonnull; version guard →
+  `pacm-version-invalid` oracle null→nonnull; `verifyRouting` track
+  registry compare → `pacm-coherence-track-registry` 1/10→0; FNV
+  fast-reject → `pacm-checksum-lie` 1/10→0 (checksum class kept
+  separate from structural proof); registry `canonicalPactEquals` →
+  `registry-extra-target` 1/9→0. Restored tree reran 845/845 + 44/0.
+- **Still open.** B2b numeric/finite matrix and dry-run budgets;
+  Group B exit; P3 acceptance; independent review + parent gate.
+  Report: `.agent/control/prod-four-b2a-report.md`.

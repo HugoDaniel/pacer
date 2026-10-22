@@ -351,3 +351,26 @@ and the 15 load-failing cases assert the producer's refusal explicitly
 derived, 0 skipped. The wasm playback-wasm-parity leg of P4 is closed;
 P3 (T6b negative suites) remains Group B's open work. Evidence:
 `.agent/control/prod-four-a5-report.md`.)*
+
+*(2026-10-22, B2a dated append — the native negative-suite leg for the
+payload / `'PACM'` structural+coherence / registry-identity classes
+exists and is green, but **P3 is still OPEN** (B2b numeric/dry-run
+work is not done). The B2a source commits (`86d74e2`, `ee81f34`,
+`445e9a3`; this docs record follows them) add `86d74e2` (PACM structural: 12
+refusals 1/10, reader oracle pinned, checksum lie distinguished from
+structure, honest-FNV rewrite accepted 0), `ee81f34` (PACM↔PACB
+coherence: 9 refusals 1/10 over a structurally valid, checksum-honest
+PACM, including a decodable whole-unit count lie), and `445e9a3`
+(registry identity: extra-target + same-shaped name-swap joins 1/9
+through the real `PactCodec`, both zones restored, original live score
+and a nonzero expr-failure counter preserved). Inherited `c0bc9f1`
+covers the compact-payload structural classes. Live partition: 67
+named + 3 bad-call + 3700 prefix + 3 positive = 3773 attempted; 78
+names (5 family labels); the `d2644eb` T6a 3738 baseline stays as
+dated history. Six isolated scratch-worktree gate-removal calibration
+reds each flipped their named case and the restored tree reran
+byte-exact GREEN. Cold gates: 56/56, 1236/1236 aggregate (845 native +
+391 fuzz), node 182/0-skip, parity 44/0, five pattern cases
+binary-replayed, 0 skipped. Evidence:
+`.agent/control/prod-four-b2a-cont-final-gates.log` and
+`prod-four-b2a-report.md`.)*
