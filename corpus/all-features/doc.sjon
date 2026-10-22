@@ -33,8 +33,8 @@
   (track :target dropx :expr scene-beat))
 
 ; global tracks: keyed radius, expr blend (the control multiply), the
-; env pattern (beat-tracking across the wrap through a control) and the
-; euclid grid (hap selection: onsets in slots 0/3/6 of the bar).
+; env pattern (control-tracking through the env's parent scope) and
+; the euclid grid (hap selection: onsets in slots 0/3/6 of the bar).
 (track :target radius
   (key :at 0b :value 0.0)
   (key :at 6b :value 1.2 :ease out-cubic))

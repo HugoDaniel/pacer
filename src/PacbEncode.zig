@@ -1005,7 +1005,8 @@ pub fn preflight(
 
     for (table.tracks) |track| switch (track.source) {
         .expr => |node| {
-            const heads = try collectCallHeads(a, tree, node);            for (heads) |h| {
+            const heads = try collectCallHeads(a, tree, node);
+            for (heads) |h| {
                 const key = std.fmt.allocPrint(a, "{s}\x00{s}", .{
                     h.namespace orelse "", h.head,
                 }) catch return error.OutOfMemory;

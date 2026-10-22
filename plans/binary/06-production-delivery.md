@@ -1178,3 +1178,40 @@ fixtures, pretest pack, npm parity count) — not started; B2 negatives,
 C measurement, D/E — not started; no SJON edits; no wire/budget/
 enum-reorder/export change; `npm lint/typecheck` untouched (no npm
 source change); no `.agent` commits; `zig-pkg/` preserved.
+
+## A3+A4 review-corrections append (dated — not plan prose)
+
+2026-10-22 — the four record corrections from
+`.agent/control/prod-four-a34-review-report.md` (issues 1–4) are applied;
+original prose above stays verbatim, append-only.
+
+1. **Count attribution (issue 1, MEDIUM).** The A3+A4 append's "1236/1236
+   tests in the verify leg" misattributes the aggregate: **1236 is the whole
+   six-gate invocation aggregate = 845 (`zig build test`) + 391 (fuzz)**;
+   the `verify` step alone is **731/731**; node is **136/136** separate.
+   The parent cold log (`prod-four-a34-parent-gates.log:891,:893-991`) is
+   the authority.
+2. **Baseline figure (issue 2, LOW; worker-report side).** Recorded in the
+   dated errata append of `.agent/control/prod-four-a34-report.md`: the
+   f89bd49 baseline test leg is **840**, so 845 = 840 + 5 net new/flipped —
+   not "829 + 16".
+3. **`src/PacbEncode.zig:1008` (issue 3, LOW).** The jammed
+   `const heads = …; for (heads) |h| {` line is split into two lines in
+   the corrections commit — no semantic change. Recorded while applying:
+   the file carries ONE further pre-existing `zig fmt` deviation (~2498,
+   array-literal trailing-comment alignment) already present at HEAD and
+   reviewed slices; it is NOT part of this correction and is left
+   untouched (no fmt gate exists in build.zig; out of approved scope).
+4. **`corpus/all-features/doc.sjon` comment (issue 4, LOW).** The comment
+   block at **lines 35–37** (the reviewer's line-42 anchor was wrong; 42
+   is the `blend` expr track) called the `pat` pattern "beat-tracking
+   across the wrap through a control", but `(pure (* sway 2))` reads no
+   time name — it tracks a CONTROL through the env's parent scope;
+   beat-tracking is owned by `pattern-env` (`doc.sjon:13`). Corrected
+   in-source by an **equal-byte-length comment patch** (207 → 207 bytes
+   for the three-line block; whole file 2114 bytes before and after), so
+   every golden byte-span is untouched — no golden regen, no author-input
+   semantics change. Verified by the native corpus authority on a fresh
+   cache (`.agent/control/cache-a5-corpus-corrections-1`): exit 0, all
+   cases green against the committed goldens, post-run tree shows no
+   golden modification (`prod-four-a5-corrections-corpus.log`).
