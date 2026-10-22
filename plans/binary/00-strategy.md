@@ -333,3 +333,24 @@ also remains owner-notified.
   browser/physical-device work — no plan-02/03 closure beyond what these
   appends state.** A5 report of record:
   `.agent/control/prod-four-a5-report.md`.
+
+- 2026-10-22 — **A5 final-review errata (dated — the Group A append
+  above stays verbatim; MEDIUM-1 of
+  `.agent/control/prod-four-a5-review-report.md`).** That append's
+  "replays all 29 clean corpus cases … frozen goldens re-derived
+  byte-for-byte" is qualified: the runtime-leg byte-golden
+  re-derivation holds for the **27 ordinary** clean cases — all
+  **5 pattern cases** among them (examples-starter, pattern-basic,
+  pattern-env, rig-studio, all-features; the A5 acceptance core). For
+  the **2 lifecycle cases** (reload-atomicity, registry-mismatch) the
+  runtime leg deliberately does NOT render the golden: inside
+  `replayLifecycle` the golden (with its `:skipped binary-only` lines)
+  is re-derived by the paired **text** leg, and the binary leg is
+  asserted via frame-byte equality while both drivers live plus the
+  frozen per-path divergence contract. Partition derived from source:
+  44 corpus cases = 29 clean (27 ordinary + 2 lifecycle) + 15
+  load-failing (14 `diag-*` + pattern-budget); lifecycle steps exist in
+  exactly `corpus/reload-atomicity/times.sjon` and
+  `corpus/registry-mismatch/times.sjon`. No gate, wire, or acceptance
+  identity changes; the same corrections commit restores `tools/` to
+  the npm lint gate (LOW-1) — see the plan-06 corrections append.

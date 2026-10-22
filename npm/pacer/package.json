@@ -77,7 +77,7 @@
     "build:types": "tsc",
     "build": "npm run build:wasm && npm run build:wasm-rt && npm run build:wasm-copy && npm run build:wasm-rt-copy && npm run build:types",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src test browser playwright.config.js",
+    "lint": "biome check src test tools browser playwright.config.js",
     "format": "biome check --write src test browser playwright.config.js",
     "clean": "node -e \"const fs=require('node:fs');fs.rmSync('types',{recursive:true,force:true});fs.rmSync('pacer.wasm',{force:true});fs.rmSync('pacer-rt.wasm',{force:true});fs.rmSync('test/rt-fixture.pacb',{force:true})\"",
     "pretest": "npm run build:wasm && npm run build:wasm-rt && npm run build:wasm-rt-copy && npm run build:rt-fixture && npm run build:cli && npm run gen:rt-corpus-fixtures",

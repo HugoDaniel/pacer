@@ -1311,3 +1311,55 @@ package.json/lock untouched). GitNexus CLI absent (MODULE_NOT_FOUND,
 attempted once each for impact/detect-changes) — source-level review +
 the gate suite stand in. Independent reviewer gate and parent gate are
 still required and are NOT self-declared here.
+
+## A5 review-corrections append (dated — not plan prose)
+
+2026-10-22 — the A5 final-review corrections (MEDIUM-1, LOW-1, LOW-2 of
+`.agent/control/prod-four-a5-review-report.md`, verdict READY) are
+applied in one bounded commit; the A5 append above stays verbatim,
+append-only. LOW-3 is an observation with no code action — the honest
+limit is recorded in `.agent/control/prod-four-a5-corrections-report.md`.
+
+1. **Golden-equality scope (MEDIUM-1).** "All 29 goldens re-derived
+   byte-for-byte through the runtime" (plan 00's Group A append, report
+   §7) overstates the two lifecycle cases. The byte-golden-through-the-
+   runtime proof covers the **27 ordinary** clean cases — all **5
+   pattern cases** included (examples-starter, pattern-basic,
+   pattern-env, rig-studio, all-features). For **reload-atomicity** and
+   **registry-mismatch** (2 of the 29) the runtime leg deliberately
+   does not render the golden: `replayLifecycle` re-derives it on the
+   paired **text** leg (the golden's `:skipped binary-only` lines are
+   text-surface records), and the binary leg is asserted by
+   frame-byte equality while both drivers live plus the frozen
+   per-path divergence contract — which this append's own (a)/(b)
+   split under "What runs now" already stated correctly; the errata
+   qualifies the generalization where it appeared. Partition derived
+   from source: 44 = 29 clean (27 ordinary + 2 lifecycle) + 15
+   load-failing (14 `diag-*` + pattern-budget).
+2. **Lint coverage restored (LOW-1).** Moving the producer to
+   `tools/` (commit `3f3407e`) left it outside the `npm run lint`
+   args — the `tools/**/*.js` include added to `biome.jsonc` was
+   inert for the gate (the A5 append's "npm lint green (30 files)"
+   measured the producer uncovered). Fixed in this commit: `tools`
+   added to the lint script's args. Re-run on Linux with the pinned
+   biome 2.5.0: **exit 0, 31 files checked, no fixes applied**
+   (`prod-four-a5-corrections-npm-lint.log`) — the chain 29
+   (baseline log) → 30 (A5 final log) → 31 reconciles to the delta
+   being exactly `tools/generate-rt-fixtures.js`, which was already
+   format-clean (no reformatting applied, no deps/lock edits). Linux
+   typecheck re-run exit 0
+   (`prod-four-a5-corrections-npm-typecheck.log`); the obs typecheck
+   leg was not re-run — the typecheck scope is `src/**` only and no
+   typed source changed.
+3. **pattern-env's `sway` is the static document value (LOW-2).** The
+   report's §4 juxtaposition (MUT-C's "live parent controls" proof
+   placed directly after the pattern-env description) invites reading
+   pattern-env's `sway` as a live control. It is not:
+   `corpus/pattern-env/times.sjon` has **no** set-control steps — its
+   `sway` (×2) is the static document value. The live-setter→pattern
+   proof rides **all-features** (`times.sjon:26` sets sway 0.5 → 0.75;
+   the 6.5 s frame expects `pat 1.5`) — exactly where MUT-C's failure
+   set lands (all-features, controls-live, controls-vector,
+   reload-atomicity + summary; pattern-env green in that log), as this
+   append's MUT-C paragraph already names. Clarified by a dated errata
+   in the worker report; no fixture or golden edits.
