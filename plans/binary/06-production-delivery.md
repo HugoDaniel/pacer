@@ -1215,3 +1215,99 @@ original prose above stays verbatim, append-only.
    cache (`.agent/control/cache-a5-corpus-corrections-1`): exit 0, all
    cases green against the committed goldens, post-run tree shows no
    golden modification (`prod-four-a5-corrections-corpus.log`).
+
+## A5 executed status append (dated — not plan prose)
+
+2026-10-22 — A5 EXECUTED as three commits on `agent/animader-init`:
+`3411e14` (the A3+A4 review corrections, above), `c5f4310` (fixture
+producer), `88714fd` (the walk + npm/build wiring), `3f3407e` (producer
+moved out of node's test-discovery path — a plain `test/*.js` file is
+discovered by `node --test` and would have run the generator a second
+time, racing the walk under verify). A5 consumes A3+A4 exactly as
+approved; B2, C, D, E remain NOT started.
+
+**What runs now.** `npm/pacer/test/rt-corpus.test.js` walks the corpus
+(the same enumeration as the text walk), verifies
+`test/fixtures/manifest.json` (case-set equality both directions,
+producer CLI + artifact digests vs the files it is about to load), and
+per case: golden `:ok false` → the REAL producer's refusal asserted
+explicitly (manifest records exit 1 + the producer's own diagnostic
+codes from this run; no fixture bytes exist); golden `:ok true` → the
+fixture digest verified per load, then `PacerRt` loads the real blob
+against parseHarness's actual host join and (a) ordinary cases re-derive
+the FROZEN golden byte-for-byte through the one shared `renderCase`; (b)
+lifecycle cases (reload-atomicity, registry-mismatch) run the frozen
+per-path divergence contract — the JS mirror of `replayLifecycleCase` —
+with the text leg paired live and re-deriving the golden. Classification
+is algorithmic (the decoded PACM's track-source tags); the required
+inventory is the literal list {examples-starter, pattern-basic,
+pattern-env, rig-studio, all-features}, checked independently of the
+counters. The producer is `tools/generate-rt-fixtures.js`: one real
+`zig-out/bin/pacer pack corpus/<case>/doc.sjon --target …` per case with
+the parseHarness join (never mined diagnostics), wired into BOTH the npm
+pretest hook and build.zig's verify node leg (with the runtime-copy
+refresh), so verify and `npm test` execute identical fixture content on
+a clean checkout.
+
+**RED/mutation calibration (logs in `.agent/control/`).** RED-1
+`prod-four-a5-red-1-fixtures-unwired.log`: walk run with generation
+unwired → loud missing-manifest failure, exit 1. MUT-A
+`prod-four-a5-mut-a2-skip-pattern-env-inventory.log`: the walk filtered
+to drop pattern-env → all other counts healthy, summary fails "required
+runtime-replay inventory did not execute the binary leg: pattern-env"
+(44/45 pass, exit 1); restored byte-exact. MUT-B
+`prod-four-a5-mut-b-stale-fixture.log`: one pattern-env.pacb byte
+flipped (length preserved) → that case fails on the manifest digest
+("stale or tampered"), exit 1; regenerated via the real producer,
+fixture sha `49d8c780…` identical to the pre-tamper generation
+(deterministic producer). MUT-C `prod-four-a5-mut-c-env-drop.log`:
+`PacerRt.setControl` mutated to drop the `prt_setControl` call (compiles)
+→ exactly the live-control-dependent cases fail (all-features, controls
+-live/vector, reload-atomicity + summary; 41/46 pass, exit 1) — the
+pattern values really flow from live parent controls through the runtime;
+`src/rt.js` restored byte-exact (openssl sha `fed72af3…` before/after).
+
+**Gates (obs, foreground, `ulimit -c 0 && ulimit -s 32768`).** Baseline
+BEFORE any JS change: npm lint (Linux — biome has no OpenBSD binary, the
+obs run of it fails there; recorded), typecheck (Linux AND obs), npm test
+136/136/0 (`prod-four-a5-baseline-npm-*.log`). Final: full `npm test`
+with a FRESH zig cache (`.agent/control/cache-a5-npmtest-2`) → **exit 0,
+182/182, 0 skipped** (`prod-four-a5-npmtest-full-2.log`); count identity
+182 = 136 + 46 (44 case tests + copy-identity + summary identities).
+Decisive cold gate `zig build test verify cli-golden parity fuzz
+audit-rt-imports --cache-dir .agent/control/cache-a5-final-1 --summary
+all` → **EXIT 0**, 56/56 steps, **1236/1236 tests (845 test + 391 fuzz
+aggregate; verify's native leg 731; node 182/182 separate, 0 skipped)**,
+corpus 44/0 (twice), parity partition **24 non-pattern + 5 pattern
+replayed (binary leg) + 15 compile-refused, skipped 0, inventory 4/4**,
+negatives 3738 unchanged, audit closure unchanged, cli-golden + score-docs
+current, post-gate tree clean except the pre-existing `zig-pkg/`
+(`prod-four-a5-final-gates.log`). Artifacts from that cold run, python3
+hashlib AND openssl agreeing: `zig-out/bin/pacer-rt.wasm` **189,506 B**
+sha256 `4e2f2100fecc1e7a4657261867a26993c1e3e98bc3a29c4a319fab730b792515`
+and control `zig-out/bin/pacer.wasm` **668,852 B** sha256
+`9736a41b61e2fa4ae2e37388bd36d8953fcdd41feb465d5805125867706e3258` —
+both IDENTICAL to the parent cold baseline (A5 changes no runtime source);
+`npm/pacer/pacer-rt.wasm` refreshed by the actual pretest hook and
+verified byte-identical to the fresh artifact by the walk's copy-identity
+test (the stale 171,852 B release copy question is thereby closed — no
+publish/version bump).
+
+**Actual counts (derived, not copied).** Corpus 44 = 29 clean (24
+non-pattern + 5 pattern-carrying: the four former skips + all-features) +
+15 load-failing (14 diag-* + pattern-budget, refusing with e.g.
+`pattern_eval_failed`); the manifest records each refusal's real codes.
+Node 136 → 182. npm lint green (30 files), typecheck green both hosts.
+
+**Boundaries kept.** No eval-text fallback (the runtime never sees
+source), no compilation at playback, no mocked PACB, no golden regen or
+golden edit (the doc.sjon comment fix was byte-length-preserving and the
+corpus authority re-verified it), no second interpreter/clock/frame
+implementation (shared harness + real PacerRt/Pacer only), no new public
+JS API, no wire/enum/export change, no SJON edit, no lockfile churn
+(the one `@biomejs/cli-linux-x64@2.5.0 --no-save` install completed the
+already-pinned optional dep so the pinned lint toolchain runs on Linux —
+package.json/lock untouched). GitNexus CLI absent (MODULE_NOT_FOUND,
+attempted once each for impact/detect-changes) — source-level review +
+the gate suite stand in. Independent reviewer gate and parent gate are
+still required and are NOT self-declared here.

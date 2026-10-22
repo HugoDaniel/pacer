@@ -762,3 +762,17 @@ phase-table P4 gate "pattern-env green via the binary path" is proven
 at the production-loader level (`rt_entry (n)`: the corpus document,
 byte parity with the text oracle); the plan-03 parity leg itself
 remains A3+A4's scope.)*
+
+*(2026-10-22, A5 dated append — P4's npm/wasm gate is GREEN end to end:
+`npm/pacer/test/rt-corpus.test.js` loads `corpus/pattern-env` — packed by
+the real CLI from the corpus document — into the actual fresh
+`zig-out/bin/pacer-rt.wasm` and re-derives the frozen golden
+byte-for-byte through the shared harness renderer (beat tracking across
+the 2.0 s wrap, the pattern-local `tick` shadow, the `sway` control
+through the env's parent scope, 0 skipped). The same walk covers every
+corpus case: 29 clean replays (24 non-pattern + 5 pattern-carrying,
+including this plan's four former pack-refusal fixtures and the
+all-features anchor) and 15 explicit compile-refusal assertions. Commits
+`c5f4310` + `88714fd` + `3f3407e` on top of the A3+A4 record; evidence:
+`.agent/control/prod-four-a5-report.md` and the
+`prod-four-a5-*.log` series.)*

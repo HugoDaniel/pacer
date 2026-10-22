@@ -309,3 +309,27 @@ also remains owner-notified.
 | O6 | Pattern dry-run at load (binary) | Design decided, lands with 02 P4: `prt_load` dry-runs the first pattern cycle through the env-carrying binary query, mirroring the text path's acceptance ⊆ runtime rule (`src/PatternTrack.zig:61-70`) — decode accepts only what the frame path can evaluate. Before the prerequisite resolves there is nothing to dry-run: pack refuses pattern scores outright. |
 | O7 | `pacer/rt` as a separate class vs a mode of `Pacer` | Proposed separate (`prt_*` makes mixing a link error); 02 P3 review is the decision point. |
 | O8 | User-plugin expr functions on the binary path | Out of scope for this wave, refused loudly at pack (decision 8). A user who needs them on the binary path escalates; a future SJON follow-up (embedding plugin fn tables) would be its own pacer-local handoff. |
+
+- 2026-10-22 — **Group A executed and closed (A1→A5), per the 2026-10-20
+  authorization.** A1 (B-blocker lift + KNOWN-GAP flip), A2 (schema/
+  audit adoption), the ask30/M4 prepared-runtime adoption, A3+A4 (pack
+  lift + skip-free native parity, `9cf932d`), and A5 (real wasm pattern
+  corpus playback) are done. A5: `npm/pacer/test/rt-corpus.test.js`
+  replays all 29 clean corpus cases through the actual fresh
+  `zig-out/bin/pacer-rt.wasm` — frozen goldens re-derived byte-for-byte,
+  pattern cases included (the four former skips + all-features), 15
+  load-failing cases asserted as real producer refusals, zero skipped,
+  node 136 → 182 derived; npm count identity 182 = 136 + 46; artifacts
+  unchanged from the parent cold baseline (`pacer-rt.wasm` 189,506 B /
+  `4e2f2100…`, control 668,852 B / `9736a41b…`, python3+openssl agree),
+  the shipped npm copy refreshed by the pretest hook and verified
+  byte-identical. A5 commits `3411e14` (A3+A4 review corrections) →
+  `c5f4310` + `88714fd` + `3f3407e` (implementation); decisive cold gate
+  `test verify cli-golden parity fuzz audit-rt-imports` EXIT 0 on
+  `.agent/control/cache-a5-final-1` (56/56 steps, 1236/1236 = 845 test +
+  391 fuzz, node 182/182, corpus 44/0, parity 24+5+15 skipped 0 inventory
+  4/4, negatives 3738 unchanged). **Still open and NOT claimed: Group B
+  (B2 T6b negative suites; 03 P3), Group C measurement, D export, E
+  browser/physical-device work — no plan-02/03 closure beyond what these
+  appends state.** A5 report of record:
+  `.agent/control/prod-four-a5-report.md`.

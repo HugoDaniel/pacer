@@ -338,3 +338,16 @@ _(created 2026-10-18; entries appended per phase)_
   pattern legs, binary wasm corpus and browser work are not done, and the
   two owner questions remain unanswered. Evidence:
   `.agent/control/binary03-t5b-report.md`.
+
+*(2026-10-22, A5 dated append — the binary wasm corpus leg exists and is
+skip-free: `npm/pacer/test/rt-corpus.test.js` replays the whole corpus
+through the actual `pacer-rt.wasm` — the four former pattern skips
+(`examples-starter`, `pattern-basic`, `pattern-env`, `rig-studio`) plus
+`all-features` now complete REAL runtime replays (frozen goldens
+re-derived byte-for-byte; lifecycle scripts follow this file's frozen
+per-path divergence contract, the JS mirror of `replayLifecycleCase`),
+and the 15 load-failing cases assert the producer's refusal explicitly
+(exit 1 + named codes, no fixture bytes). Node count grew 136 → 182,
+derived, 0 skipped. The wasm playback-wasm-parity leg of P4 is closed;
+P3 (T6b negative suites) remains Group B's open work. Evidence:
+`.agent/control/prod-four-a5-report.md`.)*
