@@ -584,11 +584,11 @@ const Family = struct {
 const Counters = struct {
     /// Every expected-under-test production call: named mutations, bad
     /// calls, prefix attempts. The setup/probe loads stay uncounted, and
-    /// the enumeration is exact: six step-1 fixture loads, eight
+    /// the enumeration is exact: six step-1 fixture loads, nine
     /// `Family.begin` baseline loads (prefix, envelope, compact, PACM
     /// structural, coherence, registry, dry-run refusal, dry-run
-    /// boundary), and the bad-call family's prior-reason re-eval —
-    /// fifteen uncounted loads in all, none of them attempts.
+    /// boundary, bad-call), and the bad-call family's prior-reason
+    /// re-eval — sixteen uncounted loads in all, none of them attempts.
     attempted: usize = 0,
     named: usize = 0,
     bad_calls: usize = 0,
@@ -2086,7 +2086,7 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         );
     }
 
-    // 4. Status-2 bad calls: a prior status-1 reason must survive.
+    // 9. Status-2 bad calls: a prior status-1 reason must survive.
     {
         var fam = try Family.begin(a, out, fixtures.full_small, pact);
         defer fam.end();

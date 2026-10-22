@@ -129,13 +129,11 @@ fn keysRecAt(base: []const u8, key_index: usize, lane: usize) usize {
 }
 
 fn ctrlRecAt(base: []const u8, control_index: usize) usize {
+    // PACB 'CTRL' is a count-prefixed FIXED-stride section: the id lives in
+    // 'STRS' (referenced by id_off/id_len at +6/+10), so record i starts at
+    // off + 4 + i*CTRL_REC_LEN. (PACM is the variable-length spelling.)
     const ctrl = findSection(base, .ctrl);
-    var off: usize = @as(usize, ctrl.off) + 4;
-    var i: usize = 0;
-    while (i < control_index) : (i += 1) {
-        off += @as(usize, Pb.CTRL_REC_LEN) + readU16(base, off + 10);
-    }
-    return off;
+    return @as(usize, ctrl.off) + 4 + control_index * Pb.CTRL_REC_LEN;
 }
 
 fn pacmControlsOff(p: []const u8) usize {
@@ -617,4 +615,45 @@ pub fn run(a: Allocator, out: *Io.Writer, pacb: []const u8) !Report {
 
     try out.print("numeric: {d} named cells executed (BL-1 key/control cross-check + self-consistent non-finite writes)\n", .{names.items.len});
     return .{ .names = names.items };
+}
+
+test "numeric: PACB CTRL records use the fixed 60-byte stride" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const pacb = try fixture(a);
+
+    const ctrl = findSection(pacb, .ctrl);
+    const ctrl0 = ctrlRecAt(pacb, 0);
+    const ctrl1 = ctrlRecAt(pacb, 1);
+
+    // 'CTRL' is a count-prefixed FIXED-stride section: the control id
+    // lives in 'STRS' (id_off/id_len at +6/+10), unlike PACM's
+    // variable-length control records. Every record is exactly
+    // CTRL_REC_LEN (60) bytes, so record i starts at off + 4 + i*60.
+    try std.testing.expectEqual(@as(usize, ctrl.off) + 4, ctrl0);
+    try std.testing.expectEqual(@as(usize, ctrl.off) + 4 + Pb.CTRL_REC_LEN, ctrl1);
+    try std.testing.expectEqual(
+        @as(usize, ctrl.off) + @as(usize, ctrl.len),
+        ctrl1 + Pb.CTRL_REC_LEN,
+    );
+
+    // The two controls the matrix mutates: 0 is the 4-lane flags-SET
+    // `tint`; 1 is the scalar flags-CLEAR `plain`. The ncomp (+3) and
+    // flags (+5) bytes make the claimed field/lane offsets legible.
+    try std.testing.expectEqual(@as(u8, 4), pacb[ctrl0 + 3]);
+    try std.testing.expectEqual(@as(u8, 3), pacb[ctrl0 + 5]);
+    try std.testing.expectEqual(@as(u8, 1), pacb[ctrl1 + 3]);
+    try std.testing.expectEqual(@as(u8, 0), pacb[ctrl1 + 5]);
+
+    // The six value-pad cells target rec1 + 16/20/24; the eight CLEAR
+    // cells target rec1 + 28 (min lane 0) and rec1 + 44 (max lane 0).
+    // Each claimed offset is inside its declared field and every field
+    // stays inside the 60-byte record.
+    try std.testing.expectEqual(@as(usize, 16), CTRL_VALUE_OFF + 1 * 4);
+    try std.testing.expectEqual(@as(usize, 24), CTRL_VALUE_OFF + 3 * 4);
+    try std.testing.expectEqual(@as(usize, 28), CTRL_MIN_OFF);
+    try std.testing.expectEqual(@as(usize, 44), CTRL_MAX_OFF);
+    try std.testing.expect(ctrl1 + CTRL_MIN_OFF + 3 * 4 < ctrl1 + CTRL_MAX_OFF);
+    try std.testing.expect(ctrl1 + CTRL_MAX_OFF + 3 * 4 < ctrl1 + Pb.CTRL_REC_LEN);
 }
