@@ -1598,6 +1598,7 @@ and recorded host-gated node/native skips; the parent OpenBSD rerun above is the
 record.) **T6b is complete. Group B exit and P3 acceptance remain a separate broad review; C/D/E
 remain open.** Evidence: `prod-four-b2b-fix-parent-gates.log`,
 `prod-four-b2b-fix-confirm-report.md`.
+
 *(2026-10-22, P3 ACCEPTED and GROUP B EXIT.)* P3 is accepted and Group B is exited on 2026-10-22
 at deliverable `bb0ba56`; this append is the record commit that follows it. The independent exit
 review (`.agent/control/prod-four-groupb-exit-report.md`) returned **P3 ACCEPTED + GROUP B READY**

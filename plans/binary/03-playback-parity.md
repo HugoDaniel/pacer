@@ -407,6 +407,7 @@ the T6/P3 remainder (Group B exit) stays open.
 CTRL-stride HIGH was fixed with an offset regression test and the two calibration rows were
 corrected to the captured 1/5 → 1/10 `lanesEq` backstop. T6b is complete; P3 acceptance and Group
 B exit remain the separate broad review.
+
 *(2026-10-22, P3 ACCEPTED at `bb0ba56`; Group B exited.)* The independent Group B exit review
 (`.agent/control/prod-four-groupb-exit-report.md`) returned P3 ACCEPTED + GROUP B READY for the
 deliverable at `bb0ba56`. Parent OpenBSD cold six-gate at that HEAD
