@@ -2,7 +2,7 @@
 ; score: declared targets, a transport with :emit lanes and a tempo
 ; segment, scalar and vector keys, two easing programs, an expr track,
 ; a periodic trigger, a control with rails, and a scene with its own
-; keyed window. (No :pattern track by design — v1 packs refuse those.)
+; keyed window. (No :pattern here by design. 2026-10-22: v1 note stale.)
 ; The committed full-small.pacb beside this file is the REAL CLI's own
 ; output; regenerate with
 ;   zig build run -- pack tools/testdata/pacb/full-small.score.sjon \

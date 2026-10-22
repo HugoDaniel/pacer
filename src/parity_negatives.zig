@@ -1402,6 +1402,27 @@ fn appendTlv(a: Allocator, p: []const u8, id: u32, payload: []const u8) ![]u8 {
     return insertTlv(a, p, p.len, id, payload);
 }
 
+/// Replace one TLV frame in place: same id, same position; the payload
+/// length may change. A stream that does not carry the id yet grows one
+/// canonical tail frame (the fixed encoder emits `'SNAM'` last), so the
+/// same case addresses the frozen pre-`'SNAM'` fixture and a names-carrying
+/// one alike.
+fn replaceTlv(a: Allocator, p: []const u8, id: u32, payload: []const u8) ![]u8 {
+    const tlv = pacmFindTlv(p, id) orelse
+        return insertTlv(a, p, p.len, id, payload);
+    const frame_len = Pacm.META_SECTION_HEADER_LEN + tlv.len;
+    const out = try a.alloc(u8, p.len - frame_len + Pacm.META_SECTION_HEADER_LEN + payload.len);
+    @memcpy(out[0..tlv.hdr], p[0..tlv.hdr]);
+    putU32(out, tlv.hdr, id);
+    putU32(out, tlv.hdr + 4, @intCast(payload.len));
+    @memcpy(out[tlv.hdr + Pacm.META_SECTION_HEADER_LEN ..][0..payload.len], payload);
+    @memcpy(
+        out[tlv.hdr + Pacm.META_SECTION_HEADER_LEN + payload.len ..][0 .. p.len - (tlv.hdr + frame_len)],
+        p[tlv.hdr + frame_len ..],
+    );
+    return out;
+}
+
 /// 'SNAM' before the 'SCEN' it parallelizes: the reader requires the
 /// fixed encoder order, so a names frame first has nothing to parallel.
 fn pacmSnamBeforeScen(a: Allocator, base: []const u8) ![]u8 {
@@ -1413,12 +1434,19 @@ fn pacmSnamBeforeScen(a: Allocator, base: []const u8) ![]u8 {
     return pacmAssemble(a, base, try insertTlv(a, p, scen.hdr, Pacm.SNAM_SECTION_ID, snam));
 }
 
-/// 'SNAM' count not parallel to 'SCEN' (one scene, zero names).
+/// 'SNAM' count not parallel to 'SCEN': replace the committed names frame
+/// in place with a well-formed count-2 frame whose entries account
+/// exactly. The frozen full-small fixture predates `'SNAM'`, so the
+/// helper inserts the canonical tail frame; either way there is exactly
+/// ONE names frame, `'SCEN'` precedes it and the payload is otherwise
+/// valid. ONLY the parallelism rule (`n != view.sceneCount()` at
+/// `Pacm.decode`) can refuse this blob — never repeat, order, bounds or
+/// trailing slack.
 fn pacmSnamCountBreak(a: Allocator, base: []const u8) ![]u8 {
     const p = try pacmCopy(a, base);
-    const empty = [_][]const u8{};
-    const snam = try snamPayload(a, &empty);
-    return pacmAssemble(a, base, try appendTlv(a, p, Pacm.SNAM_SECTION_ID, snam));
+    const names = [_][]const u8{ "drop", "x" };
+    const snam = try snamPayload(a, &names);
+    return pacmAssemble(a, base, try replaceTlv(a, p, Pacm.SNAM_SECTION_ID, snam));
 }
 
 /// 'SNAM' with no 'SCEN' at all: a names frame must follow the scenes it

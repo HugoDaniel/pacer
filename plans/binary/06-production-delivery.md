@@ -1418,3 +1418,38 @@ measurements, no export/browser work.
 - **Still open.** B2b numeric/finite matrix and dry-run budgets;
   Group B exit; P3 acceptance; independent review + parent gate.
   Report: `.agent/control/prod-four-b2a-report.md`.
+
+**Errata — B2a fix wave (2026-10-22; earlier append above kept verbatim).**
+Independent review's one HIGH claimed `pacm-snam-count-break` appended a
+*second* `'SNAM'` to a fixture that "already carries" one, so the repeat
+guard (`Pacm.zig:581`) — not the parallelism rule (`:589`) — refused it.
+Direct fixture inspection falsifies that premise: the committed, frozen
+`tools/testdata/pacb/full-small.pacb` predates `'SNAM'` (its embedded PACM
+stream is exactly `'SCEN'` 1 scene / `'EASE'` / `'TMPO'`; the byte string
+`SNAM` occurs zero times in the 6069-byte file). The `.score.sjon` would
+re-pack with the names tail (`PacbEncode.zig`'s frozen-bytes-plus-known-tail
+test), but the negative suite reads the frozen `.pacb`. The pre-fix
+count-0 append was therefore the FIRST and only names frame: it always
+reached `:589`. Scratch calibration at `828344e` (isolated worktree,
+sibling `../SJON` intact, fresh cache per run) proves it — removing `:589`
+flips the case (reader oracle null→nonnull,
+`prod-four-b2a-fix-calib-old-no589.log`), removing `:581` does not
+(`prod-four-b2a-fix-calib-old-no581.log`). The review's (a)/(b)/(c)
+consequences do not hold for the committed bytes; the §4.2 gate row, the §9
+"not separately added" note, and this append's "order/parallel/
+without-`'SCEN'`" inventory were true as written.
+
+Hardened anyway, per the fix direction (no product/wire change):
+`pacmSnamCountBreak` now uses a `replaceTlv` helper — replace the committed
+`'SNAM'` frame in place when present, otherwise insert the canonical tail
+frame — with a well-formed count-2 names payload (`"drop","x"`, entries
+accounted exactly). Exactly one `'SNAM'`, `'SCEN'` precedes it, `plen`
+accounts exactly, so ONLY `Pacm.zig:589` can refuse, on either the frozen
+pre-`'SNAM'` fixture or a future names-carrying one. `runPacmNamed(...,
+10, true)` and the reader-null oracle are unchanged. Post-fix calibration:
+`:589` removal flips (`prod-four-b2a-fix-calib-new-no589.log`), `:581`
+removal does not (`prod-four-b2a-fix-calib-new-no581.log`); restored scratch
+reran 845/845 + parity 44/0 (`prod-four-b2a-fix-calib-restored-*.log`).
+Committed-tree cold six-gate evidence:
+`.agent/control/prod-four-b2a-fix-cold-gates.log`. Report:
+`.agent/control/prod-four-b2a-report.md` (dated errata section).
