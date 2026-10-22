@@ -227,8 +227,10 @@ pub fn main(init: std.process.Init) !u8 {
     return if (totals.failed == 0) 0 else 1;
 }
 
-/// Bounded reads of the four committed fixture blobs T6a/B2a mutate.
-/// `host-join` is the B2a registry fixture (non-empty pack-time join).
+/// Bounded reads of the six committed fixture blobs T6a/B2a/B2b mutate.
+/// `host-join` is the B2a registry fixture (non-empty pack-time join);
+/// `pattern-silence` / `pattern-live` are B2b's splice base and live
+/// refusal baseline.
 fn readNegativeFixtures(a: Allocator, io: Io) !negatives.Fixtures {
     const load = struct {
         fn one(alloc: Allocator, io_in: Io, name: []const u8) ![]u8 {
@@ -245,6 +247,8 @@ fn readNegativeFixtures(a: Allocator, io: Io) !negatives.Fixtures {
         .expr_keys = try load.one(a, io, "expr-keys"),
         .full_small = try load.one(a, io, "full-small"),
         .host_join = try load.one(a, io, "host-join"),
+        .pattern_silence = try load.one(a, io, "pattern-silence"),
+        .pattern_live = try load.one(a, io, "pattern-live"),
     };
 }
 

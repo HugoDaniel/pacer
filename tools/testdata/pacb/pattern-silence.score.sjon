@@ -1,0 +1,13 @@
+; pattern-silence — the minimal decode-valid PATTERN container used by the
+; B2b dry-run budget negatives: one scalar pattern track carrying
+; `(silence)`, so the parity suite can splice a hand-encoded over-budget or
+; in-budget body over the single payload record (the same producer bypass
+; as `rt_entry` test (p)). The committed pattern-silence.pacb beside this
+; file is the REAL CLI's own output; regenerate with
+;   zig build run -- pack tools/testdata/pacb/pattern-silence.score.sjon \
+;     --out tools/testdata/pacb/pattern-silence.pacb
+(target :name radius :arity 1 :registry 0)
+
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(track :target radius :pattern (silence))

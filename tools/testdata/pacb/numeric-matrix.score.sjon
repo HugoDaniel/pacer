@@ -1,0 +1,26 @@
+; numeric-matrix — the B2b numeric/finite characterization fixture: four
+; declared scalar/vector targets so every lane is independently
+; addressable (a 4-lane key track and a 4-lane control, plus scalar
+; key/control pairs whose lanes 1..3 are the pad domain), a control with
+; min/max flags SET (`tint`) and one with them CLEAR (`plain`). The
+; committed numeric-matrix.pacb beside this file is the REAL CLI's own
+; output; regenerate with
+;   zig build run -- pack tools/testdata/pacb/numeric-matrix.score.sjon \
+;     --out tools/testdata/pacb/numeric-matrix.pacb
+(target :name quad :arity 4 :registry 0)
+(target :name quadctl :arity 4 :registry 0)
+(target :name scalar :arity 1 :registry 0)
+(target :name bare :arity 1 :registry 0)
+
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(control :id tint :target quadctl
+  :min [0 0 0 0] :max [1 1 1 1] :value [0.25 0.5 0.75 1])
+(control :id plain :target bare :value 0.5)
+
+(track :target quad
+  (key :at 0b :value [0.1 0.2 0.3 0.4])
+  (key :at 4b :value [0.5 0.6 0.7 0.8]))
+
+(track :target scalar
+  (key :at 0b :value 0.2))

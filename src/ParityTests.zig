@@ -16,6 +16,7 @@ const pacer = @import("pacer");
 const sjon = @import("sjon");
 const runner = @import("parity_runner.zig");
 const negatives = @import("parity_negatives.zig");
+const numeric = @import("numeric_domain_tests.zig");
 const CorpusHarness = @import("corpus_harness");
 const NativeRt = @import("NativeRt.zig");
 const NativeText = @import("NativeText.zig");
@@ -29,11 +30,13 @@ test {
     _ = @import("parity_runner.zig");
     _ = @import("NativeRt.zig");
     _ = @import("parity_negatives.zig");
+    _ = @import("numeric_domain_tests.zig");
 }
 
-/// Read the four committed fixture blobs the production-loader negative
-/// suite mutates (three T6a blobs plus the B2a `host-join` registry
-/// fixture). Bounded reads; no fixture is ever written.
+/// Read the six committed fixture blobs the production-loader negative
+/// suite mutates (three T6a blobs, the B2a `host-join` registry fixture,
+/// and B2b's `pattern-silence` splice base plus `pattern-live` refusal
+/// baseline). Bounded reads; no fixture is ever written.
 fn negativeFixtures(a: std.mem.Allocator) !negatives.Fixtures {
     const load = struct {
         fn one(alloc: std.mem.Allocator, name: []const u8) ![]u8 {
@@ -50,6 +53,8 @@ fn negativeFixtures(a: std.mem.Allocator) !negatives.Fixtures {
         .expr_keys = try load.one(a, "expr-keys"),
         .full_small = try load.one(a, "full-small"),
         .host_join = try load.one(a, "host-join"),
+        .pattern_silence = try load.one(a, "pattern-silence"),
+        .pattern_live = try load.one(a, "pattern-live"),
     };
 }
 
@@ -139,6 +144,11 @@ test "negatives: production prt_load exact refusals and transactional state" {
         // refuse 1/9 and leave the ORIGINAL live score evaluable.
             "registry-extra-target",
         "registry-name-swap",
+        // B2b pattern dry-run family (2026-10-22): the load-time pattern
+        // dry-run's over-budget body refuses status 1 reason 11, the
+        // entry-side reserve — deterministic and distinct from OOM (3)
+        // and decode (8). The boundary control is a positive below.
+                   "pattern-dry-run-budget",
     };
     const expected_bad_calls = [_][]const u8{
         "bad-call-pacb-overcap", "bad-call-targets-overcap", "bad-call-pact-malformed",
@@ -148,9 +158,12 @@ test "negatives: production prt_load exact refusals and transactional state" {
     // acceptance line; a refusal here is a failed gate.
     const expected_positive = [_][]const u8{
         "payload-region-slack-tolerated", "payload-reassembly-identity",
-        "pacm-fnv-honest-rewrite",
+        "pacm-fnv-honest-rewrite",        "pattern-dry-run-boundary",
     };
-    const expected_family_labels = [_][]const u8{ "prefixes", "compact-payload", "pacm-structural", "pacm-coherence", "registry-identity" };
+    const expected_family_labels = [_][]const u8{
+        "prefixes",       "compact-payload",   "pacm-structural",
+        "pacm-coherence", "registry-identity", "pattern-dry-run",
+    };
     const expected_prefix_cases: usize = 3700;
 
     // Every named mutation and bad call executed EXACTLY once: a removed or
@@ -174,12 +187,13 @@ test "negatives: production prt_load exact refusals and transactional state" {
 
     // The printed partition equals the literal inventory, arithmetic exact.
     // B2a (2026-10-22): the partition gained a `positive` term — status-0
-    // characterization attempts are counted, never laundered as refusals —
-    // and the T6a-only qualifier was NARROWED to its true remainder (B2b
-    // numeric/dry-run), not removed: the hold stays until B2b lands.
+    // characterization attempts are counted, never laundered as refusals.
+    // B2b (2026-10-22): the B2a remainder qualifier is replaced — the
+    // numeric matrix and the counted pattern dry-run family now exist;
+    // T6/P3 stay open and no Group B exit is claimed.
     const expected_partition = try std.fmt.allocPrint(
         a,
-        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (B2b numeric/dry-run remains excluded)\n",
+        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (B2b numeric matrix + pattern dry-run family landed; T6/P3 remain open)\n",
         .{
             expected_named.len,
             expected_bad_calls.len,
@@ -209,8 +223,8 @@ test "negatives: production prt_load exact refusals and transactional state" {
         countOccurrences(out, "negatives: T6a baseline at d2644eb (2026-10-22): 35 named + 3 bad-call + 3700 prefix = 3738 attempted; 39 names = 35 mutation name(s) + 3 bad-call name(s) + 1 family label(s)"),
     );
 
-    // The old all-of-T6b exclusion qualifier must be GONE — narrowed to
-    // the B2b remainder, never silently kept as if nothing had landed.
+    // The old all-of-T6b exclusion qualifier must stay GONE; the B2b
+    // remainder qualifier is replaced by the landed statement above.
     try t.expectEqual(
         @as(usize, 0),
         countOccurrences(out, "(T6b payload/meta/registry/dry-run work is excluded from T6a)"),
@@ -218,8 +232,77 @@ test "negatives: production prt_load exact refusals and transactional state" {
     // The closing PASS line keeps the remaining-open holds spelled out.
     try t.expectEqual(
         @as(usize, 1),
-        countOccurrences(out, "negatives: exact status/reason and transactional preservation PASS; B2b numeric/dry-run and T6/P3 remain open"),
+        countOccurrences(out, "negatives: exact status/reason and transactional preservation PASS; B2b numeric matrix and pattern dry-run landed; T6/P3 remain open"),
     );
+}
+
+test "numeric: B2b finite/non-finite acceptance matrix over the production loader" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var sink: std.Io.Writer.Allocating = .init(a);
+    defer sink.deinit();
+    const report = try numeric.run(a, &sink.writer, try numeric.fixture(a));
+    const out = sink.written();
+
+    // LITERAL cell inventory, derived here from the matrix's own value
+    // table — never from the run's counters. Every name must execute
+    // exactly once.
+    const labels = [_][]const u8{ "finite", "nan", "pos-inf", "neg-inf", "neg-zero" };
+    var expected: std.ArrayList([]const u8) = .empty;
+    for (0..4) |lane| {
+        for (labels) |label| {
+            try expected.append(a, try std.fmt.allocPrint(a, "numeric-keys-active-l{d}-{s}", .{ lane, label }));
+        }
+    }
+    for (1..4) |lane| {
+        try expected.append(a, try std.fmt.allocPrint(a, "numeric-keys-pad-l{d}-nonzero", .{lane}));
+        try expected.append(a, try std.fmt.allocPrint(a, "numeric-keys-pad-l{d}-zero", .{lane}));
+    }
+    for (0..4) |lane| {
+        for (labels) |label| {
+            try expected.append(a, try std.fmt.allocPrint(a, "numeric-ctrl-value-l{d}-{s}", .{ lane, label }));
+        }
+    }
+    for (1..4) |lane| {
+        try expected.append(a, try std.fmt.allocPrint(a, "numeric-ctrl-value-pad-l{d}-nonzero", .{lane}));
+        try expected.append(a, try std.fmt.allocPrint(a, "numeric-ctrl-value-pad-l{d}-zero", .{lane}));
+    }
+    try expected.append(a, "numeric-ctrl-min-set-finite");
+    try expected.append(a, "numeric-ctrl-max-set-finite");
+    for (labels[1..4]) |label| {
+        try expected.append(a, try std.fmt.allocPrint(a, "numeric-ctrl-min-set-{s}", .{label}));
+        try expected.append(a, try std.fmt.allocPrint(a, "numeric-ctrl-max-set-{s}", .{label}));
+    }
+    try expected.append(a, "numeric-ctrl-min-clear-zero");
+    try expected.append(a, "numeric-ctrl-max-clear-zero");
+    try expected.append(a, "numeric-ctrl-min-clear-neg-zero");
+    try expected.append(a, "numeric-ctrl-max-clear-neg-zero");
+    try expected.append(a, "numeric-ctrl-min-clear-finite-nonzero");
+    try expected.append(a, "numeric-ctrl-max-clear-finite-nonzero");
+    try expected.append(a, "numeric-ctrl-min-clear-nan");
+    try expected.append(a, "numeric-ctrl-max-clear-nan");
+    try expected.append(a, "numeric-pacm-key-nan-reader");
+    try expected.append(a, "numeric-pacm-ctrl-value-pos-inf-reader");
+    try expected.append(a, "numeric-pacm-ctrl-min-neg-inf-reader");
+    try expected.append(a, "numeric-pacm-ctrl-max-nan-reader");
+    try expected.append(a, "numeric-coherence-key-one-sided-nan");
+    try expected.append(a, "numeric-coherence-ctrl-value-one-sided-pos-inf");
+
+    try t.expectEqual(expected.items.len, report.names.len);
+    for (expected.items) |name| {
+        var hits: usize = 0;
+        for (report.names) |actual| {
+            if (std.mem.eql(u8, name, actual)) hits += 1;
+        }
+        if (hits != 1) {
+            std.debug.print("numeric matrix inventory: {s} executed {d} times\n", .{ name, hits });
+            return error.NumericMatrixInventory;
+        }
+    }
+    const summary = try std.fmt.allocPrint(a, "numeric: {d} named cells executed", .{expected.items.len});
+    try t.expect(std.mem.indexOf(u8, out, summary) != null);
 }
 
 const HOST_TARGETS = [_]pacer.Compile.Target{

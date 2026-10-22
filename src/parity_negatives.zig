@@ -1,11 +1,15 @@
 //! Production `prt_load` negative suite — binary03 T6a, extended by B2a
-//! (compact payloads, `'PACM'` structural/coherence, registry identity).
+//! (compact payloads, `'PACM'` structural/coherence, registry identity)
+//! and B2b's pattern dry-run budget family.
 //!
 //! This is the bounded T6 negative-suite MECHANISM plus the container-
 //! envelope and record-domain refusals (T6a), the compact-payload family,
-//! and the B2a metadata/registry families. It deliberately does NOT cover
-//! the B2b workload (the numeric/finite matrix, the expr dry-run, the
-//! pattern dry-run budget). Those stay unclaimed.
+//! the B2a metadata/registry families, and the B2b load-time pattern
+//! dry-run budget family (status 1 reason 11, transactional). The B2b
+//! numeric/finite matrix is the parity test root's separate
+//! `numeric_domain_tests.zig` module — it characterizes KEYS/CTRL/pad/
+//! cross-check and evaluation-write cells through the same exports.
+//! Remaining T6/P3 work stays unclaimed.
 //!
 //! Every case calls the ACTUAL production loader through the std-only
 //! `NativeRt` C facade. There is no decoder, evaluator, materializer, or
@@ -50,6 +54,7 @@
 
 const std = @import("std");
 const pacer = @import("pacer");
+const sjon = @import("sjon");
 const NativeRt = @import("NativeRt.zig");
 
 const Pb = pacer.Pacb;
@@ -68,6 +73,14 @@ pub const Fixtures = struct {
     expr_keys: []const u8,
     full_small: []const u8,
     host_join: []const u8,
+    /// B2b dry-run splice base: a REAL CLI pack with one pattern track
+    /// carrying `(silence)` and a single payload record, so the budget
+    /// family can splice a hand-encoded body over it (test (p)'s class).
+    pattern_silence: []const u8,
+    /// B2b dry-run LIVE baseline: a pattern track plus the singular expr
+    /// that trips a nonzero failure counter at beat 1, against the empty
+    /// host join. Never spliced; the refusal must preserve this score.
+    pattern_live: []const u8,
 };
 
 /// The pack-time host join of the `host-join` fixture, spelled by the
@@ -110,6 +123,7 @@ const TRAK_REC_PAYLOAD_LEN_OFF: usize = 20;
 /// Frozen track-source ordinal (docs/binary-score.md; test-asserted
 /// against the source enum in src/root.zig).
 const SOURCE_EXPR: u8 = 1;
+const SOURCE_PATTERN: u8 = 3;
 /// Frozen compact-IR header field: the roots block's offset (u32) —
 /// the wire layout is `[magic "SJ1\n"][wire_version][flags][reserved]
 /// [pool_offset u32][roots_offset u32]` (SJON Binary.zig).
@@ -156,6 +170,7 @@ const SectionSpec = struct {
 
 const Snapshot = struct {
     meta: []const u8,
+    meta_ptr: [*]const u8,
     frame_seconds: []const u8,
     frame_ticks: []const u8,
     counter: u32,
@@ -223,6 +238,7 @@ const Family = struct {
             .pact = pact,
             .snap = .{
                 .meta = meta,
+                .meta_ptr = NativeRt.metaPtr(),
                 .frame_seconds = frame_seconds,
                 .frame_ticks = frame_ticks,
                 .counter = NativeRt.exprFailures(),
@@ -242,6 +258,10 @@ const Family = struct {
                 "negatives: {s}: expr-failure counter moved {d}->{d} across a refusal\n",
                 .{ name, self.snap.counter, NativeRt.exprFailures() },
             );
+            return error.StateMismatch;
+        }
+        if (NativeRt.metaPtr() != self.snap.meta_ptr) {
+            try self.out.print("negatives: {s}: meta pointer moved across a refusal\n", .{name});
             return error.StateMismatch;
         }
         if (NativeRt.metaLen() != self.snap.meta.len) {
@@ -313,7 +333,10 @@ const Family = struct {
         }
 
         try self.assertState(name);
+        // Restore BOTH input zones: the mutation owned the PACB zone, and
+        // the targets zone must still hold this family's canonical PACT.
         @memcpy(NativeRt.pacbPtr()[0..self.base.len], self.base);
+        @memcpy(NativeRt.targetsPtr()[0..self.pact.len], self.pact);
     }
 
     /// Require a status-2 bad call: the prior load-error word and every live
@@ -437,11 +460,75 @@ const Family = struct {
         @memcpy(NativeRt.pacbPtr()[0..self.base.len], self.base);
     }
 
+    /// Require a status-0 acceptance that also PLAYS: the boundary
+    /// control for the dry-run budget family must load and produce a
+    /// frame whose target write carries the pattern's authored value.
+    /// The acceptance swaps the live score; this runs LAST in its family.
+    fn expectAcceptedPlays(
+        self: *Family,
+        name: []const u8,
+        bytes: []const u8,
+        want_target: u16,
+        want_value: f32,
+    ) !void {
+        if (bytes.len > NativeRt.pacbCap()) {
+            try self.out.print("negatives: {s}: mutation exceeds the production PACB cap\n", .{name});
+            return error.NegativeMismatch;
+        }
+
+        @memcpy(NativeRt.pacbPtr()[0..bytes.len], bytes);
+        const status = NativeRt.load(@intCast(bytes.len), @intCast(self.pact.len));
+        if (status != 0) {
+            try self.out.print(
+                "negatives: {s}: expected status 0 (accepted), got status {d} reason {d}\n",
+                .{ name, status, NativeRt.loadError() },
+            );
+            return error.NegativeMismatch;
+        }
+        if (NativeRt.metaLen() != self.snap.meta.len or
+            !std.mem.eql(u8, self.snap.meta, NativeRt.metaPtr()[0..NativeRt.metaLen()]))
+        {
+            try self.out.print("negatives: {s}: accepted mutation changed the 'PACM' surface\n", .{name});
+            return error.StateMismatch;
+        }
+        const len = NativeRt.evalTicks(0);
+        if (len == 0) {
+            try self.out.print("negatives: {s}: accepted score produced no frame\n", .{name});
+            return error.StateMismatch;
+        }
+        const mem = try self.a.alignedAlloc(u8, .of(pacer.Writes.Entry), len);
+        @memcpy(mem, NativeRt.writesPtr()[0..len]);
+        const entries = pacer.Writes.decode(mem) orelse {
+            try self.out.print("negatives: {s}: accepted frame did not decode\n", .{name});
+            return error.StateMismatch;
+        };
+        var found = false;
+        for (entries) |entry| {
+            if (entry.target_id != want_target) continue;
+            found = true;
+            if (@as(u32, @bitCast(entry.value[0])) != @as(u32, @bitCast(want_value))) {
+                try self.out.print(
+                    "negatives: {s}: frame target {d} wrote 0x{x:0>8}, expected 0x{x:0>8}\n",
+                    .{ name, want_target, @as(u32, @bitCast(entry.value[0])), @as(u32, @bitCast(want_value)) },
+                );
+                return error.StateMismatch;
+            }
+            break;
+        }
+        if (!found) {
+            try self.out.print("negatives: {s}: frame carried no write for target {d}\n", .{ name, want_target });
+            return error.StateMismatch;
+        }
+
+        @memcpy(NativeRt.pacbPtr()[0..self.base.len], self.base);
+    }
+
     /// Establish a NONZERO expression-failure counter on the live score
     /// without changing the documented semantics (one eval at beat 1 of
-    /// host-join's singular flow expr), then make it the snapshot value
-    /// every later refusal must preserve. The frame snapshots are
-    /// untouched: later probes are deterministic re-evaluations.
+    /// the singular flow expr carried by `host-join` and `pattern-live`),
+    /// then make it the snapshot value every later refusal must preserve.
+    /// The frame snapshots are untouched: later probes are deterministic
+    /// re-evaluations.
     fn primeExprFailure(self: *Family) !void {
         // Re-assert the family's bpm nudge, then probe ONE BEAT at that
         // tempo (60/90 s): host-join's flow expr `(/ 1 (- beat 1))` hits
@@ -497,10 +584,11 @@ const Family = struct {
 const Counters = struct {
     /// Every expected-under-test production call: named mutations, bad
     /// calls, prefix attempts. The setup/probe loads stay uncounted, and
-    /// the enumeration is exact: the three step-1 fixture loads, the
-    /// three Family.begin baseline loads (one per family), and the
-    /// bad-call family's prior-reason re-eval — seven uncounted loads in
-    /// all, none of them attempts.
+    /// the enumeration is exact: six step-1 fixture loads, eight
+    /// `Family.begin` baseline loads (prefix, envelope, compact, PACM
+    /// structural, coherence, registry, dry-run refusal, dry-run
+    /// boundary), and the bad-call family's prior-reason re-eval —
+    /// fifteen uncounted loads in all, none of them attempts.
     attempted: usize = 0,
     named: usize = 0,
     bad_calls: usize = 0,
@@ -567,6 +655,25 @@ fn runPositive(
     counters.positive += 1;
     counters.attempted += 1;
     try fam.expectAccepted(name, bytes);
+    try fam.out.print("negatives: {s}: status 0 (accepted; {s})\n", .{ name, detail });
+}
+
+/// Count and require one status-0 acceptance that also plays the authored
+/// pattern value (B2b's within-budget boundary control).
+fn runPositivePlays(
+    fam: *Family,
+    names: *std.ArrayList([]const u8),
+    counters: *Counters,
+    name: []const u8,
+    bytes: []const u8,
+    detail: []const u8,
+    want_target: u16,
+    want_value: f32,
+) !void {
+    try addName(fam.a, names, name);
+    counters.positive += 1;
+    counters.attempted += 1;
+    try fam.expectAcceptedPlays(name, bytes, want_target, want_value);
     try fam.out.print("negatives: {s}: status 0 (accepted; {s})\n", .{ name, detail });
 }
 
@@ -709,7 +816,10 @@ fn replaceSection(
         }
     }
     if (!found) return error.FixtureMissingSection;
-    return rebuild(a, specs, 0);
+    // Preserve the producer's required-features word: B2b's pattern base
+    // carries bit0, and a rebuild must not silently clear a section kind
+    // the loader gates on.
+    return rebuild(a, specs, readU32(base, HEADER_FEATURES_OFF));
 }
 
 fn duplicate(base: []const u8, a: Allocator) ![]u8 {
@@ -1013,13 +1123,13 @@ fn easeRefsCountMismatch(a: Allocator, base: []const u8) ![]u8 {
 /// address of its genuine compact-IR payload inside the 'PAYL' region.
 const PayloadSpan = struct { rec: usize, off: u32, len: u32 };
 
-fn trakPayloadSpan(base: []const u8) !PayloadSpan {
+fn trakPayloadSpanBySource(base: []const u8, source: u8) !PayloadSpan {
     const section = findSection(base, .trak);
     const n = readU32(base, section.off);
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const rec = section.off + 4 + i * Pb.TRAK_REC_LEN;
-        if (base[rec + TRAK_REC_SOURCE_OFF] == SOURCE_EXPR) {
+        if (base[rec + TRAK_REC_SOURCE_OFF] == source) {
             return .{
                 .rec = rec,
                 .off = readU32(base, rec + TRAK_REC_PAYLOAD_OFF_OFF),
@@ -1028,6 +1138,10 @@ fn trakPayloadSpan(base: []const u8) !PayloadSpan {
         }
     }
     return error.FixtureMissingSection;
+}
+
+fn trakPayloadSpan(base: []const u8) !PayloadSpan {
+    return trakPayloadSpanBySource(base, SOURCE_EXPR);
 }
 
 /// Canonical container reassembly with several sections replaced at
@@ -1041,7 +1155,9 @@ fn reassemble(a: Allocator, base: []const u8, patches: []const SectionSpec) ![]u
             if (spec.kind == patch.kind) spec.payload = patch.payload;
         }
     }
-    return rebuild(a, specs, 0);
+    // A canonical rebuild keeps the producer's required-features word
+    // (B2b's pattern base carries bit0; existing T6a/B2a fixtures carry 0).
+    return rebuild(a, specs, readU32(base, HEADER_FEATURES_OFF));
 }
 
 fn removeSection(a: Allocator, base: []const u8, kind: Pb.SectionKind) ![]u8 {
@@ -1057,6 +1173,47 @@ fn removeSection(a: Allocator, base: []const u8, kind: Pb.SectionKind) ![]u8 {
     }
     if (!removed) return error.FixtureMissingSection;
     return rebuild(a, kept.items, 0);
+}
+
+/// Hand-encode one pattern body as compact SJON binary (parse-only — no
+/// compile dry-run, the test (p) producer class). The suite never uses a
+/// decoder: this is the producer side only.
+fn patternBody(a: Allocator, text: [:0]const u8) ![]u8 {
+    var tree = try sjon.parse(a, text);
+    defer tree.deinit();
+    const body = try sjon.Binary.toBinary(a, tree, sjon.Binary.ToBinaryOptions.forMode(.compact));
+    defer body.deinit();
+    return a.dupe(u8, body.data);
+}
+
+/// Replace the single pattern payload in a REAL CLI pack (`pattern-silence`)
+/// with a hand-encoded body, repairing `'PAYL'`'s byte_size, the one
+/// pattern `'TRAK'` span, and the canonical directory. This is test (p)'s
+/// `splicePayloadRecord` class, reduced to the one-payload base the B2b
+/// fixture carries; no production packer is weakened.
+fn splicePatternBody(a: Allocator, base: []const u8, new_body: []const u8) ![]u8 {
+    const payl = findSection(base, .payl);
+    const span = try trakPayloadSpanBySource(base, SOURCE_PATTERN);
+    if (span.off != 0 or span.len != readU32(base, payl.off)) {
+        return error.FixtureInvalid;
+    }
+
+    const trak = findSection(base, .trak);
+    const trak_out = try a.dupe(u8, sectionPayload(base, .trak));
+    putU32(
+        trak_out,
+        span.rec - @as(usize, trak.off) + TRAK_REC_PAYLOAD_LEN_OFF,
+        @intCast(new_body.len),
+    );
+
+    const payl_out = try a.alloc(u8, 4 + new_body.len);
+    putU32(payl_out, 0, @intCast(new_body.len));
+    @memcpy(payl_out[4..], new_body);
+
+    return reassemble(a, base, &.{
+        .{ .kind = .payl, .payload = payl_out },
+        .{ .kind = .trak, .payload = trak_out },
+    });
 }
 
 /// The payload's own header lie: the roots block's varint count. A
@@ -1618,6 +1775,8 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         .{ .name = "expr-keys", .bytes = fixtures.expr_keys, .pact = pact },
         .{ .name = "full-small", .bytes = fixtures.full_small, .pact = pact },
         .{ .name = "host-join", .bytes = fixtures.host_join, .pact = join_pact },
+        .{ .name = "pattern-silence", .bytes = fixtures.pattern_silence, .pact = pact },
+        .{ .name = "pattern-live", .bytes = fixtures.pattern_live, .pact = pact },
     };
     for (fixture_list) |fx| {
         NativeRt.reset();
@@ -1639,8 +1798,15 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         }
     }
     try out.print(
-        "negatives: full fixtures 4/4 status 0 (keys-only {d} B, expr-keys {d} B, full-small {d} B, host-join {d} B)\n",
-        .{ fixtures.keys_only.len, fixtures.expr_keys.len, fixtures.full_small.len, fixtures.host_join.len },
+        "negatives: full fixtures 6/6 status 0 (keys-only {d} B, expr-keys {d} B, full-small {d} B, host-join {d} B, pattern-silence {d} B, pattern-live {d} B)\n",
+        .{
+            fixtures.keys_only.len,
+            fixtures.expr_keys.len,
+            fixtures.full_small.len,
+            fixtures.host_join.len,
+            fixtures.pattern_silence.len,
+            fixtures.pattern_live.len,
+        },
     );
 
     // 2. Every proper prefix of the actual small fixture.
@@ -1870,6 +2036,56 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         );
     }
 
+    // 8. Pattern dry-run budget family (B2b) — test (p)'s producer class
+    //    lifted into the counted suite. The over-budget body
+    //    `(fast 8000 (pure 1))` is hand-encoded and spliced over the
+    //    committed `pattern-silence` pack (compile refuses the same text,
+    //    so the packer cannot produce it). The live baseline is
+    //    `pattern-live` (the host-join singular expr shape) so the
+    //    transactional pin includes a NONZERO expr-failure counter. The
+    //    within-budget boundary `(fast 10 (pure 1))` must load AND play:
+    //    the trip is the 1 MiB dry-run budget, not pattern complexity.
+    {
+        try addName(a, &names, "pattern-dry-run");
+        counters.family_labels += 1; // a family label, never an attempt
+
+        const budget_blob = try splicePatternBody(
+            a,
+            fixtures.pattern_silence,
+            try patternBody(a, "(fast 8000 (pure 1))"),
+        );
+        var fam = try Family.begin(a, out, fixtures.pattern_live, pact);
+        defer fam.end();
+        try fam.primeExprFailure();
+        try runNamed(
+            &fam,
+            &names,
+            &counters,
+            "pattern-dry-run-budget",
+            budget_blob,
+            11,
+        );
+    }
+    {
+        const boundary_blob = try splicePatternBody(
+            a,
+            fixtures.pattern_silence,
+            try patternBody(a, "(fast 10 (pure 1))"),
+        );
+        var fam = try Family.begin(a, out, fixtures.pattern_silence, pact);
+        defer fam.end();
+        try runPositivePlays(
+            &fam,
+            &names,
+            &counters,
+            "pattern-dry-run-boundary",
+            boundary_blob,
+            "within the 1 MiB dry-run budget; loads and plays (fast 10)",
+            0,
+            1.0,
+        );
+    }
+
     // 4. Status-2 bad calls: a prior status-1 reason must survive.
     {
         var fam = try Family.begin(a, out, fixtures.full_small, pact);
@@ -1933,7 +2149,7 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
     }
 
     try out.print(
-        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (B2b numeric/dry-run remains excluded)\n",
+        "negatives: partition {d} named + {d} bad-call + {d} prefix + {d} positive = {d} attempted; {d} names = {d} mutation name(s) + {d} bad-call name(s) + {d} positive name(s) + {d} family label(s) (B2b numeric matrix + pattern dry-run family landed; T6/P3 remain open)\n",
         .{
             counters.named,
             counters.bad_calls,
@@ -1955,7 +2171,7 @@ pub fn run(gpa: Allocator, out: *Io.Writer, fixtures: Fixtures) !void {
         .{},
     );
     try out.print(
-        "negatives: exact status/reason and transactional preservation PASS; B2b numeric/dry-run and T6/P3 remain open\n",
+        "negatives: exact status/reason and transactional preservation PASS; B2b numeric matrix and pattern dry-run landed; T6/P3 remain open\n",
         .{},
     );
 }

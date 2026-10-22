@@ -1,0 +1,17 @@
+; pattern-live — the B2b dry-run family's LIVE baseline: a pattern track
+; plus the singular expression that trips a nonzero expr-failure counter at
+; beat 1 (the host-join shape), all against the empty host join so it can
+; sit beside the pattern-silence splice base. The committed
+; pattern-live.pacb beside this file is the REAL CLI's own output;
+; regenerate with
+;   zig build run -- pack tools/testdata/pacb/pattern-live.score.sjon \
+;     --out tools/testdata/pacb/pattern-live.pacb
+(target :name radius :arity 1 :registry 0)
+(target :name flow :arity 1 :registry 0)
+
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(track :target radius :pattern (silence))
+
+(track :target flow
+  :expr (/ 1 (- beat 1)))
