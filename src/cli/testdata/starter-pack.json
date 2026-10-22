@@ -3,9 +3,7 @@
   "command":"pack",
   "source":{"path":"examples/starter.score.sjon","bytes":3385},
   "ok":true,
-  "counts":{"errors":1,"warnings":0},
-  "diagnostics":[
-    {"producer":"pacer","severity":"err","code":"pack_patterns_unsupported","code_id":32,"message":"pack: :pattern tracks are not packable in v1 (pattern query env pending the SJON owner decision) — the track is refused, never silently packed","span":{"start":2226,"end":2273,"line":49,"col":1,"end_line":49,"end_col":48},"text":"(track :target spark :pattern (euclid 3 8 0.9))"}
-  ],
-  "pack":null
+  "counts":{"errors":0,"warnings":0},
+  "diagnostics":[],
+  "pack":{"out":".agent/control/tmp/starter-pack.pacb","bytes":14719,"sections":11,"targets":{"host":8,"declared":0},"pacm_bytes":7130}
 }

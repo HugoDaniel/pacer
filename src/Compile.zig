@@ -209,9 +209,14 @@ pub const Code = enum(u16) {
     /// core-only binary schema cannot evaluate it identically (plan 01
     /// T3.2; the head and its span ride the diagnostic).
     pack_user_expr_unsupported,
-    /// Pack preflight: a `:pattern` track cannot be packed in v1 —
-    /// the pattern query env is pending the SJON owner's decision
-    /// (interim refusal, lifted by plan 02 P4; never silently packed).
+    /// Pack preflight, interim v1: a `:pattern` track could not be
+    /// packed — the pattern query env was pending the SJON owner's
+    /// decision. LIFTED 2026-10-22 (plan 06 A3+A4; the SJON ask30/M4
+    /// pattern env was delivered and adopted): `pacer pack` accepts
+    /// clean `:pattern` tracks and emits their compact IR. The variant
+    /// stays as a frozen, UNEMITTED wire reserve at ordinal 32 — no
+    /// path emits it, and it is never removed or reordered (the
+    /// reason-7 precedent, `src/rt_entry.zig`).
     pack_patterns_unsupported,
     /// Pack preflight: a v1 binary resource cap exceeded — per-payload
     /// bytes, total `'PAYL'` bytes, or the global explicit-trigger
@@ -1743,6 +1748,18 @@ fn readNumber(tree: *const Ast.Tree, idx: NodeIndex) ?f64 {
         .number_u64 => @floatFromInt(tree.numberU64Of(idx)),
         else => null,
     };
+}
+
+test "pack_patterns_unsupported is a frozen unemitted reserve (ordinal 32)" {
+    // A3+A4 (2026-10-22) lifted the interim refusal: a clean `:pattern`
+    // track packs, and no path emits this code any more. The variant
+    // itself stays — same ordinal, never removed or reordered — because
+    // the `Compile.Code` u16 space is a wire-stable surface (it rides
+    // `'PACD'` and the corpus prints codes as ordinals). The acceptance
+    // side of "unemitted" is pinned by PacbEncode's flipped pattern
+    // tests (a clean pattern preflight reports NOTHING) and by the
+    // parity runner (clean pattern cases pack and replay).
+    try t.expectEqual(@as(u16, 32), @intFromEnum(Code.pack_patterns_unsupported));
 }
 
 // ---------------------------------------------------------------------------

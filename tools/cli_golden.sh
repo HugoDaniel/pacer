@@ -121,11 +121,12 @@ corpus/diag-controls/doc.sjon
 tint:3
 --json"
 
-# A pack REFUSAL: starter's :pattern track cannot pack in v1 — the
-# envelope stays complete, `pack` rides as null, and the refusal is an
-# ordinary pacer diagnostic in score coordinates. The --out under
-# .agent/control/tmp is never written: a refusal lands nothing.
-run_case starter-pack 1 "pack
+# A pack SUCCESS: since A3+A4 (2026-10-22) lifted the interim refusal,
+# starter's :pattern track packs — the envelope carries the real written
+# blob (sections, sizes, target counts) and the exit is 0. The --out
+# under .agent/control/tmp IS written by this case; the file itself is
+# scratch (the golden pins the envelope, not the blob).
+run_case starter-pack 0 "pack
 $STARTER
 --out
 .agent/control/tmp/starter-pack.pacb"

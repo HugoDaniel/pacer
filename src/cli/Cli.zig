@@ -558,10 +558,13 @@ test "pack: an over-long target name is a usage error, not a codec assert" {
     try t.expect(std.mem.indexOf(u8, c2.err.written(), "r.json") != null);
 }
 
-test "pack: a :pattern track is refused by preflight, never silently packed" {
+test "pack: a :pattern track packs (refusal lifted 2026-10-22, A3+A4)" {
     // The same registry `cli_golden.sh` pins for starter (its STARTER
-    // argv), so this refusal and the starter golden move together.
-    // Starter compiles CLEAN against it — the refusal is pack's own.
+    // argv), so this pack and the starter golden move together. Starter
+    // compiles CLEAN against it and — since the interim refusal was
+    // lifted (plan 06 A3+A4; the SJON pattern query env delivered and
+    // adopted) — packs: the `:pattern` track rides the PACB as compact
+    // IR, `required_features` bit0 set, exactly like `corpus` replay.
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const out = try std.fmt.allocPrintSentinel(t.allocator, ".zig-cache/tmp/{s}/starter.pacb", .{tmp.sub_path}, 0);
@@ -578,19 +581,21 @@ test "pack: a :pattern track is refused by preflight, never silently packed" {
         "click:4:1", "--out",           out,
     });
     defer c.deinit();
-    try t.expectEqual(Exit.errors, c.code);
-    // The refusal rides the envelope as an ordinary pacer diagnostic —
-    // and the documented contract holds exactly: the COMPILE succeeded,
-    // so `ok` stays true even while pack refuses (docs/cli.md). The
-    // wire spelling has no space after the colon (the doc's `"ok": true`
-    // is prose); this pin is exact on purpose.
+    try t.expectEqual(Exit.ok, c.code);
+    // The COMPILE succeeded, so `ok` stays true (docs/cli.md); the pack
+    // is no longer null — the envelope carries the real written blob.
+    // The wire spelling has no space after the colon; this pin is exact
+    // on purpose.
     try t.expect(std.mem.indexOf(u8, c.out.written(), "\"ok\":true") != null);
-    try t.expect(std.mem.indexOf(u8, c.out.written(), "pack_patterns_unsupported") != null);
-    try t.expect(std.mem.indexOf(u8, c.out.written(), "\"pack\":null") != null);
-    // The human rendering names the score's own words, on stderr.
-    try t.expect(std.mem.indexOf(u8, c.err.written(), ":pattern tracks") != null);
-    // A refused pack lands nothing — no blob, no temp left behind.
-    try t.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "starter.pacb", .{}));
+    try t.expect(std.mem.indexOf(u8, c.out.written(), "pack_patterns_unsupported") == null);
+    try t.expect(std.mem.indexOf(u8, c.out.written(), "\"pack\":{") != null);
+    try t.expect(std.mem.indexOf(u8, c.out.written(), "\"sections\":") != null);
+    // The blob exists — a successful pack lands real bytes.
+    const blob = try tmp.dir.readFileAlloc(std.testing.io, "starter.pacb", t.allocator, .limited(8 << 20));
+    defer t.allocator.free(blob);
+    try t.expect(blob.len > 4);
+    try t.expectEqualSlices(u8, "PACB", blob[0..4]);
+    // No temp file left behind — the write is atomic.
     try t.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "starter.pacb.tmp", .{}));
 }
 

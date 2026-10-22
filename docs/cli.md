@@ -188,11 +188,13 @@ at a time is the verb's scope; no uniqueness is claimed.
 
 v1 refuses to pack some scores rather than pack them wrongly, as ordinary
 diagnostics in score coordinates (exit 1, `pack` rides as `null`, nothing
-written): a `:pattern` track (`pack_patterns_unsupported` — the pattern query
-env is pending an upstream decision) and expr heads the core-only binary
-schema cannot resolve identically. A score that compiles clean reports
-`"ok": true` even when pack refuses it — the compile succeeded; the
-refusal is in `diagnostics` and the exit code.
+written): expr heads the core-only binary schema cannot resolve
+identically. A score that compiles clean reports `"ok": true` even when
+pack refuses it — the compile succeeded; the refusal is in `diagnostics`
+and the exit code. (Dated status, 2026-10-22, plan 06 A3+A4: `:pattern`
+tracks pack — the interim `pack_patterns_unsupported` refusal is lifted,
+the SJON pattern query env having been delivered (ask30/M4) and adopted;
+the code itself stays as a frozen, unemitted wire reserve at ordinal 32.)
 
 ## Channels and exit codes
 

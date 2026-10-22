@@ -1,0 +1,33 @@
+; all-features times: segment 0 (120 bpm, 0.5 s/beat), the 240 bpm
+; boundary exactly at 4.0 s, segment 1 (0.25 s/beat), the 6.0 s loop
+; wrap back to beat 0, and wrapped segment-0 replay — plus a live
+; control pass (depth pinned to max, sway 0.5 → 0.75) and a release.
+; The `:emit [beat bpm]` lanes resolve against the host join BY EXACT
+; NAME (transport-emit's rule), so the join names them literally first.
+(target beat  :registry 0)  ; emitted lane only
+(target bpm   :registry 0)  ; emitted lane only
+(target radius :registry 0)
+(target blend :registry 0)
+(target pat   :registry 0)
+(target grid  :registry 0)
+(target hit   :registry 0)
+(target level :registry 0)
+(target sweep :registry 0)
+(target dropx :registry 0)
+(target pulse :registry 0 :ncomp 4)
+(times
+  "0000000000000000" ; 0.00 s — origin: beat 0, bpm 120, intro open
+  "3FF0000000000000" ; 1.00 s — beat 2:  mid segment 0
+  "4010000000000000" ; 4.00 s — ON the 2bar boundary: beat 8, bpm 240, drop opens
+  "4014000000000000" ; 5.00 s — beat 12 in segment 1
+  "4018000000000000" ; 6.00 s — the 4bar loop wraps to beat 0 (tick 0)
+)
+(set-control :index 0 :value ["3F800000" "00000000" "00000000" "00000000"]) ; depth → 1.0, at the max rail
+(set-control :index 1 :value ["3F400000" "00000000" "00000000" "00000000"]) ; sway 0.5 → 0.75
+(times
+  "401A000000000000" ; 6.50 s — wrapped replay, beat 1: blend 4.0, pat 1.5
+)
+(clear-control :index 0) ; depth released to its document 0.25
+(times
+  "401C000000000000" ; 7.00 s — wrapped, beat 2: blend back to 1.0
+)

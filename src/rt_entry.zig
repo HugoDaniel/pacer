@@ -1534,23 +1534,18 @@ test "rt_entry (m): a flag-on EMPTY count-0 tail loads through the production lo
 }
 
 // ---------------------------------------------------------------------------
-// Group 3 — A2: the binary pattern runtime path (real loader, producer
-// bypass fixtures)
+// Group 3 — A2: the binary pattern runtime path (real loader fixtures;
+// the A2-era producer bypass became the real preflight+encode producer
+// when A3+A4 lifted the pack refusal, 2026-10-22)
 // ---------------------------------------------------------------------------
 
-/// A2 test-side producer bypass: `Compile` + `PacbEncode.encode` WITHOUT
-/// `preflight`. This is NOT a production backdoor: `pacer pack` (the CLI
-/// verb) runs preflight and still refuses `:pattern` scores — that
-/// interim refusal is A3+A4's scope and stays pinned by ParityTests.
-/// `encode`'s T3.1 uniform path already serializes pattern payloads
-/// structurally (it sets `required_features` bit0 and emits each
-/// `:pattern` body as a compact single-root payload), so the fixtures
-/// below reach the REAL runtime path (decode → registry gate →
-/// materialize → dry-run → eval) independently of pack support, exactly
-/// the "lower-level producer bypass" fixture class A2 calls for. The
-/// encode precondition (v1-legal sizes, the caps preflight measures) is
-/// upheld by fixture scale — every payload is orders of magnitude under
-/// the per-payload and 'PAYL' caps.
+/// A3+A4 test-side producer (2026-10-22): the REAL production route —
+/// `Compile` + `PacbEncode.preflight` (must report NOTHING for a clean
+/// fixture) + `PacbEncode.encode`, the same route the `pacer pack` verb
+/// takes. The interim `:pattern` refusal is lifted (plan 06 A3+A4), so
+/// `:pattern` fixtures ride the ordinary producer — there is no bypass
+/// any more. A fixture that trips preflight is a fixture bug and fails
+/// here, loudly.
 fn packPatternForTest(a: std.mem.Allocator, src: [:0]const u8, targets: anytype) ![]u8 {
     const Compile = @import("Compile.zig");
     const PacbEncode = @import("PacbEncode.zig");
@@ -1558,6 +1553,9 @@ fn packPatternForTest(a: std.mem.Allocator, src: [:0]const u8, targets: anytype)
     var r = try Compile.compile(a, test_support.schema(), src, targets);
     defer r.deinit();
     if (!r.ok()) return error.FixtureCompileFailed;
+    var refused: std.ArrayList(Compile.Diagnostic) = .empty;
+    try PacbEncode.preflight(a, &r, &refused);
+    if (refused.items.len != 0) return error.FixturePreflightRefused;
     return PacbEncode.encode(a, &r, targets);
 }
 
@@ -2031,6 +2029,190 @@ test "rt_entry (t): live control valid→invalid→valid through the loaded patt
     try t.expectEqual(@as(f32, 4), c4[0].value[0]);
     try t.expectEqual(@as(u32, 1), prt_exprFailures());
     try t.expectEqual(@as(u64, 1), oracle.evaluator.expr_failures);
+}
+
+// ---------------------------------------------------------------------------
+// Group 5 — A3+A4 review carry (2026-10-22): the reload-carry gap. The
+// (p)/(q) anchors prove a REFUSED pattern load keeps an old NON-pattern
+// score alive; neither one exercises the seam the review named: a live
+// PATTERN score being swapped successfully (new state, no leaks) or
+// preserved under refusal (frames/controls/meta byte-identical). Both
+// tests here drive the REAL production entries end to end, from the REAL
+// producer (preflight + encode — pack accepts patterns since A3+A4).
+// ---------------------------------------------------------------------------
+
+/// The pattern-carrying live score: a real env pattern (a document
+/// control read through the env's parent scope), an expr `bpm` probe
+/// (the live tempo observable per frame) and a per-frame counting hole
+/// (past beat 1, `(* beat 1e308)` overflows to a non-finite value — the
+/// write omits and `expr_failures` increments; the compile-time dry-run
+/// stays clean because the guarded branch is finite at its dry tick),
+/// so a state or counter leak across a reload seam is visible in the
+/// frames themselves.
+const CARRY_PATTERN_SRC: [:0]const u8 =
+    \\(target :name bpmout :arity 1 :registry 0)
+    \\(target :name hole :arity 1 :registry 0)
+    \\(transport :bpm 120 :meter [4 4])
+    \\(control :id sway :value 0.5)
+    \\(track :target radius :pattern (pure (* sway 2)))
+    \\(track :target bpmout :expr bpm)
+    \\(track :target hole :expr (if (< beat 2) 0 (* beat 1e308)))
+;
+
+/// The bpm probe score the successful swap lands on: no pattern, no
+/// control — its single frame names the LIVE bpm, so the old score's
+/// bpm nudge, pattern frames and held control must all be gone.
+const CARRY_PROBE_SRC: [:0]const u8 =
+    \\(target :name radius :arity 1 :registry 0)
+    \\(transport :bpm 120 :meter [4 4])
+    \\(track :target radius :expr bpm)
+;
+
+/// The pattern score's host join (radius only; bpmout is declared-only
+/// and appends at compile).
+const CARRY_TARGETS = [_]PactCodec.Target{
+    .{ .name = "radius", .ncomp = 1, .registry = 0 },
+};
+
+test "rt_entry (u): successful reload FROM a live pattern score — the new score is live, nothing of the old leaks" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const pacb_p = try packPatternForTest(a, CARRY_PATTERN_SRC, &CARRY_TARGETS);
+    const pacb_s = try packPatternForTest(a, CARRY_PROBE_SRC, &.{});
+
+    // 1. Load the pattern score through the real loader; establish live
+    //    state: held control, bpm nudge, frames, a nonzero counter.
+    try t.expectEqual(@as(u32, 0), loadPacBT(pacb_p, &CARRY_TARGETS));
+    defer unload();
+
+    {
+        const f = rtFrame(0);
+        try t.expectEqual(@as(usize, 3), f.len); // hole is finite at beat 0
+        try t.expectEqual(@as(f32, 1.0), f[0].value[0]); // sway 0.5 × 2
+        try t.expectEqual(@as(f32, 120.0), f[1].value[0]); // the bpm probe
+        try t.expectEqual(@as(f32, 0.0), f[2].value[0]); // the guarded hole
+    }
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+    // Past beat 1 the hole overflows: the write omits, the counter counts.
+    try t.expectEqual(@as(u32, 0), prt_setControl(0, 0.75, 0, 0, 0));
+    try t.expectEqual(@as(u32, 0), prt_setBpm(90.0));
+    {
+        const f = rtFrame(0);
+        try t.expectEqual(@as(f32, 1.5), f[0].value[0]); // 0.75 × 2, held
+        try t.expectEqual(@as(f32, 90.0), f[1].value[0]); // nudged tempo
+    }
+    _ = rtFrame(540541); // beat 3: the hole overflows f64, omitted, counted
+    const counter_before = prt_exprFailures();
+    try t.expect(counter_before >= 1);
+    const meta_p = try a.dupe(u8, prt_metaPtr()[0..prt_metaLen()]);
+    const n_p = prt_evalTicks(0);
+    const frame_p = try a.dupe(u8, writes_buffer[0..n_p]);
+
+    // 2. THE SWAP: a successful reload of a different, clean score
+    //    while the pattern score is live. The prepared pattern state,
+    //    the held control and the bpm nudge all belong to the old
+    //    evaluator — none may survive into the new one.
+    try t.expectEqual(@as(u32, 0), loadPacB(pacb_s));
+
+    // Meta is the NEW score's own 'PACM', not the pattern score's.
+    const dir = Pacb.parseDirectory(pacb_s, null) catch unreachable;
+    const sec = dir.find(.pacm).?;
+    try t.expectEqualSlices(u8, pacb_s[sec.off..][0..sec.len], prt_metaPtr()[0..prt_metaLen()]);
+    // The two scores' metas are different blobs; serving the old one
+    // here would be a stale-meta leak.
+    try t.expect(!std.mem.eql(u8, meta_p, prt_metaPtr()[0..prt_metaLen()]));
+
+    // The frame is the NEW score's: one write, the FRESH transport bpm
+    // (120 — the nudge to 90 died with the old evaluator; a leaked
+    // pattern frame would carry radius/sway writes instead).
+    const n_s = prt_evalTicks(0);
+    try t.expect(n_s > 0);
+    const zone_s: []align(4) const u8 = @alignCast(writes_buffer[0..n_s]);
+    const f = Writes.decode(zone_s) orelse unreachable;
+    try t.expectEqual(@as(usize, 1), f.len);
+    try t.expectEqual(@as(f32, 120.0), f[0].value[0]);
+    try t.expect(n_s != n_p or !std.mem.eql(u8, frame_p, writes_buffer[0..n_s]));
+
+    // The counter is the NEW evaluator's: zero (a leak of the old
+    // per-frame hole count is visible here).
+    try t.expectEqual(@as(u32, 0), prt_exprFailures());
+
+    // The held control did not survive: the new score has no control,
+    // so index 0 must be REJECTED, not silently bound to the old slot.
+    try t.expectEqual(@as(u32, 1), prt_setControl(0, 1, 0, 0, 0));
+
+    // 3. And the seam carries INTO the pattern score again: a fresh
+    //    load rebuilds it from its document state (sway 0.5, bpm 120),
+    //    never from the mutated values an earlier session held.
+    try t.expectEqual(@as(u32, 0), loadPacBT(pacb_p, &CARRY_TARGETS));
+    const f2 = rtFrame(0);
+    try t.expectEqual(@as(usize, 3), f2.len);
+    try t.expectEqual(@as(f32, 1.0), f2[0].value[0]); // doc 0.5 × 2
+    try t.expectEqual(@as(f32, 120.0), f2[1].value[0]); // doc bpm
+    try t.expectEqual(@as(f32, 0.0), f2[2].value[0]); // guarded hole
+    _ = rtFrame(540541); // beat 3: the fresh hole counts exactly once
+    try t.expectEqual(@as(u32, 1), prt_exprFailures()); // fresh counter
+}
+
+test "rt_entry (v): refused and malformed reloads while a pattern score is live preserve its frames, controls and meta" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const pacb_p = try packPatternForTest(a, CARRY_PATTERN_SRC, &CARRY_TARGETS);
+
+    try t.expectEqual(@as(u32, 0), loadPacBT(pacb_p, &CARRY_TARGETS));
+    defer unload();
+
+    // Live, non-default state: held control, bpm nudge, frames, counter.
+    try t.expectEqual(@as(u32, 0), prt_setControl(0, 0.75, 0, 0, 0));
+    try t.expectEqual(@as(u32, 0), prt_setBpm(90.0));
+    _ = rtFrame(540541); // beat 3: the hole's omission, counted
+    const counter = prt_exprFailures();
+    try t.expect(counter >= 1);
+    const meta_p = try a.dupe(u8, prt_metaPtr()[0..prt_metaLen()]);
+    const n_p = prt_evalTicks(0);
+    const frame_p = try a.dupe(u8, writes_buffer[0..n_p]);
+
+    // (1) MALFORMED reload (status 1, reason 1): the corrupt bytes take
+    //     over the ZONE — the live score owns its bytes, so the pattern
+    //     still evaluates its own frame afterwards.
+    const corrupt = try a.dupe(u8, pacb_p);
+    std.mem.writeInt(u32, corrupt[4..8], 99, .little);
+    try t.expectEqual(@as(u32, 1), loadPacB(corrupt));
+    try t.expectEqual(@as(u32, 1), prt_loadError()); // unsupported_version
+    try t.expectEqualSlices(u8, meta_p, prt_metaPtr()[0..prt_metaLen()]);
+    const n1 = prt_evalTicks(0);
+    try t.expectEqual(n_p, n1);
+    try t.expectEqualSlices(u8, frame_p, writes_buffer[0..n1]);
+    try t.expectEqual(@as(f32, 1.5), rtFrame(0)[0].value[0]); // held control
+    try t.expectEqual(@as(f32, 90.0), rtFrame(0)[1].value[0]); // nudged bpm
+    try t.expectEqual(counter, prt_exprFailures());
+
+    // (2) REFUSED reload (status 1, reason 9): a valid blob against a
+    //     mismatching host join — the transactional refusal keeps the
+    //     pattern score and every piece of runtime state.
+    const mutated = [_]PactCodec.Target{.{ .name = "radius", .ncomp = 2, .registry = 0 }};
+    try t.expectEqual(@as(u32, 1), loadPacBT(pacb_p, &mutated));
+    try t.expectEqual(@as(u32, 9), prt_loadError()); // registry_mismatch
+    try t.expectEqualSlices(u8, meta_p, prt_metaPtr()[0..prt_metaLen()]);
+    const n2 = prt_evalTicks(0);
+    try t.expectEqual(n_p, n2);
+    try t.expectEqualSlices(u8, frame_p, writes_buffer[0..n2]);
+    try t.expectEqual(counter, prt_exprFailures());
+
+    // (3) BAD CALL (status 2): validated before anything is touched — a
+    //     true no-op, including the reason word.
+    const reason_before = prt_loadError();
+    try t.expectEqual(@as(u32, 2), prt_load(prt_pacbCap() + 1, 0));
+    try t.expectEqual(reason_before, prt_loadError());
+    try t.expectEqualSlices(u8, meta_p, prt_metaPtr()[0..prt_metaLen()]);
+    const n3 = prt_evalTicks(0);
+    try t.expectEqual(n_p, n3);
+    try t.expectEqualSlices(u8, frame_p, writes_buffer[0..n3]);
+    try t.expectEqual(counter, prt_exprFailures());
 }
 
 test "rt_entry: ownership — repeated reloads, eval-after-reload, no stale pointers" {

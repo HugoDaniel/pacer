@@ -288,7 +288,7 @@ test "pack guard: a diagnostic score is compile_refused without any pack API" {
     }
 }
 
-test "pack guard: a clean pattern reaches preflight and is never encoded" {
+test "pack guard: a clean pattern packs and replays through the real loader" {
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -300,19 +300,38 @@ test "pack guard: a clean pattern reaches preflight and is never encoded" {
     defer driver.deinit();
     try t.expect(driver.result.ok());
 
+    // A3+A4: the clean pattern case packs through the SAME orchestration a
+    // non-pattern case uses — preflight accepts (nothing to refuse), encode
+    // emits — and the bytes replay through the real production loader.
     const packed_case = try runner.packCase(a, &driver.result, &HOST_TARGETS);
-    switch (packed_case) {
-        .preflight_refused => |diags| {
-            try t.expect(diags.len > 0);
-            var refused = false;
-            for (diags) |d| {
-                if (d.code == .pack_patterns_unsupported) refused = true;
-            }
-            try t.expect(refused);
-        },
-        .encoded => return error.TestUnexpectedResult, // encode must never run
+    const pacb = switch (packed_case) {
+        .encoded => |bytes| bytes,
+        .preflight_refused => return error.TestUnexpectedResult, // preflight must accept
         .compile_refused => return error.TestUnexpectedResult,
-    }
+    };
+    try t.expect(pacb.len > 0);
+
+    defer NativeRt.reset();
+    NativeRt.reset();
+
+    const pact_buf = try a.alloc(u8, pacer.PactCodec.targetsEncodedLen(&HOST_TARGETS));
+    const pact = try pacer.PactCodec.encodeTargets(&HOST_TARGETS, pact_buf);
+    try t.expect(pact.len <= NativeRt.targetsCap());
+    try t.expect(pacb.len <= NativeRt.pacbCap());
+    @memcpy(NativeRt.pacbPtr()[0..pacb.len], pacb);
+    @memcpy(NativeRt.targetsPtr()[0..pact.len], pact);
+    try t.expectEqual(@as(u32, 0), NativeRt.load(@intCast(pacb.len), @intCast(pact.len)));
+
+    // The loaded score IS the pattern score: the binary frame at tick 0 is
+    // byte-identical to the text arm's (slot 0 of cycle 0 writes 0.1).
+    const evaluator = &driver.evaluator.?;
+    const want_entries = try evaluator.evalSeconds(0);
+    var want_buf: [pacer.Writes.encodedLen(pacer.EvalCore.MAX_FRAME_ENTRIES)]u8 = undefined;
+    const want = try pacer.Writes.encode(want_entries, &want_buf);
+    const got_len = NativeRt.evalSeconds(0);
+    try t.expectEqual(want.len, got_len);
+    try t.expectEqualSlices(u8, want, NativeRt.writesPtr()[0..got_len]);
+
     try t.expectEqual(
         runner.Class.clean_pattern,
         try runner.classify(true, true, true),

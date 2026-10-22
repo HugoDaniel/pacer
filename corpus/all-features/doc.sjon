@@ -1,0 +1,49 @@
+; all-features: the synthetic P4 acceptance anchor — every write source
+; in ONE score: keyed + expr + pattern tracks, document controls, named
+; scenes, a piecewise tempo map, built-in emit lanes and triggers, under
+; a looping transport. Authored TEXT-FIRST (plan 06 A3+A4, 2026-10-22):
+; the golden is the native corpus authority's own render, reviewed as a
+; diff BEFORE the binary replay. 120 bpm 4/4 doubling to 240 at 2bar:
+; segment 0 is 4.0 s of wall clock (beats 0-8), segment 1 is 2.0 s
+; (beats 8-16), the 4bar loop is 6.0 s total; 6.0 s wraps to beat 0.
+(transport :bpm 120 :meter [4 4] :dur 4bar :end loop :emit [beat bpm])
+(tempo :at 2bar :bpm 240)
+
+; controls: a targeted slider with rails (depth feeds the blend expr)
+; and an env-only knob (sway) the pattern reads through the env's
+; parent scope — the pattern-env acceptance shape, inside the anchor.
+(control :id depth :target blend :min 0 :max 1 :value 0.25)
+(control :id sway :value 0.5)
+
+; scenes: intro covers beats 0-8 (all of segment 0), drop covers beats
+; 8-16 (segment 1); level is driven by whichever window is open, sweep
+; reads the scene-phase expr, dropx reads scene-beat, and the scened
+; trigger fires on the bar grid inside the window.
+(scene :name intro :at 0b :dur 8b
+  (track :target level
+    (key :at 0b :value 0.1)
+    (key :at 8b :value 0.7))
+  (track :target sweep :expr scene-phase)
+  (trigger :target pulse :every 1b))
+
+(scene :name drop :at 2bar :dur 8b
+  (track :target level
+    (key :at 0b :value 0.9)
+    (key :at 8b :value 0.3))
+  (track :target dropx :expr scene-beat))
+
+; global tracks: keyed radius, expr blend (the control multiply), the
+; env pattern (beat-tracking across the wrap through a control) and the
+; euclid grid (hap selection: onsets in slots 0/3/6 of the bar).
+(track :target radius
+  (key :at 0b :value 0.0)
+  (key :at 6b :value 1.2 :ease out-cubic))
+
+(track :target blend :expr (* depth 4))
+
+(track :target pat :pattern (pure (* sway 2)))
+
+(track :target grid :pattern (euclid 3 8 0.9))
+
+; explicit trigger: three bangs into the ncomp-1 hit target.
+(trigger :target hit :at [1b 5b 9b])

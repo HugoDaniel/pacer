@@ -28,16 +28,28 @@
 //!
 //!   - clean non-pattern: pack, then replay the production loader and compare
 //!     complete `'PACM'`/`'PACW'` bytes plus control/BPM/registration results;
-//!   - clean pattern: explicit `skipped-pending-SJON`; the existing
-//!     `pack_patterns_unsupported` preflight refusal is asserted and `encode`
-//!     is never called;
+//!   - clean pattern: the SAME binary leg (A3+A4, 2026-10-22 — the interim
+//!     pack refusal is lifted, so the case packs and replays exactly like a
+//!     non-pattern case); the class keeps its own counter so a future
+//!     genuine pending has a place to land without inflating the
+//!     non-pattern count;
 //!   - load-failing: the compile refusal is asserted; `preflight`/`encode`
 //!     are never called, so no `'PACB'` bytes can be produced.
 //!
+//! The plan 06 A3+A4 acceptance inventory — `examples-starter`,
+//! `pattern-basic`, `pattern-env`, `rig-studio` — must each have actually
+//! executed the binary leg: the run records the names whose binary replay
+//! COMPLETED and fails if any required name is missing, independently of
+//! the counters (a mutated-away case fails the gate even while the total
+//! stays above its floor). Counts are derived from execution counters at
+//! run time, never hardcoded; `skipped` is a real counter that no current
+//! path increments and must print 0.
+//!
 //! Any missing/malformed golden, unknown golden/harness record, compile/golden
-//! disagreement, unexplained non-pattern preflight refusal, or unclassified
-//! case fails that case; totals are calculated from the results. A skip is
-//! reported separately and is never counted as a pass.
+//! disagreement, unexplained non-pattern preflight refusal, unclassified
+//! case, or a missing required pattern replay fails that case/the run;
+//! totals are calculated from the results. A skip is reported separately
+//! and is never counted as a pass.
 //!
 //! ## Replay
 //!
@@ -111,8 +123,8 @@ const MAX_WRITES: usize = pacer.Writes.encodedLen(pacer.EvalCore.MAX_FRAME_ENTRI
 
 /// One committed outcome of pack orchestration. `compile_refused` and
 /// `preflight_refused` are deliberately separate: a diagnostic fixture is
-/// refused BEFORE either asserted pack API is called, while a pattern fixture
-/// may reach `preflight` but never `encode`.
+/// refused BEFORE either asserted pack API is called, while any clean
+/// fixture (pattern or not) must pass `preflight` and reach `encode`.
 pub const Packed = union(enum) {
     compile_refused,
     preflight_refused: []const pacer.Compile.Diagnostic,
@@ -138,13 +150,35 @@ pub const ClassifyError = error{CompileGoldenDisagreement};
 /// different surface and must never be mistaken for the initial outcome.
 pub const Golden = struct { initial_ok: bool };
 
-/// Measured totals. `clean_pattern` is a SKIP count, never a pass count.
+/// Measured totals. Every counter is incremented at the point its event
+/// actually executed — a clean-pattern case is a REPLAY count (the binary
+/// leg), and `skipped` is the retained skip class: no current path
+/// increments it, so the summary must print 0.
 pub const Totals = struct {
     total: usize = 0,
     clean_non_pattern: usize = 0,
     clean_pattern: usize = 0,
     load_failing: usize = 0,
+    /// Cases whose binary replay COMPLETED (the actual execution
+    /// counter behind the plan 06 "28 clean replayed" identity).
+    binary_replayed: usize = 0,
+    /// The retained skip class. A future genuine pending increments
+    /// this and prints here; today nothing can, and the run requires 0.
+    skipped: usize = 0,
     failed: usize = 0,
+};
+
+/// The plan 06 A3+A4 acceptance inventory: these four named corpus cases
+/// MUST execute the binary leg. The names pin the reviewed fixtures (the
+/// classification itself stays algorithmic — track tags, never names);
+/// this inventory is the independent identity the mutation check
+/// attacks: a mutated-away required case fails the gate even while the
+/// overall counts stay above their floors.
+const REQUIRED_PATTERN_REPLAYS = [_][]const u8{
+    "examples-starter",
+    "pattern-basic",
+    "pattern-env",
+    "rig-studio",
 };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -264,19 +298,57 @@ pub fn runAll(gpa: Allocator, io: Io, out: *Io.Writer, root: []const u8) !Totals
     }
 
     var totals: Totals = .{};
+    // The names whose binary replay COMPLETED. Case names live in the
+    // names arena; this set borrows the same strings.
+    var replayed: std.StringHashMapUnmanaged(void) = .empty;
+    defer replayed.deinit(gpa);
     for (names.items) |name| {
         totals.total += 1;
-        runCase(gpa, io, out, &schema, &hs, root, name, &totals) catch |err| switch (err) {
+        runCase(gpa, io, out, &schema, &hs, root, name, &totals, &replayed) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => totals.failed += 1,
         };
     }
 
+    // The class partition must account for EVERY case exactly once —
+    // a counting bug is a failed run, never a silently wrong summary.
+    if (totals.total != totals.clean_non_pattern + totals.clean_pattern + totals.load_failing + totals.skipped) {
+        try out.print(
+            "parity: class partition does not sum: total {d} != clean non-pattern {d} + clean pattern {d} + load-failing {d} + skipped {d}\n",
+            .{ totals.total, totals.clean_non_pattern, totals.clean_pattern, totals.load_failing, totals.skipped },
+        );
+        return error.ClassPartitionMismatch;
+    }
+    // The binary-replay counter must equal the clean classes it serves.
+    if (totals.binary_replayed != totals.clean_non_pattern + totals.clean_pattern) {
+        try out.print(
+            "parity: binary-replay counter {d} != clean replayed {d} (non-pattern {d} + pattern {d})\n",
+            .{ totals.binary_replayed, totals.clean_non_pattern + totals.clean_pattern, totals.clean_non_pattern, totals.clean_pattern },
+        );
+        return error.BinaryReplayCountMismatch;
+    }
+
     try out.print("parity: {d} case(s), {d} failed\n", .{ totals.total, totals.failed });
     try out.print(
-        "parity: clean non-pattern {d} replayed; clean pattern {d} skipped-pending-SJON (not passes); load-failing {d} compile-refused (no PACB)\n",
-        .{ totals.clean_non_pattern, totals.clean_pattern, totals.load_failing },
+        "parity: clean non-pattern {d} replayed; clean pattern {d} replayed (binary leg); load-failing {d} compile-refused (no PACB); skipped {d}\n",
+        .{ totals.clean_non_pattern, totals.clean_pattern, totals.load_failing, totals.skipped },
     );
+
+    // The A3+A4 acceptance inventory, asserted independently of the
+    // counters: each required case must have actually completed its
+    // binary replay.
+    var missing: usize = 0;
+    for (REQUIRED_PATTERN_REPLAYS) |req| {
+        if (!replayed.contains(req)) {
+            try out.print("parity: REQUIRED pattern replay did not execute the binary leg: {s}\n", .{req});
+            missing += 1;
+        }
+    }
+    try out.print(
+        "parity: required pattern acceptance inventory {d}/{d} executed the binary leg\n",
+        .{ REQUIRED_PATTERN_REPLAYS.len - missing, REQUIRED_PATTERN_REPLAYS.len },
+    );
+    if (missing != 0) return error.RequiredPatternReplayMissing;
     return totals;
 }
 
@@ -289,6 +361,7 @@ fn runCase(
     root: []const u8,
     name: []const u8,
     totals: *Totals,
+    replayed: *std.StringHashMapUnmanaged(void),
 ) !void {
     errdefer |err| out.print("parity: {s}: FAIL ({s})\n", .{ name, @errorName(err) }) catch {};
 
@@ -353,37 +426,18 @@ fn runCase(
                 },
             }
         },
-        .clean_pattern => {
-            // The class is known and explicitly reported; skips are not
-            // passes. `preflight` must carry the existing refusal, and encode
-            // must never run.
-            switch (try packCase(a, &driver.result, host_targets)) {
-                .preflight_refused => |diags| {
-                    var refused_pattern = false;
-                    for (diags) |d| {
-                        if (d.code == .pack_patterns_unsupported) refused_pattern = true;
-                    }
-                    if (!refused_pattern) {
-                        try out.print("parity: {s}: clean pattern case lacks pack_patterns_unsupported\n", .{name});
-                        return error.PatternRefusalMissing;
-                    }
-                    try out.print("parity: {s}: skipped-pending-SJON (pattern tracks await the SJON owner decision)\n", .{name});
-                },
-                .encoded => |bytes| {
-                    try out.print("parity: {s}: clean pattern case encoded {d} PACB byte(s)\n", .{ name, bytes.len });
-                    return error.PatternEncoded;
-                },
-                .compile_refused => return error.PatternCompileRefusedAfterOk,
-            }
-        },
-        .clean_non_pattern => {
+        // A3+A4 (2026-10-22): both clean classes take the SAME binary
+        // leg — pack, real loader, full cross-path replay. The classes
+        // keep separate counters so the summary tells the truth about
+        // how many replays are pattern-carrying.
+        .clean_non_pattern, .clean_pattern => {
             switch (try packCase(a, &driver.result, host_targets)) {
                 .encoded => |pacb| {
                     try replayCase(a, out, name, &driver, harness, host_targets, doc, pacb);
                 },
                 .compile_refused => return error.CompileRefusedAfterOk,
                 .preflight_refused => |diags| {
-                    try out.print("parity: {s}: unexplained non-pattern preflight refusal ({d} diagnostic(s))\n", .{ name, diags.len });
+                    try out.print("parity: {s}: unexplained clean-case preflight refusal ({d} diagnostic(s))\n", .{ name, diags.len });
                     for (diags) |d| {
                         try out.print("  {s}: {s}\n", .{ @tagName(d.code), d.message });
                     }
@@ -396,15 +450,24 @@ fn runCase(
     // Count the case only after its whole class action succeeded. A skip is
     // counted separately and never as a pass.
     switch (class) {
-        .clean_non_pattern => totals.clean_non_pattern += 1,
-        .clean_pattern => totals.clean_pattern += 1,
+        .clean_non_pattern => {
+            totals.clean_non_pattern += 1;
+            totals.binary_replayed += 1;
+            try replayed.put(gpa, name, {});
+        },
+        .clean_pattern => {
+            totals.clean_pattern += 1;
+            totals.binary_replayed += 1;
+            try replayed.put(gpa, name, {});
+        },
         .load_failing => totals.load_failing += 1,
     }
 }
 
 /// Total classifier: golden outcome must agree with the actual compile; a
-/// clean case is a pattern skip iff its compiled table carries a `.pattern`
-/// source tag. No source substring, no case name.
+/// clean case is pattern-carrying iff its compiled table has a `.pattern`
+/// source tag. No source substring, no case name. Both clean classes take
+/// the same binary leg; the class only separates the summary's counters.
 pub fn classify(golden_ok: bool, compile_ok: bool, has_pattern: bool) ClassifyError!Class {
     if (golden_ok != compile_ok) return error.CompileGoldenDisagreement;
     if (!compile_ok) return .load_failing;

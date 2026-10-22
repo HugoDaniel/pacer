@@ -303,22 +303,20 @@ with score-coordinate spans:
 
 * `pack_user_expr_unsupported` — the **core-expr capability boundary**
   (below).
-* `pack_patterns_unsupported` — any `:pattern` track. **Interim and
-  explicit prototype state**: the binary runtime's leaf schema stays
-  core-only until the SJON pattern-query handoff resolves (plan 02 P4),
-  so pattern tracks refuse loudly rather than silently losing behavior.
-  *(Dated record clarification, 2026-10-20 — record accuracy only, no
-  behavior change: the SJON side of that handoff is delivered and
-  review-closed. Ask29's env-carrying binary query is independently
-  review READY with SJON review-closure docs at `bad5cddf`, and the
-  tree-trailing `BinaryCursor` drain is closed at SJON `8b8a38ee`; see
-  `plans/binary/handoff-binary-pattern-query-env.md`. What remains is
-  **pacer consumer adoption** — wiring the delivered query into
-  pack/runtime — not an SJON owner decision. Until that adoption lands
-  the text above stands: `pacer pack` still refuses `:pattern` scores,
-  and pattern tracks remain unimplemented on the binary runtime.)*
+* `pack_patterns_unsupported` — **no path emits this any more** (dated
+  status, 2026-10-22, plan 06 A3+A4): the SJON pattern query env was
+  delivered (ask30/M4) and adopted into pacer's binary runtime, and the
+  interim refusal is lifted — `pacer pack` accepts clean `:pattern`
+  tracks, emits their compact IR, and the runtime loads and replays
+  them. The variant stays as a frozen, UNEMITTED wire reserve at
+  ordinal 32 — never removed or reordered (the reason-7 precedent).
+  *(Historical, 2026-10-20: this bullet then described the prototype
+  state in which `pacer pack` still refused `:pattern` scores pending
+  pacer consumer adoption of the delivered SJON query; that state ended
+  with the adoption (57d6373) and this lift.)*
 * `pack_cap_exceeded` — a measured cap breach (payload bytes, `'PAYL'`
-  total, global explicit-tick count).
+  total, global explicit-tick count; measured across expr AND pattern
+  payloads since the 2026-10-22 lift).
 
 Before writing, the verb re-decodes its own output and checks
 field-for-field table equivalence plus embedded-PACM byte-equality

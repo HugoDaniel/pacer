@@ -513,15 +513,15 @@ fn addPayloadStructuralDiag(
     prof: PayloadProfile,
 ) Error!void {
     if (prof.nodes > sjon.Binary.MAX_NODES) {
-        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload holds {d} nodes, over the {d}-node v1 compact-IR cap", .{ prof.nodes, sjon.Binary.MAX_NODES });
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: payload holds {d} nodes, over the {d}-node v1 compact-IR cap", .{ prof.nodes, sjon.Binary.MAX_NODES });
     } else if (prof.pool_entries > sjon.Binary.MAX_STRING_POOL_ENTRIES) {
-        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload holds {d} distinct strings, over the {d}-entry v1 compact-IR pool cap", .{ prof.pool_entries, sjon.Binary.MAX_STRING_POOL_ENTRIES });
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: payload holds {d} distinct strings, over the {d}-entry v1 compact-IR pool cap", .{ prof.pool_entries, sjon.Binary.MAX_STRING_POOL_ENTRIES });
     } else if (prof.max_string > sjon.Binary.MAX_STRING_LENGTH) {
-        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload's longest string is {d} bytes, over the {d}-byte v1 compact-IR cap", .{ prof.max_string, sjon.Binary.MAX_STRING_LENGTH });
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: payload's longest string is {d} bytes, over the {d}-byte v1 compact-IR cap", .{ prof.max_string, sjon.Binary.MAX_STRING_LENGTH });
     } else if (prof.depth > sjon.Binary.MAX_TREE_DEPTH) {
-        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload nests {d} deep, over the {d}-level v1 compact-IR cap", .{ prof.depth, sjon.Binary.MAX_TREE_DEPTH });
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: payload nests {d} deep, over the {d}-level v1 compact-IR cap", .{ prof.depth, sjon.Binary.MAX_TREE_DEPTH });
     } else {
-        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: expr payload exceeds a v1 compact-IR writer cap (measured: {d} nodes, {d} distinct strings, longest {d} bytes, depth {d})", .{ prof.nodes, prof.pool_entries, prof.max_string, prof.depth });
+        return addDiag(gpa, diags, .pack_cap_exceeded, span, "pack: payload exceeds a v1 compact-IR writer cap (measured: {d} nodes, {d} distinct strings, longest {d} bytes, depth {d})", .{ prof.nodes, prof.pool_entries, prof.max_string, prof.depth });
     }
 }
 
@@ -1003,10 +1003,9 @@ pub fn preflight(
     var seen: std.StringHashMapUnmanaged(void) = .empty;
     defer seen.deinit(a);
 
-    for (table.tracks, 0..) |track, track_index| switch (track.source) {
+    for (table.tracks) |track| switch (track.source) {
         .expr => |node| {
-            const heads = try collectCallHeads(a, tree, node);
-            for (heads) |h| {
+            const heads = try collectCallHeads(a, tree, node);            for (heads) |h| {
                 const key = std.fmt.allocPrint(a, "{s}\x00{s}", .{
                     h.namespace orelse "", h.head,
                 }) catch return error.OutOfMemory;
@@ -1041,24 +1040,17 @@ pub fn preflight(
                 }
             }
         },
-        .keys, .trigger => {},
-        // Interim v1 refusal (02 P4 lifts it when the SJON owner
-        // decides the pattern query env): a `:pattern` track is never
-        // silently packed — loud, spanned, at the track form itself.
-        // `encode` still serializes the payload underneath (T3.1's
-        // uniform path); this gate is what keeps it out of v1 packs.
-        .pattern => {
-            const span = table.track_spans[track_index];
-            try addDiag(
-                gpa,
-                diags,
-                .pack_patterns_unsupported,
-                span,
-                "pack: :pattern tracks are not packable in v1 (pattern query env pending the SJON owner decision) — the track is refused, never silently packed",
-                .{},
-            );
-        },
+        // Only expr heads carry the core-only-schema risk; keys, trigger
+        // schedules and (since A3+A4) pattern tracks carry no head to
+        // classify. The pattern refusal that stood here is lifted —
+        // see the measure loop below.
+        .keys, .trigger, .pattern => {},
     };
+    // (The interim `.pattern` refusal that stood here was lifted
+    // 2026-10-22, plan 06 A3+A4: the SJON pattern query env is delivered
+    // and adopted, so a clean `:pattern` track is packable like any
+    // other. `pack_patterns_unsupported` stays as the frozen, unemitted
+    // wire reserve — Compile.zig's ordinal pin and reserve test.)
 
     // Payload caps, MEASURED on the very bytes `encode` would emit —
     // a subtree's compact IR can exceed its source text (risk E2), so
@@ -1068,10 +1060,11 @@ pub fn preflight(
     // a preflight-clean pack can never emit what decode would refuse.
     // Loud measured refusals only — never a truncated subset.
     //
-    // `.pattern` tracks are NOT measured: the interim refusal above
-    // already refused the score (v1 never packs them), and measuring a
-    // refused payload could only trip the compact-IR writer's own
-    // structural caps for a pack that will not happen.
+    // Both VALUE payload kinds are measured: an `:expr` track's compact
+    // IR and a `:pattern` track's compact IR obey the SAME per-payload
+    // and 'PAYL' caps the decoder enforces (A3+A4, 2026-10-22 — the
+    // measure loop no longer skips patterns; the refusal that justified
+    // skipping is gone).
     //
     // The writer's structural rejections (node/pool/string/depth —
     // final-review L1) surface through the bounded `encodePayload` and
@@ -1082,7 +1075,7 @@ pub fn preflight(
     var payload_total: usize = 0;
     var total_over_span: ?sjon.Ast.Span = null;
     for (table.tracks) |track| switch (track.source) {
-        .expr => |node| {
+        .expr, .pattern => |node| {
             const bytes = encodePayload(a, tree, node) catch |e| switch (e) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => {
@@ -1099,7 +1092,7 @@ pub fn preflight(
                     diags,
                     .pack_cap_exceeded,
                     tree.spanOf(node),
-                    "pack: expr payload is {d} bytes, over the {d}-byte v1 per-payload cap",
+                    "pack: payload is {d} bytes, over the {d}-byte v1 per-payload cap",
                     .{ bytes.len, Pacb.MAX_PAYLOAD_BYTES },
                 );
             }
@@ -1108,8 +1101,7 @@ pub fn preflight(
                 total_over_span = tree.spanOf(node);
             }
         },
-        // Refused above; measuring is moot (and could trip the writer).
-        .pattern, .keys, .trigger => {},
+        .keys, .trigger => {},
     };
     if (payload_total > Pacb.MAX_PAYL_BYTES) {
         try addDiag(
@@ -1440,7 +1432,7 @@ test "PacbEncode: preflight dedupes one refusal per distinct head at its first s
     try t.expectEqual(@as(u32, @intCast(u_at + 1)), diags.items[0].span.start);
 }
 
-test "PacbEncode: preflight refuses :pattern tracks loudly (interim, spanned)" {
+test "PacbEncode: preflight accepts a :pattern track (refusal lifted, spanned pin retired)" {
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -1453,20 +1445,17 @@ test "PacbEncode: preflight refuses :pattern tracks loudly (interim, spanned)" {
     );
     defer r.deinit();
 
+    // A3+A4 (2026-10-22): the interim v1 refusal is GONE. A clean pattern
+    // track is packable — preflight reports NOTHING, exactly like the
+    // expr/keys/trigger arms, and `encode` emits the payload for the
+    // decoder to accept (T3.1's uniform path, FEATURE_PATTERN_TRACKS).
     var diags: std.ArrayList(Compile.Diagnostic) = .empty;
     try preflight(a, &r, &diags);
-    try t.expectEqual(@as(usize, 1), diags.items.len);
-    const d = diags.items[0];
-    try t.expect(d.code == .pack_patterns_unsupported);
-    try t.expect(std.mem.indexOf(u8, d.message, ":pattern") != null);
-    // The span is the track form's own span (score coordinates).
-    const track_span = r.table.?.track_spans[0];
-    try t.expectEqual(track_span.start, d.span.start);
-    try t.expectEqual(track_span.end, d.span.end);
+    for (diags.items) |d| {
+        std.debug.print("unexpected preflight diagnostic: {s}: {s}\n", .{ @tagName(d.code), d.message });
+    }
+    try t.expectEqual(@as(usize, 0), diags.items.len);
 
-    // T3.1's serialize-only state is unchanged underneath the refusal:
-    // `encode` still emits the payload and the decoder still accepts
-    // it — the interim KNOWN design (02 P4 lifts the refusal).
     const bytes = try encode(a, &r, &.{});
     defer a.free(bytes);
     var decoded = try Pacb.decode(a, bytes, null);
@@ -1603,11 +1592,12 @@ test "PacbEncode: preflight refuses a payload over the string-pool cap with the 
     try t.expectEqual(expr_span.start, d.span.start);
 }
 
-// A :pattern track is ALREADY refused (interim v1) before the payload
-// measure — measuring its bytes can only trip the writer caps for a
-// score that is already refused, so the measure loop skips it: exactly
-// the pattern-refusal diagnostic, no crash, no structural diagnostic.
-test "PacbEncode: preflight skips measuring an over-cap :pattern payload it already refused" {
+// A3+A4 (2026-10-22): the interim refusal is lifted — a :pattern payload
+// is an ordinary payload. The SAME measured caps apply: a payload the
+// compact-IR writer rejects (here the 65536-entry string pool) surfaces
+// as the ordinary measured `pack_cap_exceeded` diagnostic, never a
+// pattern-specific refusal and never a crash.
+test "PacbEncode: preflight measures an over-cap :pattern payload under the same caps" {
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -1630,9 +1620,84 @@ test "PacbEncode: preflight skips measuring an over-cap :pattern payload it alre
 
     var diags: std.ArrayList(Compile.Diagnostic) = .empty;
     try preflight(a, &r, &diags);
+    // Exactly the writer-cap refusal the same-shaped expr payload gets:
+    // one measured structural diagnostic, no pattern-specific class.
     try t.expectEqual(@as(usize, 1), diags.items.len);
     const d = diags.items[0];
-    try t.expect(d.code == .pack_patterns_unsupported);
+    try t.expect(d.code == .pack_cap_exceeded);
+    // The measured count and the frozen cap both ride the message.
+    try t.expect(std.mem.indexOf(u8, d.message, "65536") != null);
+    // The span is the :pattern subtree's own span (score coordinates) —
+    // the same coordinate contract the expr arm pins.
+    const pat_span = r.validated.result.tree.spanOf(r.table.?.tracks[0].source.pattern);
+    try t.expectEqual(pat_span.start, d.span.start);
+}
+
+// A3+A4 (2026-10-22): :pattern payload bytes COUNT toward the 'PAYL'
+// total — the decoder's 4 MiB region cap does not distinguish payload
+// kinds, so the preflight measure must not either. Fixture calibration
+// (observed, 2026-10-22): SJON's pattern query bounds a legal flat
+// literal vector near its 1024 live-frame ceiling (`DepthExceeded`
+// past ~1024 haps), so one legal pattern payload stays small; the
+// region cap is reached through MULTIPLICITY over many legal pattern
+// tracks, with expr bulk holding the total just under the cap so only
+// the pattern bytes can cross it.
+test "PacbEncode: preflight refuses total 'PAYL' overage reached through :pattern payloads" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // 36 expr tracks (each an untaken-branch vector packing to ~108 KB —
+    // the compact IR spends ~9 bytes per literal, so 12000 literals land
+    // there — under the per-payload cap) sum just UNDER the 4 MiB region
+    // cap; 80 legal pattern tracks (~900 literals each, ~7 KB each)
+    // push the measured total past it. Only the pattern bytes can
+    // cross — exactly one measured-total refusal.
+    var targets: std.ArrayList(Compile.Target) = .empty;
+    defer targets.deinit(a);
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(a);
+    try buf.appendSlice(a, transport_line);
+    var expr_total: usize = 0;
+    var pattern_total: usize = 0;
+    for (0..36) |i| {
+        const name = try std.fmt.allocPrint(a, "exg{d}", .{i});
+        try targets.append(a, .{ .name = name, .ncomp = 1 });
+        try buf.appendSlice(a, try std.fmt.allocPrint(a, "(track :target {s} :expr (if false [", .{name}));
+        for (0..12000) |_| try buf.appendSlice(a, "1 ");
+        try buf.appendSlice(a, "] 2))\n");
+    }
+    for (0..80) |i| {
+        const name = try std.fmt.allocPrint(a, "ptg{d}", .{i});
+        try targets.append(a, .{ .name = name, .ncomp = 1 });
+        try buf.appendSlice(a, try std.fmt.allocPrint(a, "(track :target {s} :pattern [", .{name}));
+        for (0..900) |_| try buf.appendSlice(a, "1 ");
+        try buf.appendSlice(a, "])\n");
+    }
+    const src = try buf.toOwnedSliceSentinel(a, 0);
+
+    var r = try compileForTest(a, src, targets.items);
+    defer r.deinit();
+    for (r.table.?.tracks) |track| switch (track.source) {
+        .expr => |node| expr_total += (try encodePayload(a, &r.validated.result.tree, node)).len,
+        .pattern => |node| pattern_total += (try encodePayload(a, &r.validated.result.tree, node)).len,
+        else => {},
+    };
+    // Fixture honesty: the expr bulk alone stays under the region cap;
+    // only the pattern bytes cross it.
+    try t.expect(expr_total < Pacb.MAX_PAYL_BYTES);
+    try t.expect(expr_total + pattern_total > Pacb.MAX_PAYL_BYTES);
+
+    var diags: std.ArrayList(Compile.Diagnostic) = .empty;
+    try preflight(a, &r, &diags);
+    // One measured-total refusal — the same shape the expr arm pins —
+    // never a per-track pattern refusal, never a truncated subset.
+    try t.expectEqual(@as(usize, 1), diags.items.len);
+    const d = diags.items[0];
+    try t.expect(d.code == .pack_cap_exceeded);
+    const measured = try std.fmt.allocPrint(a, "{d}", .{expr_total + pattern_total});
+    try t.expect(std.mem.indexOf(u8, d.message, measured) != null);
+    try t.expect(std.mem.indexOf(u8, d.message, "total") != null);
 }
 
 /// Build a one-trigger score with `n` explicit `:at` positions
