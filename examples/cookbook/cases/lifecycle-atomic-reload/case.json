@@ -26,6 +26,5 @@
       {"name": "blend", "arity": 1},
       {"name": "ghost", "arity": 1}
     ]
-  },
-  "expect": {}
+  }
 }

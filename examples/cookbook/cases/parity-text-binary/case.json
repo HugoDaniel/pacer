@@ -22,6 +22,5 @@
   ],
   "times": [0, 0.75, 1.5, 3, 5.5, 7.5],
   "derives": [],
-  "loadMode": "both",
-  "expect": {}
+  "loadMode": "both"
 }

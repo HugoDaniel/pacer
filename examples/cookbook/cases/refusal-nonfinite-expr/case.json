@@ -15,6 +15,5 @@
     {"name": "inf", "arity": 1}
   ],
   "times": [],
-  "derives": [],
-  "expect": {}
+  "derives": []
 }

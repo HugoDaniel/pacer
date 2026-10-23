@@ -17,6 +17,5 @@
     {"name": "seconds", "arity": 1}
   ],
   "times": [0, 0.5, 1, 2, 3],
-  "derives": [],
-  "expect": {}
+  "derives": []
 }

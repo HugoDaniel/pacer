@@ -15,6 +15,5 @@
     {"name": "gain", "arity": 1}
   ],
   "times": [0, 1],
-  "derives": [],
-  "expect": {}
+  "derives": []
 }

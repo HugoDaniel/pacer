@@ -17,6 +17,5 @@
     {"name": "lfo", "arity": 1}
   ],
   "times": [0, 1, 3, 3.5, 7],
-  "derives": [],
-  "expect": {}
+  "derives": []
 }

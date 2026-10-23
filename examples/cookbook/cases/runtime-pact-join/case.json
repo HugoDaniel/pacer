@@ -17,6 +17,5 @@
   ],
   "times": [0, 1, 2],
   "derives": [],
-  "loadMode": "binary",
-  "expect": {}
+  "loadMode": "binary"
 }

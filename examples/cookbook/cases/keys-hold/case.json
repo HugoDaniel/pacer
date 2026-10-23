@@ -11,6 +11,5 @@
   "score": "score.sjon",
   "registries": [{"name": "level", "arity": 1}],
   "times": [-1, 0, 1, 2, 5],
-  "derives": [],
-  "expect": {}
+  "derives": []
 }

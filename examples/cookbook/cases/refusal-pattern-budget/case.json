@@ -12,6 +12,5 @@
   "score": "score.sjon",
   "registries": [{"name": "radius", "arity": 1}],
   "times": [],
-  "derives": [],
-  "expect": {}
+  "derives": []
 }

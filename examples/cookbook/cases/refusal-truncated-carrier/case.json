@@ -13,6 +13,5 @@
   "registries": [{"name": "level", "arity": 1}],
   "times": [0, 0.5, 1],
   "derives": [{"kind": "truncate", "at": 40}],
-  "loadMode": "binary",
-  "expect": {}
+  "loadMode": "binary"
 }

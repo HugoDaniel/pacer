@@ -18,7 +18,7 @@ expectation disagree, the implementation is the oracle; do not hand-edit
 | `notes.md` | 4-6 sentences for a human: what happens and what confuses people |
 
 `case.json` carries the `id`, `title`, `aspect` tags, a `teaches` paragraph,
-`observe` bullets, `score`, `registries`, `times`, `derives` and `expect`.
+`observe` bullets, `score`, `registries`, `times` and `derives`.
 Any case directory is a concrete example.
 
 `registries` is the flat PACT order: entries are grouped by an optional
@@ -26,8 +26,17 @@ Any case directory is a concrete example.
 The flat index is the `target_id` space. `arity` is the target's lane count
 (1-4). `derives` currently supports only
 `{"kind":"truncate","at":N}`, which slices the case's own packed bytes; no
-binary blob is checked in. Optional `loadMode` is one of `text` (default),
-`binary`, `both`, `variants`, or `lifecycle`.
+binary blob is checked in.
+
+Optional `loadMode` is one of `text` (default), `binary`, `both`, `variants` or
+`lifecycle`. `variants` adds a `variants` array of `{name, registries}`
+alternative joins, each loaded against the same canonical carrier; the
+refusal cases use it to show a valid carrier under the wrong join. `lifecycle`
+adds a `{badScore, badRegistries}` payload whose `badScore` names an extra
+score file (`bad.sjon`) beside `score.sjon`: the runner packs it, offers it to
+the already-armed driver, then checks the old frame survives. Other refusal
+cases stage their invalid carrier with `derives` or a score that fails to
+compile.
 
 ## Score grammar as implemented
 The schema is the authority (`schema/pacer.sjon`); this is the working
@@ -83,12 +92,12 @@ Combinators:
 ```sjon
 (scene :name intro :at 0b :dur 6b
   (track :target level (key :at 0b :value 0.1) (key :at 6b :value 0.7))
-  (trigger :target pulse :every 1b))
+  (trigger :target pulse :every 1b)) ; schema-listed, not case-verified
 
 (control :id depth :type slider :target gain :min 0 :max 1 :value 0.25)
 (control :id pan :type xy :target pan-out :min [-1 -1] :max [1 1]
          :value [0.25 0.5])
-(control :id tint :type color :target tint-out :value [0.2 0.4 0.6])
+(control :id tint :type color :target tint-out :value [0.2 0.4 0.6]) ; schema-listed, not case-verified
 ```
 
 Scenes are half-open windows `[at, at+dur)`; child positions are
@@ -112,9 +121,10 @@ heads: `(sin x)`, `(cos x)`, `(tau)`, `(pi)`, `(min ...)`, `(max ...)`,
 `vec2`/`vec3`/`vec4` and `[a b c]` vector literals, comparisons, `and`/`or`,
 and `let`. The full closed vocabulary is SJON's core plugin.
 
-Pattern vocabulary: `(pure x)`, `(silence)`, `(stack ...)`, `(fast n p)`,
-`(slow n p)`, `(slowcat ...)`, `(cat ...)` (alias of slowcat), vectors as fastcat,
-bare atoms as pure, and `(euclid n k pat)`. One pattern cycle is one bar.
+Pattern vocabulary: `(pure x)`, `(fast n p)` and `(euclid n k pat)` are
+case-verified. Schema-listed, not case-verified: `(silence)`, `(stack ...)`,
+`(slow n p)`, `(slowcat ...)`/`(cat ...)` (alias of slowcat), vectors as
+fastcat, and bare atoms as pure. One pattern cycle is one bar.
 Inside a hap expression `cycle`, `tick` and `seed` are pattern-local (they
 shadow the frame env); everything else resolves through the parent scope.
 
@@ -173,8 +183,10 @@ shadow the frame env); everything else resolves through the parent scope.
 | `parity-text-binary` | text compile and packed runtime produce identical frames |
 | `runtime-pact-join` | runtime-only load over three registries with arities 3/1/2 |
 
-Aspect counts: keys 5, transport 2, expr 3, numeric 1, pattern 3, scenes 1,
-controls 1, triggers 1, lifecycle 1, refusal 5, meta 1, parity 1, runtime 1.
+Aspect tag counts, summed from each `case.json` `aspect` array (a case may
+carry more than one tag): keys 5, transport 4, expr 3, numeric 3, pattern 4,
+scenes 1, controls 2, triggers 1, lifecycle 1, refusal 6, meta 1, parity 1,
+runtime 1.
 
 ## How expected.json is produced
 `run.mjs` builds once, then for each case:
@@ -216,8 +228,9 @@ node examples/cookbook/run.mjs --no-build
 
 Exit 0 means every case matched (`N/N cases match`). `--update` rewrites only
 failing or new expectations and prints every changed line; a second run
-without `--update` must be a byte-for-byte no-op. `--json` prints one object
-per case.
+without `--update` must be a byte-for-byte no-op. `--json` prints one JSON
+array with one result per case, including the frame count (`frames`) and meta
+track count; the frame values themselves stay in `expected.json`.
 
 To add a case: make `cases/<id>/`, write `case.json`, `score.sjon` and
 `notes.md`, add the id to the table above, run `--update --case <id>`, read the

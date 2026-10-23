@@ -16,6 +16,5 @@
     {"name": "pan-out", "arity": 2}
   ],
   "times": [0, 1],
-  "derives": [],
-  "expect": {}
+  "derives": []
 }

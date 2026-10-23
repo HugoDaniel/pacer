@@ -16,6 +16,5 @@
     {"name": "glow", "arity": 1}
   ],
   "times": [0, 0.875, 3.5, 5.25],
-  "derives": [],
-  "expect": {}
+  "derives": []
 }
