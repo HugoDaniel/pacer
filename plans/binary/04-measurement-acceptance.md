@@ -203,3 +203,26 @@ _(created 2026-10-18; entries appended per phase)_
   `9736a41b…`, 189,506 / `4e2f2100…`). Evidence:
   `.agent/control/prod-four-c-fix-gates.log`,
   `.agent/control/prod-four-c-fix-report.md`.
+
+- 2026-10-23 — **Class (b) re-measured and cleared after the prepared expr-leaf
+  fix; Group D proceeded on the user's ruling.** (Append-only; this note
+  supersedes the class-(b)/D-stop verdict for the current implementation while
+  the two 2026-10-22 entries above stay verbatim as the historical escalation
+  and its correction.) The new enforced C4 run (100,000 frames,
+  100,000/100,000 frame hashes equal before write) gives Meridian-minimal text
+  467 ns / binary 434 ns (MAD 20/32, p95 514/496) and all-features text
+  2,118 ns / binary 2,061 ns (MAD 82/54, p95 2,474/2,412); keys-only is a
+  supplementary 94/102 ns. The same-session pre-fix baseline at `ff481a5`
+  (fresh local and global caches) was Meridian 441/733 and all-features
+  2,140/2,464, so the prepared leaf recovers **−299 ns (−40.8%)** and
+  **−403 ns (−16.4%)**. **Class (b) no longer fires on this plan's frozen
+  median ± MAD statistic.** The p50 intervals overlap, so parity is claimed,
+  not a disjoint win; the all-features p99 is **5,796 ns binary vs 4,075 ns
+  text** and is disclosed, outside the frozen statistic. Memory residuals:
+  binary cold peaks 1,680,332 B (Meridian, +3.5%) and 8,400,764 B
+  (all-features, +1.3%), warm exactly 2× cold, **0 frame allocations**; warm
+  binary load 82/113 µs (vs 81/109 committed; same-session baseline 70/106,
+  with text moving similarly). `pacer-rt.wasm` 189,321 B; `pacer.wasm`
+  668,296 B. The user's ruling — "optimise the expr leaf before D" — was
+  executed, and D proceeded after the re-acceptance recorded in
+  `06-production-delivery.md:1804`.

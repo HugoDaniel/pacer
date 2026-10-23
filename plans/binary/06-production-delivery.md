@@ -1825,3 +1825,54 @@ only; no code behaviour, wire, budget or threshold changed.
   frozen median ± MAD statistic, parity enforced**, and **Group D may start**.
   This section supersedes the earlier C6 numbers; it does not withdraw or
   erase the historical escalation, which remains on the record.
+
+## Group E executed — delivery closed — 2026-10-23 (append-only)
+
+Group D (the Animader compiler-free export graph) landed and was independently
+reviewed **READY** with LOW-only findings: D1 PACT alias reader
+`439d658`/`413d80a`; D2 vendor freshness `47db716`/`990fa3b`/`fca56ea`
+(producer-digest stale check; stale-but-compatible proof); D3 offline pack
+`79fc75c`/`9013b37`/`fa4d42c`/`51cee54` (real `pacer pack --targets-json`;
+`score.pacb` + `pacer-rt.wasm` in, `score.sjon` + `pacer.wasm` out; 13-module
+static bundle; zero dynamic imports); D4 `7030b20`/`22e4623` (release
+`pacer-rt-82`, tree `db8af97c…`, ZIP 2,123,012 B `de8e9b00…`, two
+byte-identical runs).
+
+Group E executed:
+
+- **E1 PASS — reproducibility.** Two pinned fresh-cache builds per shipped wasm,
+  byte-identical and equal to the shipped bytes: `pacer-rt.wasm` 189,321 B
+  `34fa25a7…`; `pacer.wasm` 668,296 B `5a6d5316…`; `animader.wasm` 1,175,831 B
+  `03f545be…`.
+- **E2 PASS — isolated serving.** A fresh parent-started server over the export
+  only; all nine manifest files 200; `/pacer.wasm` and `/assets/score.sjon`
+  404.
+- **E3 PASS with qualifiers — full-show QA.** 10 requests all 200 under `/`
+  plus one blob worker; zero `pacer.wasm`, `score.sjon` or `animader.wasm`;
+  READY corners (244,241,234), circle centre (71.5,431.5) r≈18; 36,104 ms to
+  `ended — 36.0 s`; background morphs not cuts; end hold 8 triangles + circle;
+  Stop terminal; injected fault `error — network`; console 0/0/0.
+- **E4 PASS WITH QUALIFIERS — design review.** All 12 checklist items; chrome
+  tokens, type, focus and letterbox verified live; `player.css` and `index.html`
+  byte-identical to Meridian; baseline traits labeled; no migration blocker.
+
+**Qualifiers (explicit, carried forward):**
+
+1. Real tab-hide unverified — the pause handler was simulated; a genuinely
+   hidden tab was not observed.
+2. PCM content unverified — the audio-master clock is verified, the sampled PCM
+   is not.
+3. Instrument/coverage — the desktop real-GPU Browser MCP was not connected;
+   captures are headless Chromium on a real AMD RDNA-1 adapter; mobile/WebKit
+   per-morph evidence is desktop-only, and the WebKit `page.reload()` crash
+   (2/2) is instrument-suspect and unverified against real Safari.
+4. End red mass 7,362 strict / 8,041 loose against the undocumented ~6,515
+   anchor — a method discrepancy, not a regression.
+
+**Final gates.** Animader `zig build verify`: 18/18 steps, 403/403 native,
+121/121 node, 0 skipped; demo 209/209. Tracked acceptance record: Animader
+`c20a69a` (`docs/plans/2026-10-23-pacer-rt-export-acceptance.md`).
+
+**Closure.** Groups D and E are complete; the runtime-only export is accepted
+with the qualifiers above. No push, merge, publication or registry activity
+occurred, and the Meridian archive is preserved.

@@ -118,6 +118,13 @@ goldens only under `tools/testdata/pacb/`.
 | P3 | binary leg replays anchors + the negative suite; fuzz joined | `zig build parity`; `zig build fuzz` |
 | P4 | wasm leg + pattern legs (post-prerequisite) | npm `lint && typecheck && test`; `zig build verify` |
 
+*(2026-10-23 status note — append-only; the task rows above are unchanged.)*
+P3 is accepted at the Group B exit (`bb0ba56`): parity 44/0, negatives
+3,775/81, fuzz 391 in the same cold gate, 0 skipped. P4 was accepted at the
+Group A exit (`d2644eb`): pattern-WASM end to end, five real replays, zero
+skips. The plan set's closure is swept with the Group C re-acceptance and the
+Group E measurements; delivery closed with no push, merge or publication.
+
 ## Progress log
 
 _(created 2026-10-18; entries appended per phase)_

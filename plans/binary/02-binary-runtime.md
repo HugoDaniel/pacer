@@ -370,6 +370,15 @@ refusal into a permanent silent subset.
 | P3 | `pacer/rt` + tests | npm `lint && typecheck && test`; `zig build verify` |
 | P4 | patterns end-to-end (or the recorded block + escalation) | `zig build verify`; `pattern-env` green via the binary path |
 
+*(2026-10-23 status note — append-only; the task rows above are unchanged.)*
+P3 is accepted: its sole 2026-10-19 blocker (source-free scene names) was met
+by the 05 metadata wave, and the `pacer/rt` glue stayed green through Groups
+A–E. P4 is accepted at the Group A exit (`d2644eb`): pattern-WASM end to end,
+five real replays, zero skips. The playback-parity P3 was accepted at the Group
+B exit `bb0ba56` (parity 44/0, negatives 3,775/81, fuzz 391 in the same cold
+gate). Plan 02 is closed for delivery, swept with the Group C re-acceptance and
+the Group E measurements; no wire, format, budget or ratchet change.
+
 ## Progress log
 
 _(created 2026-10-18; entries appended per phase)_
