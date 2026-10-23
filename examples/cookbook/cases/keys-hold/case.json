@@ -1,0 +1,16 @@
+{
+  "id": "keys-hold",
+  "title": "End hold clamps at :dur",
+  "aspect": ["keys", "transport"],
+  "teaches": "The default end behaviour is hold. Past :dur the playhead clamps to the boundary instead of wrapping, so every later clock returns the same frame; before the first key the track holds its first value.",
+  "observe": [
+    "A negative clock holds the first key value, 0.25.",
+    "At exactly :dur (2 s) the last key value is 0.75.",
+    "At 5 s the frame is identical to the 2 s frame."
+  ],
+  "score": "score.sjon",
+  "registries": [{"name": "level", "arity": 1}],
+  "times": [-1, 0, 1, 2, 5],
+  "derives": [],
+  "expect": {}
+}

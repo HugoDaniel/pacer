@@ -1,0 +1,14 @@
+; lifecycle-atomic-reload: the good carrier. The binary runtime is the layer
+; with the transactional reload contract: a refused load does NOT tear this
+; table down. The text path reports compile diagnostics by name, but a
+; diagnostics reload unloads it; the runtime refusal is the atomic one.
+(transport :bpm 120 :meter [4 4])
+
+(control :id depth :target gain :value 0.25)
+
+(track :target radius
+  (key :at 0b :value 0.2)
+  (key :at 4b :value 0.8)
+  (key :at 8b :value 0.2 :ease in-out-cubic))
+
+(track :target blend :expr (* depth 2))

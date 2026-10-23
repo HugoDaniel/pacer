@@ -1,0 +1,7 @@
+; refusal-unknown-target: `missing` is not in the host join and the score
+; declares no targets, so the track cannot resolve. The join still contains
+; `level`, which proves the failure is the name and not an empty registry.
+(transport :bpm 120 :meter [4 4])
+
+(track :target missing
+  (key :at 0b :value 0.5))

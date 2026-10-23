@@ -1,0 +1,21 @@
+; scenes-override: a global `level` ramp is the base layer. intro [0b,6b)
+; and drop [4b,12b) both override level with their own keys and eases, so
+; during [4b,6b) two level writes appear and the later scene wins for an
+; in-order consumer. sweep and pulse read the two scene-local clock names.
+(transport :bpm 120 :meter [4 4] :dur 4bar :end loop)
+
+(track :target level
+  (key :at 0b :value 0.2)
+  (key :at 16b :value 0.8))
+
+(scene :name intro :at 0b :dur 6b
+  (track :target level
+    (key :at 0b :value 0.1)
+    (key :at 6b :value 0.7 :ease in-out-cubic))
+  (track :target sweep :expr scene-phase))
+
+(scene :name drop :at 4b :dur 8b
+  (track :target level
+    (key :at 0b :value 0.9)
+    (key :at 8b :value 0.3 :ease out-expo))
+  (track :target pulse :expr scene-beat))

@@ -1,0 +1,8 @@
+; pattern-pure-euclid: one literal hap and one Euclidean rhythm. At 120 bpm
+; 4/4 a bar is 2.0 s and is also one pattern cycle; the eight slots are
+; quarter-bar steps. E(3,8) is x..x..x. (slots 0, 3, 6), so slots 1, 2, 4
+; and 5 have no active hap and their writes are omitted.
+(transport :bpm 120 :meter [4 4])
+
+(track :target value :pattern (pure 0.25))
+(track :target pulse :pattern (euclid 3 8 0.8))

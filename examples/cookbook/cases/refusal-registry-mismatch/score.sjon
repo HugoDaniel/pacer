@@ -1,0 +1,13 @@
+; refusal-registry-mismatch: two same-shaped targets, each with a keyed ramp,
+; so the frames prove the join is actually exercised. The carrier itself is
+; canonical; the refusal is the semantic identity of the join, not a decode
+; error. Both probe joins below keep the PACT structurally valid.
+(transport :bpm 120 :meter [4 4])
+
+(track :target alpha
+  (key :at 0b :value 0.1)
+  (key :at 4b :value 0.9))
+
+(track :target bravo
+  (key :at 0b :value 0.8)
+  (key :at 4b :value 0.2))

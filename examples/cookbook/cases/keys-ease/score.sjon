@@ -1,0 +1,22 @@
+; keys-ease: one track per program, all running 0 -> 1 over one bar. With
+; every key at 0b/4b the sampled writes at 0.5/1.0/1.5 s are e(u) for
+; u = 0.25/0.5/0.75. `hold` and `steps` are the constant/stair forms; `seq`,
+; `spring` and `chain` are the combinator forms.
+(transport :bpm 120 :meter [4 4])
+
+(track :target linear      (key :at 0b :value 0) (key :at 4b :value 1 :ease linear))
+(track :target hold        (key :at 0b :value 0) (key :at 4b :value 1 :ease hold))
+(track :target smoothstep  (key :at 0b :value 0) (key :at 4b :value 1 :ease smoothstep))
+(track :target in-out-cubic (key :at 0b :value 0) (key :at 4b :value 1 :ease in-out-cubic))
+(track :target out-expo    (key :at 0b :value 0) (key :at 4b :value 1 :ease out-expo))
+(track :target steps-end   (key :at 0b :value 0) (key :at 4b :value 1 :ease (steps :n 2 :jump end)))
+(track :target steps-start (key :at 0b :value 0) (key :at 4b :value 1 :ease (steps :n 2 :jump start)))
+(track :target bezier      (key :at 0b :value 0) (key :at 4b :value 1 :ease (cubic-bezier :p [0.42 0 0.58 1])))
+(track :target seq
+  (key :at 0b :value 0)
+  (key :at 4b :value 1
+    :ease (seq (stage :ease out-cubic   :t 0.4  :v 1.15)
+               (stage :ease in-out-quad :t 0.35 :v -0.18)
+               (stage :ease out-quad    :t 0.25 :v 0.03))))
+(track :target spring      (key :at 0b :value 0) (key :at 4b :value 1 :ease (spring :damping 0.3 :periods 3)))
+(track :target chain       (key :at 0b :value 0) (key :at 4b :value 1 :ease (chain (cubic-bezier :p [0.4 0 0.2 1]) (steps :n 2 :jump end))))

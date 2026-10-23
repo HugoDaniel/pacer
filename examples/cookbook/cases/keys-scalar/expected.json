@@ -1,0 +1,136 @@
+{
+  "id": "keys-scalar",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 1,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "radius",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3e4ccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f4ccccd"
+            ],
+            "easeRef": 0
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": -0.5,
+      "order": [
+        "radius"
+      ],
+      "writes": [
+        [
+          "radius",
+          [
+            0.20000000298023224
+          ],
+          [
+            "0x3e4ccccd"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0,
+      "order": [
+        "radius"
+      ],
+      "writes": [
+        [
+          "radius",
+          [
+            0.20000000298023224
+          ],
+          [
+            "0x3e4ccccd"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "radius"
+      ],
+      "writes": [
+        [
+          "radius",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "radius"
+      ],
+      "writes": [
+        [
+          "radius",
+          [
+            0.800000011920929
+          ],
+          [
+            "0x3f4ccccd"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 3,
+      "order": [
+        "radius"
+      ],
+      "writes": [
+        [
+          "radius",
+          [
+            0.800000011920929
+          ],
+          [
+            "0x3f4ccccd"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

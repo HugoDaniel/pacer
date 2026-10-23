@@ -1,0 +1,17 @@
+{
+  "id": "refusal-unknown-target",
+  "title": "An unknown target is a load diagnostic",
+  "aspect": ["refusal"],
+  "teaches": "A :target that names nothing in the merged host-and-declared join is a diagnostic, not a crash. Pack exits 1 with the pacer code unknown_target (0), a byte span and the name in the message.",
+  "observe": [
+    "pack exits 1 and prints a complete JSON envelope with pack: null.",
+    "The diagnostic source is pacer and the code is unknown_target.",
+    "The text loader reports the same diagnostic.",
+    "No carrier exists, so there are no frames."
+  ],
+  "score": "score.sjon",
+  "registries": [{"name": "level", "arity": 1}],
+  "times": [],
+  "derives": [],
+  "expect": {}
+}

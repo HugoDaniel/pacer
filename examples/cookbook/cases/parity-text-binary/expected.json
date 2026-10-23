@@ -1,0 +1,614 @@
+{
+  "id": "parity-text-binary",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 90,
+    "beatsPerBar": 4,
+    "dur": "2882880",
+    "end": "loop",
+    "tempoMap": [
+      {
+        "tick": "0",
+        "bpm": 90
+      },
+      {
+        "tick": "1441440",
+        "bpm": 180
+      }
+    ],
+    "scenes": [
+      {
+        "name": "intro",
+        "startTick": "0",
+        "durTicks": "1441440"
+      }
+    ],
+    "controls": [
+      {
+        "index": 0,
+        "id": "depth",
+        "target": "gain",
+        "registry": 0,
+        "ncomp": 1,
+        "type": "slider",
+        "value": [
+          0.25
+        ],
+        "min": null,
+        "max": null
+      }
+    ],
+    "trackCount": 6,
+    "tracks": [
+      {
+        "targetId": 2,
+        "name": "radius",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3dcccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "2882880",
+            "bits": [
+              "0x3f666666"
+            ],
+            "easeRef": 1
+          }
+        ]
+      },
+      {
+        "targetId": 3,
+        "name": "wave",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 4,
+        "name": "pulse",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "pattern",
+        "keys": []
+      },
+      {
+        "targetId": 0,
+        "name": "level",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3e4ccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "1441440",
+            "bits": [
+              "0x3f4ccccd"
+            ],
+            "easeRef": 2
+          }
+        ]
+      },
+      {
+        "targetId": 1,
+        "name": "sweep",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 5,
+        "name": "click",
+        "registry": 0,
+        "ncomp": 4,
+        "source": "trigger",
+        "keys": []
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "bpm",
+        "radius",
+        "wave",
+        "pulse",
+        "level",
+        "sweep",
+        "click",
+        "gain"
+      ],
+      "writes": [
+        [
+          "bpm",
+          [
+            90
+          ],
+          [
+            "0x42b40000"
+          ]
+        ],
+        [
+          "click",
+          [
+            0,
+            0,
+            1,
+            0
+          ],
+          [
+            "0x00000000",
+            "0x00000000",
+            "0x3f800000",
+            "0x00000000"
+          ]
+        ],
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.20000000298023224
+          ],
+          [
+            "0x3e4ccccd"
+          ]
+        ],
+        [
+          "pulse",
+          [
+            0.800000011920929
+          ],
+          [
+            "0x3f4ccccd"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.10000000149011612
+          ],
+          [
+            "0x3dcccccd"
+          ]
+        ],
+        [
+          "sweep",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "wave",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.75,
+      "order": [
+        "bpm",
+        "radius",
+        "wave",
+        "level",
+        "sweep",
+        "click",
+        "gain"
+      ],
+      "writes": [
+        [
+          "bpm",
+          [
+            90
+          ],
+          [
+            "0x42b40000"
+          ]
+        ],
+        [
+          "click",
+          [
+            0.12499722838401794,
+            1,
+            0,
+            0.12499722838401794
+          ],
+          [
+            "0x3dfffe8c",
+            "0x3f800000",
+            "0x00000000",
+            "0x3dfffe8c"
+          ]
+        ],
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.20667414367198944
+          ],
+          [
+            "0x3e53a263"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.4086071848869324
+          ],
+          [
+            "0x3ed134f6"
+          ]
+        ],
+        [
+          "sweep",
+          [
+            0.14062465727329254
+          ],
+          [
+            "0x3e0fffe9"
+          ]
+        ],
+        [
+          "wave",
+          [
+            0.6767736077308655
+          ],
+          [
+            "0x3f2d4109"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1.5,
+      "order": [
+        "bpm",
+        "radius",
+        "wave",
+        "level",
+        "sweep",
+        "click",
+        "gain"
+      ],
+      "writes": [
+        [
+          "bpm",
+          [
+            90
+          ],
+          [
+            "0x42b40000"
+          ]
+        ],
+        [
+          "click",
+          [
+            0.25,
+            2,
+            0,
+            0.25
+          ],
+          [
+            "0x3e800000",
+            "0x40000000",
+            "0x00000000",
+            "0x3e800000"
+          ]
+        ],
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.2533935606479645
+          ],
+          [
+            "0x3e81bccd"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.5981671214103699
+          ],
+          [
+            "0x3f19217b"
+          ]
+        ],
+        [
+          "sweep",
+          [
+            0.28125
+          ],
+          [
+            "0x3e900000"
+          ]
+        ],
+        [
+          "wave",
+          [
+            0.75
+          ],
+          [
+            "0x3f400000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 3,
+      "order": [
+        "bpm",
+        "radius",
+        "wave",
+        "level",
+        "sweep",
+        "click",
+        "gain"
+      ],
+      "writes": [
+        [
+          "bpm",
+          [
+            90
+          ],
+          [
+            "0x42b40000"
+          ]
+        ],
+        [
+          "click",
+          [
+            0.5,
+            4,
+            0,
+            0.5
+          ],
+          [
+            "0x3f000000",
+            "0x40800000",
+            "0x00000000",
+            "0x3f000000"
+          ]
+        ],
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.5990234613418579
+          ],
+          [
+            "0x3f19599a"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.786121129989624
+          ],
+          [
+            "0x3f493f3c"
+          ]
+        ],
+        [
+          "sweep",
+          [
+            0.5625
+          ],
+          [
+            "0x3f100000"
+          ]
+        ],
+        [
+          "wave",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 5.5,
+      "order": [
+        "bpm",
+        "radius",
+        "wave",
+        "click",
+        "gain"
+      ],
+      "writes": [
+        [
+          "bpm",
+          [
+            180
+          ],
+          [
+            "0x43340000"
+          ]
+        ],
+        [
+          "click",
+          [
+            0.5,
+            8,
+            0,
+            0.5
+          ],
+          [
+            "0x3f000000",
+            "0x41000000",
+            "0x00000000",
+            "0x3f000000"
+          ]
+        ],
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.8798688650131226
+          ],
+          [
+            "0x3f613f16"
+          ]
+        ],
+        [
+          "wave",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 7.5,
+      "order": [
+        "bpm",
+        "radius",
+        "wave",
+        "click",
+        "gain"
+      ],
+      "writes": [
+        [
+          "bpm",
+          [
+            180
+          ],
+          [
+            "0x43340000"
+          ]
+        ],
+        [
+          "click",
+          [
+            0.5,
+            14,
+            0,
+            0.5
+          ],
+          [
+            "0x3f000000",
+            "0x41600000",
+            "0x00000000",
+            "0x3f000000"
+          ]
+        ],
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.8985037207603455
+          ],
+          [
+            "0x3f660457"
+          ]
+        ],
+        [
+          "wave",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "both",
+    "text": {
+      "ok": true,
+      "diagnostics": []
+    },
+    "binary": {
+      "ok": true,
+      "live": true,
+      "status": 0,
+      "reason": null,
+      "reasonName": null,
+      "diagnostics": []
+    },
+    "parity": true
+  }
+}

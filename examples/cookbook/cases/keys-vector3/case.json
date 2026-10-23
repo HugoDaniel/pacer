@@ -1,0 +1,16 @@
+{
+  "id": "keys-vector3",
+  "title": "A three-lane vector target",
+  "aspect": ["keys"],
+  "teaches": "A track can drive a vec3 target. The value is a 1..4 lane vector, arity is checked against the host join at load, and each segment carries its own ease.",
+  "observe": [
+    "The first segment (red to green) uses the default linear ease.",
+    "The second segment uses out-quad and samples non-dyadic components.",
+    "The final key lands all three lanes exactly at 4 b."
+  ],
+  "score": "score.sjon",
+  "registries": [{"name": "tint", "arity": 3}],
+  "times": [0, 0.5, 1, 1.5, 2],
+  "derives": [],
+  "expect": {}
+}

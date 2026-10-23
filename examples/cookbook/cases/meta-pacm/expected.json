@@ -1,0 +1,272 @@
+{
+  "id": "meta-pacm",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 7,
+    "dur": "1441440",
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [
+      {
+        "name": "intro",
+        "startTick": "0",
+        "durTicks": "720720"
+      },
+      {
+        "name": "tail",
+        "startTick": "720720",
+        "durTicks": "720720"
+      }
+    ],
+    "controls": [
+      {
+        "index": 0,
+        "id": "depth",
+        "target": "gain",
+        "registry": 0,
+        "ncomp": 1,
+        "type": "slider",
+        "value": [
+          0.25
+        ],
+        "min": [
+          0
+        ],
+        "max": [
+          1
+        ]
+      },
+      {
+        "index": 1,
+        "id": "sway",
+        "target": null,
+        "registry": 0,
+        "ncomp": 1,
+        "type": "slider",
+        "value": [
+          0.5
+        ],
+        "min": null,
+        "max": null
+      }
+    ],
+    "trackCount": 3,
+    "tracks": [
+      {
+        "targetId": 2,
+        "name": "glow",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 1,
+        "name": "level",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3e4ccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f4ccccd"
+            ],
+            "easeRef": 1
+          }
+        ]
+      },
+      {
+        "targetId": 1,
+        "name": "level",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f4ccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "1441440",
+            "bits": [
+              "0x3e4ccccd"
+            ],
+            "easeRef": 2
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "glow",
+        "level",
+        "gain"
+      ],
+      "writes": [
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "glow",
+          [
+            0.125
+          ],
+          [
+            "0x3e000000"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.20000000298023224
+          ],
+          [
+            "0x3e4ccccd"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.875,
+      "order": [
+        "glow",
+        "level",
+        "gain"
+      ],
+      "writes": [
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "glow",
+          [
+            0.125
+          ],
+          [
+            "0x3e000000"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.23749999701976776
+          ],
+          [
+            "0x3e733333"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 3.5,
+      "order": [
+        "glow",
+        "level",
+        "gain"
+      ],
+      "writes": [
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "glow",
+          [
+            0.125
+          ],
+          [
+            "0x3e000000"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.800000011920929
+          ],
+          [
+            "0x3f4ccccd"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 5.25,
+      "order": [
+        "glow",
+        "level",
+        "gain"
+      ],
+      "writes": [
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "glow",
+          [
+            0.125
+          ],
+          [
+            "0x3e000000"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.2750000059604645
+          ],
+          [
+            "0x3e8ccccd"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

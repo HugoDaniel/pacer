@@ -1,0 +1,10 @@
+; transport-tempo-map: 120 bpm for four beats, then 240. `:dur 8b` is 3.0 s
+; of wall-clock, not 4.0 s. `radius`'s second key is authored at 2.5 s, and
+; that clock resolves to beat 6 through the map. `:emit [beat bpm]` makes the
+; musical position and the active tempo visible as ordinary write lanes.
+(transport :bpm 120 :meter [4 4] :dur 8b :end loop :emit [beat bpm])
+(tempo :at 4b :bpm 240)
+
+(track :target radius
+  (key :at 0b :value 0.0)
+  (key :at 2.5s :value 1.0))

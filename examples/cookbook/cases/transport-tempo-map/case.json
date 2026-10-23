@@ -1,0 +1,21 @@
+{
+  "id": "transport-tempo-map",
+  "title": "A piecewise tempo map",
+  "aspect": ["transport"],
+  "teaches": "A (tempo ...) form opens a new transport segment. Beat and bar positions stay exact, but an s-unit position resolves through the map; the loop length is wall-clock, and a wrap re-enters the early segment at its own tempo.",
+  "observe": [
+    "120 bpm doubles to 240 at beat 4 (2 s).",
+    "2.5 s is beat 6 through the map, not beat 5 under constant tempo.",
+    "The emitted bpm lane steps exactly at the boundary.",
+    "3.5 s wrapped by the 3 s loop lands in the 120 bpm segment."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "beat", "arity": 1},
+    {"name": "bpm", "arity": 1},
+    {"name": "radius", "arity": 1}
+  ],
+  "times": [0, 1, 2, 2.5, 3.5, 6.25],
+  "derives": [],
+  "expect": {}
+}

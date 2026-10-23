@@ -1,0 +1,22 @@
+{
+  "id": "expr-env",
+  "title": "The expression time environment",
+  "aspect": ["expr"],
+  "teaches": "A :expr track is evaluated every frame with t, tick, beat, bar, phase, cycle, bpm and dur bound. The bindings are numbers; a vector expression is allowed when its length matches the target's arity.",
+  "observe": [
+    "tick counts PPC ticks per bar, so 0.5 s at 120 bpm is 180180.",
+    "grid packs beat, bar and phase into one vec3 target.",
+    "rate is bpm times dur in beats, a constant 960.",
+    "seconds is the same clock the host passed in."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "ticks", "arity": 1},
+    {"name": "grid", "arity": 3},
+    {"name": "rate", "arity": 1},
+    {"name": "seconds", "arity": 1}
+  ],
+  "times": [0, 0.5, 1, 2, 3],
+  "derives": [],
+  "expect": {}
+}

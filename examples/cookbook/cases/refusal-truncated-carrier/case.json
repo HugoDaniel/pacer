@@ -1,0 +1,18 @@
+{
+  "id": "refusal-truncated-carrier",
+  "title": "A truncated carrier is refused by the decoder",
+  "aspect": ["refusal"],
+  "teaches": "PACB is a self-describing container; truncating it below its directory leaves the magic readable but the size fields inconsistent. The decoder refuses with status 1 and reason 3 (directory_malformed) before any table is built.",
+  "observe": [
+    "The derivation is a 40-byte prefix of the real packed carrier.",
+    "The truncated load returns status 1, reason 3.",
+    "The full carrier still loads at status 0.",
+    "Frames come from the full carrier, not from a fallback."
+  ],
+  "score": "score.sjon",
+  "registries": [{"name": "level", "arity": 1}],
+  "times": [0, 0.5, 1],
+  "derives": [{"kind": "truncate", "at": 40}],
+  "loadMode": "binary",
+  "expect": {}
+}

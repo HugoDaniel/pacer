@@ -1,0 +1,282 @@
+{
+  "id": "transport-tempo-map",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": "1441440",
+    "end": "loop",
+    "tempoMap": [
+      {
+        "tick": "0",
+        "bpm": 120
+      },
+      {
+        "tick": "720720",
+        "bpm": 240
+      }
+    ],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 1,
+    "tracks": [
+      {
+        "targetId": 2,
+        "name": "radius",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "1081080",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 0
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "beat",
+        "bpm",
+        "radius"
+      ],
+      "writes": [
+        [
+          "beat",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "bpm",
+          [
+            120
+          ],
+          [
+            "0x42f00000"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "beat",
+        "bpm",
+        "radius"
+      ],
+      "writes": [
+        [
+          "beat",
+          [
+            2
+          ],
+          [
+            "0x40000000"
+          ]
+        ],
+        [
+          "bpm",
+          [
+            120
+          ],
+          [
+            "0x42f00000"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.3333333432674408
+          ],
+          [
+            "0x3eaaaaab"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "beat",
+        "bpm",
+        "radius"
+      ],
+      "writes": [
+        [
+          "beat",
+          [
+            4
+          ],
+          [
+            "0x40800000"
+          ]
+        ],
+        [
+          "bpm",
+          [
+            240
+          ],
+          [
+            "0x43700000"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.6666666865348816
+          ],
+          [
+            "0x3f2aaaab"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2.5,
+      "order": [
+        "beat",
+        "bpm",
+        "radius"
+      ],
+      "writes": [
+        [
+          "beat",
+          [
+            6
+          ],
+          [
+            "0x40c00000"
+          ]
+        ],
+        [
+          "bpm",
+          [
+            240
+          ],
+          [
+            "0x43700000"
+          ]
+        ],
+        [
+          "radius",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 3.5,
+      "order": [
+        "beat",
+        "bpm",
+        "radius"
+      ],
+      "writes": [
+        [
+          "beat",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "bpm",
+          [
+            120
+          ],
+          [
+            "0x42f00000"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.1666666716337204
+          ],
+          [
+            "0x3e2aaaab"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 6.25,
+      "order": [
+        "beat",
+        "bpm",
+        "radius"
+      ],
+      "writes": [
+        [
+          "beat",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "bpm",
+          [
+            120
+          ],
+          [
+            "0x42f00000"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.0833333358168602
+          ],
+          [
+            "0x3daaaaab"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

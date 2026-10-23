@@ -1,0 +1,17 @@
+; runtime-pact-join: a runtime-only score. The host join supplies three buses
+; with different lane counts; `mix` is a vec3 expression, `send` reads the
+; env-only control, and `extra` is a keyed vec2. The packed carrier stores
+; references into the flat target_id space, so loading with the same ordered
+; join resolves every name; a different join is a registry mismatch.
+(transport :bpm 120 :meter [4 4] :dur 2bar :end hold)
+
+(control :id drive :value 0.5)
+
+(track :target mix
+  :expr [beat (* beat 2) (+ beat (* drive 2))])
+
+(track :target send :expr (* beat 3))
+
+(track :target extra
+  (key :at 0b :value [0.1 0.2])
+  (key :at 4b :value [0.9 0.8] :ease in-out-cubic))

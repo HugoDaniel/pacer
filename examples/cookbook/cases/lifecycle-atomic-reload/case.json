@@ -1,0 +1,31 @@
+{
+  "id": "lifecycle-atomic-reload",
+  "title": "A refused binary reload keeps the old score live",
+  "aspect": ["lifecycle"],
+  "teaches": "PacerRt.load is transactional: a refused carrier leaves the previously armed score, its table and its evaluator untouched. The refusal is reported by status and reason, and the next frame is byte-identical to the frame before it.",
+  "observe": [
+    "The good carrier loads with status 0 and writes radius and blend.",
+    "Loading a carrier whose target join no longer matches is status 1, reason 9.",
+    "After the refusal the same clock returns the identical frame.",
+    "Reloading the good carrier recovers exactly the same frame."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "radius", "arity": 1},
+    {"name": "gain", "arity": 1},
+    {"name": "blend", "arity": 1}
+  ],
+  "times": [0.5],
+  "derives": [],
+  "loadMode": "lifecycle",
+  "lifecycle": {
+    "badScore": "bad.sjon",
+    "badRegistries": [
+      {"name": "radius", "arity": 1},
+      {"name": "gain", "arity": 1},
+      {"name": "blend", "arity": 1},
+      {"name": "ghost", "arity": 1}
+    ]
+  },
+  "expect": {}
+}

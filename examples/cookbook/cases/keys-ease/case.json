@@ -1,0 +1,69 @@
+{
+  "id": "keys-ease",
+  "title": "Easing primitives and composed programs",
+  "aspect": [
+    "keys"
+  ],
+  "teaches": "Named eases, steps, cubic-bezier, seq, spring and chain all compile into the same program table. The key value still lands exactly on the key tick; the program only shapes the interior of the segment.",
+  "observe": [
+    "linear, smoothstep, in-out-cubic and out-expo sample differently at u = 0.25, 0.5 and 0.75.",
+    "hold keeps the previous value until the end key; steps with n 2 separates jump end from jump start at u = 0.25 and 0.75.",
+    "seq overshoots past 1.15, spring oscillates, and chain quantizes a bezier."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {
+      "name": "linear",
+      "arity": 1
+    },
+    {
+      "name": "hold",
+      "arity": 1
+    },
+    {
+      "name": "smoothstep",
+      "arity": 1
+    },
+    {
+      "name": "in-out-cubic",
+      "arity": 1
+    },
+    {
+      "name": "out-expo",
+      "arity": 1
+    },
+    {
+      "name": "steps-end",
+      "arity": 1
+    },
+    {
+      "name": "steps-start",
+      "arity": 1
+    },
+    {
+      "name": "bezier",
+      "arity": 1
+    },
+    {
+      "name": "seq",
+      "arity": 1
+    },
+    {
+      "name": "spring",
+      "arity": 1
+    },
+    {
+      "name": "chain",
+      "arity": 1
+    }
+  ],
+  "times": [
+    0,
+    0.5,
+    1,
+    1.5,
+    2
+  ],
+  "derives": [],
+  "expect": {}
+}

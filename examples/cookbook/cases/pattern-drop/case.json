@@ -1,0 +1,20 @@
+{
+  "id": "pattern-drop",
+  "title": "A hap that drops on a later cycle",
+  "aspect": ["pattern", "refusal"],
+  "teaches": "The compile dry-run checks cycle 0, so a hap expression that only fails later still loads. At frame time the failed hap is dropped and the write is omitted for that cycle; the other pattern tracks keep writing.",
+  "observe": [
+    "At cycle 0 the drop lane writes 1 / -720720.",
+    "At cycle 1, tick = 720720, the division fails, and drop is omitted.",
+    "steady still writes 0.5 on that frame.",
+    "At cycle 2 the same formula writes a positive value again."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "drop", "arity": 1},
+    {"name": "steady", "arity": 1}
+  ],
+  "times": [0, 1.9, 2, 4, 6],
+  "derives": [],
+  "expect": {}
+}

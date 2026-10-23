@@ -1,0 +1,7 @@
+; refusal-pattern-budget: one pattern fanned out 8000 times. The dry-run uses
+; the same 1 MiB scratch the frame path uses, so acceptance here implies the
+; score can play its inspected cycle. Exhausting the budget is a diagnostic
+; with a span, not an allocation failure.
+(transport :bpm 120 :meter [4 4])
+
+(track :target radius :pattern (fast 8000 (pure 1)))

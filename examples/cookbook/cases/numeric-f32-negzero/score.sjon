@@ -1,0 +1,15 @@
+; numeric-f32-negzero: six constants chosen for their f32 edges, plus one
+; expression, with three spellings of negative zero. The only narrowing happens at
+; write-buffer encode (evaluation is f64), so the hex bits in expected.json
+; are the exact f32 the host receives. An expression's (- 0) preserves the
+; negative-zero sign; a `-0.0` key is a float and keeps it, while the integer
+; literal `-0` is parsed as zero. All three spellings are shown together.
+(transport :bpm 120 :meter [4 4])
+
+(track :target tenth          (key :at 0b :value 0.1))
+(track :target third          (key :at 0b :value 0.3333333333333333))
+(track :target negzero        :expr (- 0))
+(track :target literal-negzero  (key :at 0b :value -0))
+(track :target float-negzero   (key :at 0b :value -0.0))
+(track :target zero            (key :at 0b :value 0))
+(track :target big             (key :at 0b :value 16777217))

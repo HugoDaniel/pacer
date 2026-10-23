@@ -1,0 +1,50 @@
+{
+  "id": "refusal-nonfinite-expr",
+  "pack": {
+    "exit": 1,
+    "status": "diagnostics",
+    "reason": null,
+    "diagnostics": [
+      {
+        "source": "pacer",
+        "severity": "error",
+        "code": 19,
+        "start": 326,
+        "end": 335,
+        "message": "expression must yield a finite number or a finite 1-component numeric vector (a form result usually means a misspelled function name)"
+      },
+      {
+        "source": "pacer",
+        "severity": "error",
+        "code": 19,
+        "start": 362,
+        "end": 374,
+        "message": "expression must yield a finite number or a finite 1-component numeric vector (a form result usually means a misspelled function name)"
+      }
+    ]
+  },
+  "meta": null,
+  "frames": [],
+  "load": {
+    "driver": "text",
+    "ok": false,
+    "diagnostics": [
+      {
+        "source": "pacer",
+        "severity": "error",
+        "code": 19,
+        "start": 326,
+        "end": 335,
+        "message": "expression must yield a finite number or a finite 1-component numeric vector (a form result usually means a misspelled function name)"
+      },
+      {
+        "source": "pacer",
+        "severity": "error",
+        "code": 19,
+        "start": 362,
+        "end": 374,
+        "message": "expression must yield a finite number or a finite 1-component numeric vector (a form result usually means a misspelled function name)"
+      }
+    ]
+  }
+}

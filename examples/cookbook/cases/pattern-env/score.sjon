@@ -1,0 +1,11 @@
+; pattern-env: three name sources in hap expressions. `beat` is pacer's frame
+; env and keeps counting across bars. `tick` exists in both scopes, and the
+; pattern-local wins: it is the hap's cycle onset (0 in cycle 0, 720720 in
+; cycle 1), never the frame tick. `sway` is an env-only control, resolved
+; through the parent scope; it writes nothing itself.
+(transport :bpm 120 :meter [4 4])
+
+(track :target clock :pattern (pure (* beat 2)))
+(track :target onset :pattern (pure (+ tick 0)))
+(control :id sway :value 0.25)
+(track :target swayx2 :pattern (pure (* sway 2)))

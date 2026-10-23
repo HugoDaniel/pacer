@@ -1,0 +1,17 @@
+{
+  "id": "keys-loop",
+  "title": "Loop wrap is floor-mod",
+  "aspect": ["keys", "transport"],
+  "teaches": "With :end loop, a clock at or past :dur wraps by floor-mod on the tick grid. That makes a negative clock land positively inside the cycle, and a clock many cycles later land at the same position as the first cycle.",
+  "observe": [
+    "4 s is exactly :dur and wraps to beat 0.",
+    "5 s is beat 2 of the second cycle.",
+    "-1 s wraps to beat 6, not to an error.",
+    "100 s is 25 whole cycles, so it wraps to beat 0."
+  ],
+  "score": "score.sjon",
+  "registries": [{"name": "phase", "arity": 1}],
+  "times": [1, 4, 5, -1, 100],
+  "derives": [],
+  "expect": {}
+}

@@ -1,0 +1,8 @@
+; refusal-nonfinite-expr: two domain failures with the same contract. `sqrt`
+; of a negative is NaN, and `pow 10 400` is +infinity; neither is a finite
+; f32, so the compile dry-run refuses both tracks. The diagnostics collect,
+; so one score can show both at once.
+(transport :bpm 120 :meter [4 4])
+
+(track :target nan :expr (sqrt -1))
+(track :target inf :expr (pow 10 400))

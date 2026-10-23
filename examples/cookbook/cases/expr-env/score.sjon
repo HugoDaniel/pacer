@@ -1,0 +1,10 @@
+; expr-env: one binding per row, plus a vec3 that packs three of them. With
+; :dur 2bar the dur binding is 8 beats (not seconds), bpm is the document
+; tempo, and t is the host clock in seconds. `phase` is the 0..1 position
+; inside the current bar, the same value :emit [phase] would broadcast.
+(transport :bpm 120 :meter [4 4] :dur 2bar)
+
+(track :target ticks :expr tick)
+(track :target grid :expr [beat bar phase])
+(track :target rate :expr (* bpm dur))
+(track :target seconds :expr t)

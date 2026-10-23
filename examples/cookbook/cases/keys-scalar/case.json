@@ -1,0 +1,16 @@
+{
+  "id": "keys-scalar",
+  "title": "A minimal scalar score",
+  "aspect": ["keys"],
+  "teaches": "A track is one target plus keyframes. Values interpolate linearly by default, and the first and last key hold outside their span, so a score needs no explicit boundary keys.",
+  "observe": [
+    "t = 0 is the first key exactly; t = 1 s is the 2 b midpoint.",
+    "t = 3 s is past the last key: the write stays 0.8.",
+    "t = -0.5 s is before the first key: the write stays 0.2."
+  ],
+  "score": "score.sjon",
+  "registries": [{"name": "radius", "arity": 1}],
+  "times": [-0.5, 0, 1, 2, 3],
+  "derives": [],
+  "expect": {}
+}

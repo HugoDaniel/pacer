@@ -1,0 +1,866 @@
+{
+  "id": "keys-ease",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 11,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "linear",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 0
+          }
+        ]
+      },
+      {
+        "targetId": 1,
+        "name": "hold",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 1
+          }
+        ]
+      },
+      {
+        "targetId": 2,
+        "name": "smoothstep",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 2
+          }
+        ]
+      },
+      {
+        "targetId": 3,
+        "name": "in-out-cubic",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 3
+          }
+        ]
+      },
+      {
+        "targetId": 4,
+        "name": "out-expo",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 4
+          }
+        ]
+      },
+      {
+        "targetId": 5,
+        "name": "steps-end",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 5
+          }
+        ]
+      },
+      {
+        "targetId": 6,
+        "name": "steps-start",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 6
+          }
+        ]
+      },
+      {
+        "targetId": 7,
+        "name": "bezier",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 7
+          }
+        ]
+      },
+      {
+        "targetId": 8,
+        "name": "seq",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 8
+          }
+        ]
+      },
+      {
+        "targetId": 9,
+        "name": "spring",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 9
+          }
+        ]
+      },
+      {
+        "targetId": 10,
+        "name": "chain",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 10
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "linear",
+        "hold",
+        "smoothstep",
+        "in-out-cubic",
+        "out-expo",
+        "steps-end",
+        "steps-start",
+        "bezier",
+        "seq",
+        "spring",
+        "chain"
+      ],
+      "writes": [
+        [
+          "bezier",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "chain",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "hold",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "in-out-cubic",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "linear",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "out-expo",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "seq",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "smoothstep",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "spring",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "steps-end",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "steps-start",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.5,
+      "order": [
+        "linear",
+        "hold",
+        "smoothstep",
+        "in-out-cubic",
+        "out-expo",
+        "steps-end",
+        "steps-start",
+        "bezier",
+        "seq",
+        "spring",
+        "chain"
+      ],
+      "writes": [
+        [
+          "bezier",
+          [
+            0.12916193902492523
+          ],
+          [
+            "0x3e044307"
+          ]
+        ],
+        [
+          "chain",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "hold",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "in-out-cubic",
+          [
+            0.0625
+          ],
+          [
+            "0x3d800000"
+          ]
+        ],
+        [
+          "linear",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "out-expo",
+          [
+            0.8232232928276062
+          ],
+          [
+            "0x3f52bec3"
+          ]
+        ],
+        [
+          "seq",
+          [
+            1.08935546875
+          ],
+          [
+            "0x3f8b7000"
+          ]
+        ],
+        [
+          "smoothstep",
+          [
+            0.15625
+          ],
+          [
+            "0x3e200000"
+          ]
+        ],
+        [
+          "spring",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "steps-end",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "steps-start",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "linear",
+        "hold",
+        "smoothstep",
+        "in-out-cubic",
+        "out-expo",
+        "steps-end",
+        "steps-start",
+        "bezier",
+        "seq",
+        "spring",
+        "chain"
+      ],
+      "writes": [
+        [
+          "bezier",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "chain",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "hold",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "in-out-cubic",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "linear",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "out-expo",
+          [
+            0.96875
+          ],
+          [
+            "0x3f780000"
+          ]
+        ],
+        [
+          "seq",
+          [
+            1.1206122636795044
+          ],
+          [
+            "0x3f8f7039"
+          ]
+        ],
+        [
+          "smoothstep",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "spring",
+          [
+            1.0591645240783691
+          ],
+          [
+            "0x3f8792b4"
+          ]
+        ],
+        [
+          "steps-end",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "steps-start",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1.5,
+      "order": [
+        "linear",
+        "hold",
+        "smoothstep",
+        "in-out-cubic",
+        "out-expo",
+        "steps-end",
+        "steps-start",
+        "bezier",
+        "seq",
+        "spring",
+        "chain"
+      ],
+      "writes": [
+        [
+          "bezier",
+          [
+            0.8708381056785583
+          ],
+          [
+            "0x3f5eef3f"
+          ]
+        ],
+        [
+          "chain",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "hold",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "in-out-cubic",
+          [
+            0.9375
+          ],
+          [
+            "0x3f700000"
+          ]
+        ],
+        [
+          "linear",
+          [
+            0.75
+          ],
+          [
+            "0x3f400000"
+          ]
+        ],
+        [
+          "out-expo",
+          [
+            0.9944757223129272
+          ],
+          [
+            "0x3f7e95f6"
+          ]
+        ],
+        [
+          "seq",
+          [
+            0.9700000286102295
+          ],
+          [
+            "0x3f7851ec"
+          ]
+        ],
+        [
+          "smoothstep",
+          [
+            0.84375
+          ],
+          [
+            "0x3f580000"
+          ]
+        ],
+        [
+          "spring",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "steps-end",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "steps-start",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "linear",
+        "hold",
+        "smoothstep",
+        "in-out-cubic",
+        "out-expo",
+        "steps-end",
+        "steps-start",
+        "bezier",
+        "seq",
+        "spring",
+        "chain"
+      ],
+      "writes": [
+        [
+          "bezier",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "chain",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "hold",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "in-out-cubic",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "linear",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "out-expo",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "seq",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "smoothstep",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "spring",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "steps-end",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "steps-start",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

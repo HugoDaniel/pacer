@@ -1,0 +1,8 @@
+; triggers-schedules: pulse is a one-beat grid phased to start at beat 1 and
+; targets a four-lane bus, so its write is (phase, count, gate, beats-since).
+; hit is an explicit ascending list into a scalar target, so only phase fits.
+; Before the first event a trigger writes nothing; the loop resets both.
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(trigger :target pulse :every 1b :offset 1b)
+(trigger :target hit :at [2b 5b 7b])

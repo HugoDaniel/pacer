@@ -1,0 +1,181 @@
+{
+  "id": "refusal-registry-mismatch",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 2,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "alpha",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3dcccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f666666"
+            ],
+            "easeRef": 0
+          }
+        ]
+      },
+      {
+        "targetId": 1,
+        "name": "bravo",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3f4ccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3e4ccccd"
+            ],
+            "easeRef": 0
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "alpha",
+        "bravo"
+      ],
+      "writes": [
+        [
+          "alpha",
+          [
+            0.10000000149011612
+          ],
+          [
+            "0x3dcccccd"
+          ]
+        ],
+        [
+          "bravo",
+          [
+            0.800000011920929
+          ],
+          [
+            "0x3f4ccccd"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.5,
+      "order": [
+        "alpha",
+        "bravo"
+      ],
+      "writes": [
+        [
+          "alpha",
+          [
+            0.29999998211860657
+          ],
+          [
+            "0x3e999999"
+          ]
+        ],
+        [
+          "bravo",
+          [
+            0.6500000357627869
+          ],
+          [
+            "0x3f266667"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "alpha",
+        "bravo"
+      ],
+      "writes": [
+        [
+          "alpha",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "bravo",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "runtime",
+    "variants": [
+      {
+        "name": "structural",
+        "ok": false,
+        "live": false,
+        "status": 1,
+        "reason": 9,
+        "reasonName": "registry_mismatch",
+        "diagnostics": []
+      },
+      {
+        "name": "name-swap",
+        "ok": false,
+        "live": false,
+        "status": 1,
+        "reason": 9,
+        "reasonName": "registry_mismatch",
+        "diagnostics": []
+      }
+    ],
+    "canonical": {
+      "ok": true,
+      "live": true,
+      "status": 0,
+      "reason": null,
+      "reasonName": null,
+      "diagnostics": []
+    }
+  }
+}

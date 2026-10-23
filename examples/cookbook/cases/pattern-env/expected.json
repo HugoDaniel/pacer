@@ -1,0 +1,251 @@
+{
+  "id": "pattern-env",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [
+      {
+        "index": 0,
+        "id": "sway",
+        "target": null,
+        "registry": 0,
+        "ncomp": 1,
+        "type": "slider",
+        "value": [
+          0.25
+        ],
+        "min": null,
+        "max": null
+      }
+    ],
+    "trackCount": 3,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "clock",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "pattern",
+        "keys": []
+      },
+      {
+        "targetId": 1,
+        "name": "onset",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "pattern",
+        "keys": []
+      },
+      {
+        "targetId": 2,
+        "name": "swayx2",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "pattern",
+        "keys": []
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "clock",
+        "onset",
+        "swayx2"
+      ],
+      "writes": [
+        [
+          "clock",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "onset",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "swayx2",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.5,
+      "order": [
+        "clock",
+        "onset",
+        "swayx2"
+      ],
+      "writes": [
+        [
+          "clock",
+          [
+            2
+          ],
+          [
+            "0x40000000"
+          ]
+        ],
+        [
+          "onset",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "swayx2",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.75,
+      "order": [
+        "clock",
+        "onset",
+        "swayx2"
+      ],
+      "writes": [
+        [
+          "clock",
+          [
+            3
+          ],
+          [
+            "0x40400000"
+          ]
+        ],
+        [
+          "onset",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "swayx2",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "clock",
+        "onset",
+        "swayx2"
+      ],
+      "writes": [
+        [
+          "clock",
+          [
+            8
+          ],
+          [
+            "0x41000000"
+          ]
+        ],
+        [
+          "onset",
+          [
+            720720
+          ],
+          [
+            "0x492ff500"
+          ]
+        ],
+        [
+          "swayx2",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 3,
+      "order": [
+        "clock",
+        "onset",
+        "swayx2"
+      ],
+      "writes": [
+        [
+          "clock",
+          [
+            12
+          ],
+          [
+            "0x41400000"
+          ]
+        ],
+        [
+          "onset",
+          [
+            720720
+          ],
+          [
+            "0x492ff500"
+          ]
+        ],
+        [
+          "swayx2",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

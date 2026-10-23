@@ -1,0 +1,22 @@
+{
+  "id": "transport-odd-meter",
+  "title": "A 7/8 meter at a fractional tempo",
+  "aspect": ["transport"],
+  "teaches": "Meter divides beats inside a bar; the per-bar tick count is constant. A fractional bpm moves only the seconds-to-ticks seam, and beats, bars, seconds and emitted lanes can be mixed in one score.",
+  "observe": [
+    "One bar is seven beats, and phase runs 0..1 across that bar.",
+    "The 3 s key is off the beat grid but still lands exactly on its authored value.",
+    "At 7 s the 2-bar loop has wrapped back to bar 0."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "bar", "arity": 1},
+    {"name": "phase", "arity": 1},
+    {"name": "arc", "arity": 1},
+    {"name": "mark", "arity": 1},
+    {"name": "lfo", "arity": 1}
+  ],
+  "times": [0, 1, 3, 3.5, 7],
+  "derives": [],
+  "expect": {}
+}

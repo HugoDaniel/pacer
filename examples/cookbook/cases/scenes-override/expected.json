@@ -1,0 +1,460 @@
+{
+  "id": "scenes-override",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": "2882880",
+    "end": "loop",
+    "tempoMap": [],
+    "scenes": [
+      {
+        "name": "intro",
+        "startTick": "0",
+        "durTicks": "1081080"
+      },
+      {
+        "name": "drop",
+        "startTick": "720720",
+        "durTicks": "1441440"
+      }
+    ],
+    "controls": [],
+    "trackCount": 5,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "level",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3e4ccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "2882880",
+            "bits": [
+              "0x3f4ccccd"
+            ],
+            "easeRef": 0
+          }
+        ]
+      },
+      {
+        "targetId": 0,
+        "name": "level",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3dcccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "1081080",
+            "bits": [
+              "0x3f333333"
+            ],
+            "easeRef": 1
+          }
+        ]
+      },
+      {
+        "targetId": 1,
+        "name": "sweep",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 0,
+        "name": "level",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f666666"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "2162160",
+            "bits": [
+              "0x3e99999a"
+            ],
+            "easeRef": 2
+          }
+        ]
+      },
+      {
+        "targetId": 2,
+        "name": "pulse",
+        "registry": 1,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "level",
+        "level",
+        "sweep"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.20000000298023224
+          ],
+          [
+            "0x3e4ccccd"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.10000000149011612
+          ],
+          [
+            "0x3dcccccd"
+          ]
+        ],
+        [
+          "sweep",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "level",
+        "level",
+        "sweep"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.2750000059604645
+          ],
+          [
+            "0x3e8ccccd"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.18888889253139496
+          ],
+          [
+            "0x3e416c17"
+          ]
+        ],
+        [
+          "sweep",
+          [
+            0.3333333432674408
+          ],
+          [
+            "0x3eaaaaab"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "level",
+        "level",
+        "sweep",
+        "level",
+        "pulse"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.3499999940395355
+          ],
+          [
+            "0x3eb33333"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.6111111044883728
+          ],
+          [
+            "0x3f1c71c7"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.8999999761581421
+          ],
+          [
+            "0x3f666666"
+          ]
+        ],
+        [
+          "pulse",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "sweep",
+          [
+            0.6666666865348816
+          ],
+          [
+            "0x3f2aaaab"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2.5,
+      "order": [
+        "level",
+        "level",
+        "sweep",
+        "level",
+        "pulse"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.38750001788139343
+          ],
+          [
+            "0x3ec66667"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.6888888478279114
+          ],
+          [
+            "0x3f305b05"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.552268922328949
+          ],
+          [
+            "0x3f0d617f"
+          ]
+        ],
+        [
+          "pulse",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "sweep",
+          [
+            0.8333333134651184
+          ],
+          [
+            "0x3f555555"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 3,
+      "order": [
+        "level",
+        "level",
+        "pulse"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.42500001192092896
+          ],
+          [
+            "0x3ed9999a"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.40606603026390076
+          ],
+          [
+            "0x3ecfe7e3"
+          ]
+        ],
+        [
+          "pulse",
+          [
+            2
+          ],
+          [
+            "0x40000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 4,
+      "order": [
+        "level",
+        "level",
+        "pulse"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.3187500238418579
+          ],
+          [
+            "0x3ea33334"
+          ]
+        ],
+        [
+          "pulse",
+          [
+            4
+          ],
+          [
+            "0x40800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 5.5,
+      "order": [
+        "level",
+        "level",
+        "pulse"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.612500011920929
+          ],
+          [
+            "0x3f1ccccd"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.30139362812042236
+          ],
+          [
+            "0x3e9a5044"
+          ]
+        ],
+        [
+          "pulse",
+          [
+            7
+          ],
+          [
+            "0x40e00000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 8,
+      "order": [
+        "level",
+        "level",
+        "sweep"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.20000000298023224
+          ],
+          [
+            "0x3e4ccccd"
+          ]
+        ],
+        [
+          "level",
+          [
+            0.10000000149011612
+          ],
+          [
+            "0x3dcccccd"
+          ]
+        ],
+        [
+          "sweep",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

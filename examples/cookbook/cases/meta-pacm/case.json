@@ -1,0 +1,21 @@
+{
+  "id": "meta-pacm",
+  "title": "Reading PACM back",
+  "aspect": ["meta"],
+  "teaches": "PACM carries the transport, tempo segments, scenes, controls and every track's key anchors. The meter denominator is display-only and is not on the wire; the wire carries beats-per-bar. Scene-relative keys are stored as absolute tick anchors.",
+  "observe": [
+    "bpm is 120, beatsPerBar is 7 (the 8 in 7/8 is not a wire field), dur is 1441440 ticks and end is hold.",
+    "The intro and tail scenes each own half the score.",
+    "depth is a targeted slider; sway is an env-only control with target null.",
+    "level's scene-local keys become absolute ticks 0/720720 and 720720/1441440."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "gain", "arity": 1},
+    {"name": "level", "arity": 1},
+    {"name": "glow", "arity": 1}
+  ],
+  "times": [0, 0.875, 3.5, 5.25],
+  "derives": [],
+  "expect": {}
+}

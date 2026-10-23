@@ -1,0 +1,136 @@
+{
+  "id": "keys-hold",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": "720720",
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 1,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "level",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "180180",
+            "bits": [
+              "0x3e800000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "540540",
+            "bits": [
+              "0x3f400000"
+            ],
+            "easeRef": 0
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": -1,
+      "order": [
+        "level"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0,
+      "order": [
+        "level"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "level"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "level"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.75
+          ],
+          [
+            "0x3f400000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 5,
+      "order": [
+        "level"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.75
+          ],
+          [
+            "0x3f400000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

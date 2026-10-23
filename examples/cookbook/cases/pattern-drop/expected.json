@@ -1,0 +1,169 @@
+{
+  "id": "pattern-drop",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 2,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "drop",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "pattern",
+        "keys": []
+      },
+      {
+        "targetId": 1,
+        "name": "steady",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "pattern",
+        "keys": []
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "drop",
+        "steady"
+      ],
+      "writes": [
+        [
+          "drop",
+          [
+            -0.0000013875013564756955
+          ],
+          [
+            "0xb5ba3a2f"
+          ]
+        ],
+        [
+          "steady",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1.9,
+      "order": [
+        "drop",
+        "steady"
+      ],
+      "writes": [
+        [
+          "drop",
+          [
+            -0.0000013875013564756955
+          ],
+          [
+            "0xb5ba3a2f"
+          ]
+        ],
+        [
+          "steady",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "steady"
+      ],
+      "writes": [
+        [
+          "steady",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 4,
+      "order": [
+        "drop",
+        "steady"
+      ],
+      "writes": [
+        [
+          "drop",
+          [
+            0.0000013875013564756955
+          ],
+          [
+            "0x35ba3a2f"
+          ]
+        ],
+        [
+          "steady",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 6,
+      "order": [
+        "drop",
+        "steady"
+      ],
+      "writes": [
+        [
+          "drop",
+          [
+            6.937506782378478e-7
+          ],
+          [
+            "0x353a3a2f"
+          ]
+        ],
+        [
+          "steady",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "refusal-pattern-budget",
+  "title": "A pattern that exceeds the dry-run budget",
+  "aspect": ["refusal", "pattern"],
+  "teaches": "Pattern tracks are queried under a fixed 1 MiB frame scratch at load time. A cycle dense enough to exhaust it is a load diagnostic (pattern_eval_failed, 27), not a silent every-frame omission and not a process OOM.",
+  "observe": [
+    "(fast 8000 (pure 1)) asks for 8000 haps in one cycle.",
+    "The dry-run exhausts the frame budget before any table exists.",
+    "pack exits 1 and reports pattern_eval_failed at the pattern span.",
+    "There is no PACB carrier to load."
+  ],
+  "score": "score.sjon",
+  "registries": [{"name": "radius", "arity": 1}],
+  "times": [],
+  "derives": [],
+  "expect": {}
+}

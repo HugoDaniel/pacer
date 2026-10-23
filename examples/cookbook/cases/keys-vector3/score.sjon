@@ -1,0 +1,8 @@
+; keys-vector3: a host target with arity 3. Each key value is a vector of
+; exactly three lanes; the ease on a key shapes the segment ENDING there.
+(transport :bpm 120 :meter [4 4])
+
+(track :target tint
+  (key :at 0b :value [1 0 0])
+  (key :at 2b :value [0 1 0] :ease out-quad)
+  (key :at 4b :value [0.25 0.5 1] :ease in-out-sine))

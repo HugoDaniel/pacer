@@ -1,0 +1,20 @@
+{
+  "id": "expr-vector-precedence",
+  "title": "Vector arithmetic, hex and nesting",
+  "aspect": ["expr", "numeric"],
+  "teaches": "Expressions are prefix forms: nesting, not infix precedence, decides evaluation order. Arithmetic is variadic and left-folds, unary minus is the one-argument form of -, and 0x hex literals are ordinary numbers.",
+  "observe": [
+    "(- 10 2 3) is a left fold: (10 - 2) - 3 = 5.",
+    "(* 2 (+ 3 4)) is 14 because the inner form evaluates first.",
+    "(- 0x10) is unary negation of 16, so -16.",
+    "gain grows by 16 per beat from a 16-at-beat-0 floor."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "vec", "arity": 3},
+    {"name": "gain", "arity": 1}
+  ],
+  "times": [0, 1],
+  "derives": [],
+  "expect": {}
+}

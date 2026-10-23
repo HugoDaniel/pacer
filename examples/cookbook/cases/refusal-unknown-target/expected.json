@@ -1,0 +1,34 @@
+{
+  "id": "refusal-unknown-target",
+  "pack": {
+    "exit": 1,
+    "status": "diagnostics",
+    "reason": null,
+    "diagnostics": [
+      {
+        "source": "pacer",
+        "severity": "error",
+        "code": 0,
+        "start": 275,
+        "end": 282,
+        "message": "unknown target `missing` — not in any host registry"
+      }
+    ]
+  },
+  "meta": null,
+  "frames": [],
+  "load": {
+    "driver": "text",
+    "ok": false,
+    "diagnostics": [
+      {
+        "source": "pacer",
+        "severity": "error",
+        "code": 0,
+        "start": 275,
+        "end": 282,
+        "message": "unknown target `missing` — not in any host registry"
+      }
+    ]
+  }
+}

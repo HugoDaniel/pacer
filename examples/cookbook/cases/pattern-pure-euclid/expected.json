@@ -1,0 +1,176 @@
+{
+  "id": "pattern-pure-euclid",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 2,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "value",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "pattern",
+        "keys": []
+      },
+      {
+        "targetId": 1,
+        "name": "pulse",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "pattern",
+        "keys": []
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "value",
+        "pulse"
+      ],
+      "writes": [
+        [
+          "pulse",
+          [
+            0.800000011920929
+          ],
+          [
+            "0x3f4ccccd"
+          ]
+        ],
+        [
+          "value",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.25,
+      "order": [
+        "value"
+      ],
+      "writes": [
+        [
+          "value",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.5,
+      "order": [
+        "value"
+      ],
+      "writes": [
+        [
+          "value",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.75,
+      "order": [
+        "value",
+        "pulse"
+      ],
+      "writes": [
+        [
+          "pulse",
+          [
+            0.800000011920929
+          ],
+          [
+            "0x3f4ccccd"
+          ]
+        ],
+        [
+          "value",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "value"
+      ],
+      "writes": [
+        [
+          "value",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "value",
+        "pulse"
+      ],
+      "writes": [
+        [
+          "pulse",
+          [
+            0.800000011920929
+          ],
+          [
+            "0x3f4ccccd"
+          ]
+        ],
+        [
+          "value",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

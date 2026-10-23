@@ -1,0 +1,124 @@
+{
+  "id": "refusal-truncated-carrier",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 1,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "level",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3e800000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "360360",
+            "bits": [
+              "0x3f000000"
+            ],
+            "easeRef": 1
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f400000"
+            ],
+            "easeRef": 2
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "level"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.5,
+      "order": [
+        "level"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.375
+          ],
+          [
+            "0x3ec00000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "level"
+      ],
+      "writes": [
+        [
+          "level",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "runtime",
+    "derived": {
+      "name": "truncate@40",
+      "ok": false,
+      "live": false,
+      "status": 1,
+      "reason": 3,
+      "reasonName": "directory_malformed",
+      "diagnostics": []
+    },
+    "canonical": {
+      "ok": true,
+      "live": true,
+      "status": 0,
+      "reason": null,
+      "reasonName": null,
+      "diagnostics": []
+    }
+  }
+}

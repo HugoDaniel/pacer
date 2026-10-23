@@ -1,0 +1,16 @@
+; transport-odd-meter: 7/8 at 128.5 bpm, looping every two bars. The meter
+; changes how many beats fit in a bar, not the tick count of the bar itself.
+; `arc` mixes beat and bar positions, `mark` authors its second key in
+; seconds, and `lfo` reads the emitted `phase` lane through an expression.
+(transport :bpm 128.5 :meter [7 8] :dur 2bar :end loop :emit [bar phase])
+
+(track :target arc
+  (key :at 0b :value 0.0)
+  (key :at 1bar :value 1.0 :ease in-out-cubic)
+  (key :at 2bar :value 0.0 :ease out-expo))
+
+(track :target mark
+  (key :at 0b :value 0.2)
+  (key :at 3s :value 0.8))
+
+(track :target lfo :expr (* 0.5 (- 1 (cos (* (tau) phase)))))

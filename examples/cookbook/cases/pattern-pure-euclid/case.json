@@ -1,0 +1,20 @@
+{
+  "id": "pattern-pure-euclid",
+  "title": "A literal pattern and a euclid rhythm",
+  "aspect": ["pattern"],
+  "teaches": "A :pattern track is queried on the bar grid: one pattern cycle is one bar. (pure x) makes one hap for the whole cycle, while (euclid k n x) places k onsets across n slots and leaves gaps where no hap is active.",
+  "observe": [
+    "value writes 0.25 on every frame.",
+    "pulse writes 0.8 at slots 0, 3 and 6 of eight.",
+    "A gap omits the write entirely rather than writing zero.",
+    "The 2 s frame is cycle 1 slot 0, so the tresillo repeats."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "value", "arity": 1},
+    {"name": "pulse", "arity": 1}
+  ],
+  "times": [0, 0.25, 0.5, 0.75, 1, 2],
+  "derives": [],
+  "expect": {}
+}

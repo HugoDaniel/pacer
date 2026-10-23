@@ -1,0 +1,37 @@
+{
+  "id": "refusal-registry-mismatch",
+  "title": "A valid carrier against the wrong join",
+  "aspect": ["refusal"],
+  "teaches": "PACB target references are resolved against the ordered PACT join by identity, including names and arity. Two structurally valid, same-length joins can still be the wrong join: changing arity or swapping names is status 1, reason 9.",
+  "observe": [
+    "alpha and bravo are both one-lane registry-0 targets.",
+    "Changing alpha to two lanes makes the join semantically wrong.",
+    "Swapping only the ordered names is equally wrong.",
+    "Both refusals leave the canonical carrier loadable at status 0."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "alpha", "arity": 1},
+    {"name": "bravo", "arity": 1}
+  ],
+  "times": [0, 0.5, 1],
+  "derives": [],
+  "loadMode": "variants",
+  "variants": [
+    {
+      "name": "structural",
+      "registries": [
+        {"name": "alpha", "arity": 2},
+        {"name": "bravo", "arity": 1}
+      ]
+    },
+    {
+      "name": "name-swap",
+      "registries": [
+        {"name": "bravo", "arity": 1},
+        {"name": "alpha", "arity": 1}
+      ]
+    }
+  ],
+  "expect": {}
+}

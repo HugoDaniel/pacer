@@ -1,0 +1,136 @@
+{
+  "id": "keys-loop",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": "1441440",
+    "end": "loop",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 1,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "phase",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "1441440",
+            "bits": [
+              "0x3f800000"
+            ],
+            "easeRef": 0
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 1,
+      "order": [
+        "phase"
+      ],
+      "writes": [
+        [
+          "phase",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 4,
+      "order": [
+        "phase"
+      ],
+      "writes": [
+        [
+          "phase",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 5,
+      "order": [
+        "phase"
+      ],
+      "writes": [
+        [
+          "phase",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": -1,
+      "order": [
+        "phase"
+      ],
+      "writes": [
+        [
+          "phase",
+          [
+            0.75
+          ],
+          [
+            "0x3f400000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 100,
+      "order": [
+        "phase"
+      ],
+      "writes": [
+        [
+          "phase",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

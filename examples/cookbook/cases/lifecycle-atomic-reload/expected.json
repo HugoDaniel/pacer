@@ -1,0 +1,258 @@
+{
+  "id": "lifecycle-atomic-reload",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [
+      {
+        "index": 0,
+        "id": "depth",
+        "target": "gain",
+        "registry": 0,
+        "ncomp": 1,
+        "type": "slider",
+        "value": [
+          0.25
+        ],
+        "min": null,
+        "max": null
+      }
+    ],
+    "trackCount": 2,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "radius",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3e4ccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f4ccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "1441440",
+            "bits": [
+              "0x3e4ccccd"
+            ],
+            "easeRef": 1
+          }
+        ]
+      },
+      {
+        "targetId": 2,
+        "name": "blend",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0.5,
+      "order": [
+        "radius",
+        "blend",
+        "gain"
+      ],
+      "writes": [
+        [
+          "blend",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "radius",
+          [
+            0.3499999940395355
+          ],
+          [
+            "0x3eb33333"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "runtime",
+    "steps": [
+      {
+        "name": "initial",
+        "load": {
+          "ok": true,
+          "live": true,
+          "status": 0,
+          "reason": null,
+          "reasonName": null,
+          "diagnostics": []
+        },
+        "time": 0.5,
+        "writes": [
+          [
+            "blend",
+            [
+              0.5
+            ],
+            [
+              "0x3f000000"
+            ]
+          ],
+          [
+            "gain",
+            [
+              0.25
+            ],
+            [
+              "0x3e800000"
+            ]
+          ],
+          [
+            "radius",
+            [
+              0.3499999940395355
+            ],
+            [
+              "0x3eb33333"
+            ]
+          ]
+        ],
+        "order": [
+          "radius",
+          "blend",
+          "gain"
+        ]
+      },
+      {
+        "name": "refused-reload",
+        "load": {
+          "ok": false,
+          "live": true,
+          "status": 1,
+          "reason": 9,
+          "reasonName": "registry_mismatch",
+          "diagnostics": [],
+          "accepted": false
+        },
+        "time": 0.5,
+        "writes": [
+          [
+            "blend",
+            [
+              0.5
+            ],
+            [
+              "0x3f000000"
+            ]
+          ],
+          [
+            "gain",
+            [
+              0.25
+            ],
+            [
+              "0x3e800000"
+            ]
+          ],
+          [
+            "radius",
+            [
+              0.3499999940395355
+            ],
+            [
+              "0x3eb33333"
+            ]
+          ]
+        ],
+        "order": [
+          "radius",
+          "blend",
+          "gain"
+        ]
+      },
+      {
+        "name": "recovered",
+        "load": {
+          "ok": true,
+          "live": true,
+          "status": 0,
+          "reason": null,
+          "reasonName": null,
+          "diagnostics": [],
+          "retainedReason": 9,
+          "accepted": true
+        },
+        "time": 0.5,
+        "writes": [
+          [
+            "blend",
+            [
+              0.5
+            ],
+            [
+              "0x3f000000"
+            ]
+          ],
+          [
+            "gain",
+            [
+              0.25
+            ],
+            [
+              "0x3e800000"
+            ]
+          ],
+          [
+            "radius",
+            [
+              0.3499999940395355
+            ],
+            [
+              "0x3eb33333"
+            ]
+          ]
+        ],
+        "order": [
+          "radius",
+          "blend",
+          "gain"
+        ]
+      }
+    ]
+  }
+}

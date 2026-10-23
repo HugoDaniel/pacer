@@ -1,0 +1,261 @@
+{
+  "id": "expr-control",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [
+      {
+        "index": 0,
+        "id": "depth",
+        "target": "gain",
+        "registry": 0,
+        "ncomp": 1,
+        "type": "slider",
+        "value": [
+          0.25
+        ],
+        "min": [
+          0
+        ],
+        "max": [
+          1
+        ]
+      },
+      {
+        "index": 1,
+        "id": "sway",
+        "target": null,
+        "registry": 0,
+        "ncomp": 1,
+        "type": "slider",
+        "value": [
+          0.5
+        ],
+        "min": null,
+        "max": null
+      }
+    ],
+    "trackCount": 3,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "wave",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 1,
+        "name": "spike",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 2,
+        "name": "mod",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "wave",
+        "spike",
+        "mod",
+        "gain"
+      ],
+      "writes": [
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "mod",
+          [
+            0.125
+          ],
+          [
+            "0x3e000000"
+          ]
+        ],
+        [
+          "spike",
+          [
+            -1
+          ],
+          [
+            "0xbf800000"
+          ]
+        ],
+        [
+          "wave",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.25,
+      "order": [
+        "wave",
+        "spike",
+        "mod",
+        "gain"
+      ],
+      "writes": [
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "mod",
+          [
+            0.125
+          ],
+          [
+            "0x3e000000"
+          ]
+        ],
+        [
+          "spike",
+          [
+            -2
+          ],
+          [
+            "0xc0000000"
+          ]
+        ],
+        [
+          "wave",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.5,
+      "order": [
+        "wave",
+        "mod",
+        "gain"
+      ],
+      "writes": [
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "mod",
+          [
+            0.125
+          ],
+          [
+            "0x3e000000"
+          ]
+        ],
+        [
+          "wave",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.625,
+      "order": [
+        "wave",
+        "spike",
+        "mod",
+        "gain"
+      ],
+      "writes": [
+        [
+          "gain",
+          [
+            0.25
+          ],
+          [
+            "0x3e800000"
+          ]
+        ],
+        [
+          "mod",
+          [
+            0.125
+          ],
+          [
+            "0x3e000000"
+          ]
+        ],
+        [
+          "spike",
+          [
+            4
+          ],
+          [
+            "0x40800000"
+          ]
+        ],
+        [
+          "wave",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

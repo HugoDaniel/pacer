@@ -1,0 +1,10 @@
+; refusal-truncated-carrier: a clean three-key score. The runner packs it,
+; then forms a 40-byte prefix from those exact bytes (no checked-in blob) and
+; offers the prefix to PacerRt. The prefix is a decode refusal; the full
+; carrier is the frame oracle.
+(transport :bpm 120 :meter [4 4])
+
+(track :target level
+  (key :at 0b :value 0.25)
+  (key :at 2b :value 0.5 :ease smoothstep)
+  (key :at 4b :value 0.75 :ease in-out-cubic))

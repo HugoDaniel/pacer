@@ -1,0 +1,286 @@
+{
+  "id": "numeric-f32-negzero",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": null,
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 7,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "tenth",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3dcccccd"
+            ],
+            "easeRef": 0
+          }
+        ]
+      },
+      {
+        "targetId": 1,
+        "name": "third",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3eaaaaab"
+            ],
+            "easeRef": 0
+          }
+        ]
+      },
+      {
+        "targetId": 2,
+        "name": "negzero",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 3,
+        "name": "literal-negzero",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          }
+        ]
+      },
+      {
+        "targetId": 4,
+        "name": "float-negzero",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x80000000"
+            ],
+            "easeRef": 0
+          }
+        ]
+      },
+      {
+        "targetId": 5,
+        "name": "zero",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x00000000"
+            ],
+            "easeRef": 0
+          }
+        ]
+      },
+      {
+        "targetId": 6,
+        "name": "big",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x4b800000"
+            ],
+            "easeRef": 0
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "tenth",
+        "third",
+        "negzero",
+        "literal-negzero",
+        "float-negzero",
+        "zero",
+        "big"
+      ],
+      "writes": [
+        [
+          "big",
+          [
+            16777216
+          ],
+          [
+            "0x4b800000"
+          ]
+        ],
+        [
+          "float-negzero",
+          [
+            "-0"
+          ],
+          [
+            "0x80000000"
+          ]
+        ],
+        [
+          "literal-negzero",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "negzero",
+          [
+            "-0"
+          ],
+          [
+            "0x80000000"
+          ]
+        ],
+        [
+          "tenth",
+          [
+            0.10000000149011612
+          ],
+          [
+            "0x3dcccccd"
+          ]
+        ],
+        [
+          "third",
+          [
+            0.3333333432674408
+          ],
+          [
+            "0x3eaaaaab"
+          ]
+        ],
+        [
+          "zero",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "tenth",
+        "third",
+        "negzero",
+        "literal-negzero",
+        "float-negzero",
+        "zero",
+        "big"
+      ],
+      "writes": [
+        [
+          "big",
+          [
+            16777216
+          ],
+          [
+            "0x4b800000"
+          ]
+        ],
+        [
+          "float-negzero",
+          [
+            "-0"
+          ],
+          [
+            "0x80000000"
+          ]
+        ],
+        [
+          "literal-negzero",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "negzero",
+          [
+            "-0"
+          ],
+          [
+            "0x80000000"
+          ]
+        ],
+        [
+          "tenth",
+          [
+            0.10000000149011612
+          ],
+          [
+            "0x3dcccccd"
+          ]
+        ],
+        [
+          "third",
+          [
+            0.3333333432674408
+          ],
+          [
+            "0x3eaaaaab"
+          ]
+        ],
+        [
+          "zero",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

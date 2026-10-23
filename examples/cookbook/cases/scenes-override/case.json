@@ -1,0 +1,21 @@
+{
+  "id": "scenes-override",
+  "title": "Two scenes override a global track",
+  "aspect": ["scenes"],
+  "teaches": "A scene is a named window on the transport grid. A scene track resolves its keys scene-relative and its writes land after global tracks, so overlapping scenes hand a target off by write order. scene-phase and scene-beat are the window-local clock.",
+  "observe": [
+    "A global level track runs the whole score underneath both scenes.",
+    "On [2 s, 3 s) intro and drop both write level; drop is later and wins.",
+    "scene-phase runs 0..1 across intro's six beats.",
+    "scene-beat counts from drop's own start, not from the transport start."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "level", "arity": 1},
+    {"name": "sweep", "arity": 1},
+    {"name": "pulse", "arity": 1, "registry": 1}
+  ],
+  "times": [0, 1, 2, 2.5, 3, 4, 5.5, 8],
+  "derives": [],
+  "expect": {}
+}

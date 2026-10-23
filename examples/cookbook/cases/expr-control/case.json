@@ -1,0 +1,22 @@
+{
+  "id": "expr-control",
+  "title": "Controls feed expressions and write last",
+  "aspect": ["expr", "controls"],
+  "teaches": "A control is both a document value written to its :target and a binding in every expression. Control writes land after track writes, and an env-only control has no target at all. A non-finite expression result omits that track's write for the frame.",
+  "observe": [
+    "wave follows sin(tau * beat) and spike is 1 / (beat - 1).",
+    "At beat 1 spike divides by zero, so no spike write appears.",
+    "mod reads depth and sway and evaluates to 0.125.",
+    "gain is written by the depth control after the track writes."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "wave", "arity": 1},
+    {"name": "spike", "arity": 1},
+    {"name": "mod", "arity": 1},
+    {"name": "gain", "arity": 1}
+  ],
+  "times": [0, 0.25, 0.5, 0.625],
+  "derives": [],
+  "expect": {}
+}

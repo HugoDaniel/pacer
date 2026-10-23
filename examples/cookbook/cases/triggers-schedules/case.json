@@ -1,0 +1,20 @@
+{
+  "id": "triggers-schedules",
+  "title": "Periodic and explicit trigger schedules",
+  "aspect": ["triggers"],
+  "teaches": "A trigger finds the last event at or before the playhead and writes phase, count, gate and beats-since, truncated to the target's arity. :every and :at are alternative schedules; before the first event the write is omitted, and a loop resets the local count.",
+  "observe": [
+    "pulse is ncomp 4, so all four lanes survive; hit is ncomp 1, so only phase is written.",
+    "Before the first event the trigger is absent from the frame.",
+    "At an exact event the gate is 1 and phase is 0.",
+    "At 4 s the loop wraps and both triggers go silent again."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "pulse", "arity": 4},
+    {"name": "hit", "arity": 1, "registry": 1}
+  ],
+  "times": [0, 0.5, 0.75, 1, 1.5, 2.5, 3.75, 4, 4.5],
+  "derives": [],
+  "expect": {}
+}

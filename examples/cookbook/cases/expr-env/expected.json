@@ -1,0 +1,315 @@
+{
+  "id": "expr-env",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": "1441440",
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [],
+    "trackCount": 4,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "ticks",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 1,
+        "name": "grid",
+        "registry": 0,
+        "ncomp": 3,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 2,
+        "name": "rate",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 3,
+        "name": "seconds",
+        "registry": 0,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "ticks",
+        "grid",
+        "rate",
+        "seconds"
+      ],
+      "writes": [
+        [
+          "grid",
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            "0x00000000",
+            "0x00000000",
+            "0x00000000"
+          ]
+        ],
+        [
+          "rate",
+          [
+            960
+          ],
+          [
+            "0x44700000"
+          ]
+        ],
+        [
+          "seconds",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ],
+        [
+          "ticks",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 0.5,
+      "order": [
+        "ticks",
+        "grid",
+        "rate",
+        "seconds"
+      ],
+      "writes": [
+        [
+          "grid",
+          [
+            1,
+            0.25,
+            0.25
+          ],
+          [
+            "0x3f800000",
+            "0x3e800000",
+            "0x3e800000"
+          ]
+        ],
+        [
+          "rate",
+          [
+            960
+          ],
+          [
+            "0x44700000"
+          ]
+        ],
+        [
+          "seconds",
+          [
+            0.5
+          ],
+          [
+            "0x3f000000"
+          ]
+        ],
+        [
+          "ticks",
+          [
+            180180
+          ],
+          [
+            "0x482ff500"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "ticks",
+        "grid",
+        "rate",
+        "seconds"
+      ],
+      "writes": [
+        [
+          "grid",
+          [
+            2,
+            0.5,
+            0.5
+          ],
+          [
+            "0x40000000",
+            "0x3f000000",
+            "0x3f000000"
+          ]
+        ],
+        [
+          "rate",
+          [
+            960
+          ],
+          [
+            "0x44700000"
+          ]
+        ],
+        [
+          "seconds",
+          [
+            1
+          ],
+          [
+            "0x3f800000"
+          ]
+        ],
+        [
+          "ticks",
+          [
+            360360
+          ],
+          [
+            "0x48aff500"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "ticks",
+        "grid",
+        "rate",
+        "seconds"
+      ],
+      "writes": [
+        [
+          "grid",
+          [
+            4,
+            1,
+            0
+          ],
+          [
+            "0x40800000",
+            "0x3f800000",
+            "0x00000000"
+          ]
+        ],
+        [
+          "rate",
+          [
+            960
+          ],
+          [
+            "0x44700000"
+          ]
+        ],
+        [
+          "seconds",
+          [
+            2
+          ],
+          [
+            "0x40000000"
+          ]
+        ],
+        [
+          "ticks",
+          [
+            720720
+          ],
+          [
+            "0x492ff500"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 3,
+      "order": [
+        "ticks",
+        "grid",
+        "rate",
+        "seconds"
+      ],
+      "writes": [
+        [
+          "grid",
+          [
+            6,
+            1.5,
+            0.5
+          ],
+          [
+            "0x40c00000",
+            "0x3fc00000",
+            "0x3f000000"
+          ]
+        ],
+        [
+          "rate",
+          [
+            960
+          ],
+          [
+            "0x44700000"
+          ]
+        ],
+        [
+          "seconds",
+          [
+            3
+          ],
+          [
+            "0x40400000"
+          ]
+        ],
+        [
+          "ticks",
+          [
+            1081080
+          ],
+          [
+            "0x4983f7c0"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "text",
+    "ok": true,
+    "diagnostics": []
+  }
+}

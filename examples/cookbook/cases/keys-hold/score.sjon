@@ -1,0 +1,8 @@
+; keys-hold: :dur 1bar with the default :end hold. The two keys sit inside
+; the bar, so the gaps before/after them are held values, and every clock at
+; or beyond 2.0 s clamps to the same tick.
+(transport :bpm 120 :meter [4 4] :dur 1bar)
+
+(track :target level
+  (key :at 1b :value 0.25)
+  (key :at 3b :value 0.75))

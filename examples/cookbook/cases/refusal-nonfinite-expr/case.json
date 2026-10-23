@@ -1,0 +1,20 @@
+{
+  "id": "refusal-nonfinite-expr",
+  "title": "NaN and infinity are refused at the expression boundary",
+  "aspect": ["refusal", "numeric"],
+  "teaches": "An expression result must be a finite number (or a finite numeric vector). The t=0 dry-run catches sqrt of a negative and an overflowing pow, emitting expr_result_invalid (19) for each track before any table exists.",
+  "observe": [
+    "(sqrt -1) evaluates to NaN and is refused.",
+    "(pow 10 400) overflows to +infinity and is refused.",
+    "Both diagnostics are collected; pack exits 1 with no carrier.",
+    "A NaN never reaches the write buffer."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "nan", "arity": 1},
+    {"name": "inf", "arity": 1}
+  ],
+  "times": [],
+  "derives": [],
+  "expect": {}
+}

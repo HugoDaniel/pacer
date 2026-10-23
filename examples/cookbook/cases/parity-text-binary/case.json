@@ -1,0 +1,27 @@
+{
+  "id": "parity-text-binary",
+  "title": "Text and PACB produce the same frames",
+  "aspect": ["parity"],
+  "teaches": "Pacer.load compiles the text; PacerRt.load decodes the packed carrier. For the same host join and the same seconds, the two paths must return bit-identical writes, including key anchors, expr evaluation, pattern haps and trigger lanes.",
+  "observe": [
+    "The score mixes keys, expr, pattern, trigger, scene, control, tempo map and emit.",
+    "Both drivers are asked for the same six clocks.",
+    "Every write tuple, including its f32 hex bits, compares equal.",
+    "The binary path never sees the score text."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "level", "arity": 1},
+    {"name": "sweep", "arity": 1},
+    {"name": "radius", "arity": 1},
+    {"name": "wave", "arity": 1},
+    {"name": "pulse", "arity": 1},
+    {"name": "click", "arity": 4},
+    {"name": "gain", "arity": 1},
+    {"name": "bpm", "arity": 1}
+  ],
+  "times": [0, 0.75, 1.5, 3, 5.5, 7.5],
+  "derives": [],
+  "loadMode": "both",
+  "expect": {}
+}

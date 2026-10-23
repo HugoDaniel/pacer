@@ -1,0 +1,21 @@
+{
+  "id": "pattern-env",
+  "title": "Pattern-local shadows and the parent scope",
+  "aspect": ["pattern"],
+  "teaches": "Hap expressions see pacer's frame environment under three pattern-local names. tick is the hap's cycle onset, not the frame tick; cycle and seed are pattern-local too, while beat and every control resolve through the parent scope.",
+  "observe": [
+    "clock follows beat across the bar wrap: 0, 2, 3, 8, 12.",
+    "onset stays 0 all through cycle 0 and jumps to 720720 in cycle 1.",
+    "swayx2 reads the env-only control sway and writes 0.5.",
+    "Only swayx2 writes; the control itself has no target."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "clock", "arity": 1},
+    {"name": "onset", "arity": 1},
+    {"name": "swayx2", "arity": 1}
+  ],
+  "times": [0, 0.5, 0.75, 2, 3],
+  "derives": [],
+  "expect": {}
+}

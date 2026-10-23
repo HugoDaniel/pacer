@@ -1,0 +1,7 @@
+; keys-loop: a two-bar ramp on a loop. beat = floor(seconds * 360360) at
+; 120 bpm 4/4; the tick grid then wraps floor-mod by 2 bars (1441440 ticks).
+(transport :bpm 120 :meter [4 4] :dur 2bar :end loop)
+
+(track :target phase
+  (key :at 0b :value 0)
+  (key :at 8b :value 1))

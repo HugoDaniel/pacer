@@ -1,0 +1,216 @@
+{
+  "id": "runtime-pact-join",
+  "pack": {
+    "exit": 0,
+    "status": "ok",
+    "reason": null,
+    "diagnostics": []
+  },
+  "meta": {
+    "bpm": 120,
+    "beatsPerBar": 4,
+    "dur": "1441440",
+    "end": "hold",
+    "tempoMap": [],
+    "scenes": [],
+    "controls": [
+      {
+        "index": 0,
+        "id": "drive",
+        "target": null,
+        "registry": 0,
+        "ncomp": 1,
+        "type": "slider",
+        "value": [
+          0.5
+        ],
+        "min": null,
+        "max": null
+      }
+    ],
+    "trackCount": 3,
+    "tracks": [
+      {
+        "targetId": 0,
+        "name": "mix",
+        "registry": 0,
+        "ncomp": 3,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 1,
+        "name": "send",
+        "registry": 1,
+        "ncomp": 1,
+        "source": "expr",
+        "keys": []
+      },
+      {
+        "targetId": 2,
+        "name": "extra",
+        "registry": 2,
+        "ncomp": 2,
+        "source": "keys",
+        "keys": [
+          {
+            "at": "0",
+            "bits": [
+              "0x3dcccccd",
+              "0x3e4ccccd"
+            ],
+            "easeRef": 0
+          },
+          {
+            "at": "720720",
+            "bits": [
+              "0x3f666666",
+              "0x3f4ccccd"
+            ],
+            "easeRef": 1
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "time": 0,
+      "order": [
+        "mix",
+        "send",
+        "extra"
+      ],
+      "writes": [
+        [
+          "extra",
+          [
+            0.10000000149011612,
+            0.20000000298023224
+          ],
+          [
+            "0x3dcccccd",
+            "0x3e4ccccd"
+          ]
+        ],
+        [
+          "mix",
+          [
+            0,
+            0,
+            1
+          ],
+          [
+            "0x00000000",
+            "0x00000000",
+            "0x3f800000"
+          ]
+        ],
+        [
+          "send",
+          [
+            0
+          ],
+          [
+            "0x00000000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 1,
+      "order": [
+        "mix",
+        "send",
+        "extra"
+      ],
+      "writes": [
+        [
+          "extra",
+          [
+            0.5,
+            0.5
+          ],
+          [
+            "0x3f000000",
+            "0x3f000000"
+          ]
+        ],
+        [
+          "mix",
+          [
+            2,
+            4,
+            3
+          ],
+          [
+            "0x40000000",
+            "0x40800000",
+            "0x40400000"
+          ]
+        ],
+        [
+          "send",
+          [
+            6
+          ],
+          [
+            "0x40c00000"
+          ]
+        ]
+      ]
+    },
+    {
+      "time": 2,
+      "order": [
+        "mix",
+        "send",
+        "extra"
+      ],
+      "writes": [
+        [
+          "extra",
+          [
+            0.8999999761581421,
+            0.800000011920929
+          ],
+          [
+            "0x3f666666",
+            "0x3f4ccccd"
+          ]
+        ],
+        [
+          "mix",
+          [
+            4,
+            8,
+            5
+          ],
+          [
+            "0x40800000",
+            "0x41000000",
+            "0x40a00000"
+          ]
+        ],
+        [
+          "send",
+          [
+            12
+          ],
+          [
+            "0x41400000"
+          ]
+        ]
+      ]
+    }
+  ],
+  "load": {
+    "driver": "runtime",
+    "ok": true,
+    "live": true,
+    "status": 0,
+    "reason": null,
+    "reasonName": null,
+    "diagnostics": []
+  }
+}

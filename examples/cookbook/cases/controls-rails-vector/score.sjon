@@ -1,0 +1,15 @@
+; controls-rails-vector: depth is a slider with rails on its own value and a
+; write target; pan is an xy pad, so its value and rails are two lanes. The
+; driver never clamps: the rails ride in PACM for an editor, while the
+; document :value is exactly what is written and what expressions read.
+(transport :bpm 120 :meter [4 4])
+
+(control :id depth :target gain :min 0 :max 1 :value 0.25)
+(control :id pan
+  :type xy
+  :target pan-out
+  :min [-1 -1]
+  :max [1 1]
+  :value [0.25 0.5])
+
+(track :target mod :expr (* depth 2))

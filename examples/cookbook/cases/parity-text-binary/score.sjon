@@ -1,0 +1,25 @@
+; parity-text-binary: one score that exercises every value source and both
+; clocks. `Pacer` compiles this text; `PacerRt` reads only the packed carrier.
+; The runner requires identical write tuples (target, f32 lanes, f32 bits)
+; at every configured time; `expected.load.parity` is the pin.
+(transport :bpm 90 :meter [4 4] :dur 4bar :end loop :emit [bpm])
+(tempo :at 2bar :bpm 180)
+
+(control :id depth :target gain :value 0.25)
+
+(scene :name intro :at 0b :dur 2bar
+  (track :target level
+    (key :at 0b :value 0.2)
+    (key :at 2bar :value 0.8 :ease in-out-cubic))
+  (track :target sweep :expr scene-phase))
+
+(track :target radius
+  (key :at 0b :value 0.1)
+  (key :at 4bar :value 0.9 :ease out-expo))
+
+(track :target wave
+  :expr (+ 0.5 (* depth (sin (* (tau) beat)))))
+
+(track :target pulse :pattern (euclid 3 8 0.8))
+
+(trigger :target click :every 1b)

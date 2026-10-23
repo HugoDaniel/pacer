@@ -1,0 +1,13 @@
+; expr-vector-precedence: there is no infix precedence to memorise. A form's
+; children are evaluated first, so the tree is the precedence. `+`, `-` and
+; `*` are variadic; `-` with one argument negates. Hex is accepted wherever
+; a number is accepted, including inside an expression.
+(transport :bpm 120 :meter [4 4])
+
+(track :target vec
+  :expr [(- 10 2 3)
+         (* 2 (+ 3 4))
+         (- 0x10)])
+
+(track :target gain
+  :expr (* 0x10 (+ 1 beat)))

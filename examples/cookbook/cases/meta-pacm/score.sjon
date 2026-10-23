@@ -1,0 +1,20 @@
+; meta-pacm: metadata is read back from PACM, not from this text. The 7/8
+; meter is a wire `beats_per_bar = 7`; the denominator is display-only.
+; Both scenes drive `level` with key anchors, one is offset by a bar, and the
+; controls show both a targeted and an env-only pin.
+(transport :bpm 120 :meter [7 8] :dur 2bar :end hold)
+
+(control :id depth :target gain :min 0 :max 1 :value 0.25)
+(control :id sway :value 0.5)
+
+(scene :name intro :at 0b :dur 1bar
+  (track :target level
+    (key :at 0b :value 0.2)
+    (key :at 1bar :value 0.8 :ease in-out-cubic)))
+
+(scene :name tail :at 1bar :dur 1bar
+  (track :target level
+    (key :at 0b :value 0.8)
+    (key :at 1bar :value 0.2 :ease out-cubic)))
+
+(track :target glow :expr (* depth sway))

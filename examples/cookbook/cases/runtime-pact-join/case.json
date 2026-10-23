@@ -1,0 +1,22 @@
+{
+  "id": "runtime-pact-join",
+  "title": "A runtime-only load over three registries",
+  "aspect": ["runtime"],
+  "teaches": "PacerRt resolves PACB target references against the ordered PACT join supplied at load. The join decides each target's name, registry and lane count; the carrier carries only the reference. Here three registries contribute arities 3, 1 and 2 to one flat target space.",
+  "observe": [
+    "mix is registry 0 with three lanes, send is registry 1 with one, extra is registry 2 with two.",
+    "The runtime alone loads the carrier; no score text is supplied.",
+    "The vec3 mix lane sums beat and the drive control across its components.",
+    "The PACM tracks resolve all three host names from the join."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "mix", "arity": 3, "registry": 0},
+    {"name": "send", "arity": 1, "registry": 1},
+    {"name": "extra", "arity": 2, "registry": 2}
+  ],
+  "times": [0, 1, 2],
+  "derives": [],
+  "loadMode": "binary",
+  "expect": {}
+}

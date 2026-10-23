@@ -1,0 +1,8 @@
+; pattern-drop: cycle 0 is harmless (tick 0 -> denominator -720720), so the
+; load-time dry-run accepts the score. In cycle 1 tick is 720720 and the
+; division by zero drops that hap; the frame omits `drop` but still writes
+; `steady`. Cycle 2 recovers because the denominator is positive again.
+(transport :bpm 120 :meter [4 4])
+
+(track :target drop :pattern (pure (/ 1 (- tick 720720))))
+(track :target steady :pattern (pure 0.5))

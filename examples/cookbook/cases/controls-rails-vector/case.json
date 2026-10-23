@@ -1,0 +1,21 @@
+{
+  "id": "controls-rails-vector",
+  "title": "A scalar rail control and a vector control",
+  "aspect": ["controls"],
+  "teaches": "A control's :value is the document authority, written every frame to its optional :target and bound by :id in expressions. :min/:max are editor rails, not clamps. An xy control is a vector pin with its own default.",
+  "observe": [
+    "depth writes gain = 0.25 and binds as 0.25 in mod.",
+    "pan is an xy pin with two lanes and a [0.25 0.5] default.",
+    ":min/:max are echoed in PACM but never clamp the write.",
+    "The frame order is track first, then gain, then pan-out."
+  ],
+  "score": "score.sjon",
+  "registries": [
+    {"name": "mod", "arity": 1},
+    {"name": "gain", "arity": 1},
+    {"name": "pan-out", "arity": 2}
+  ],
+  "times": [0, 1],
+  "derives": [],
+  "expect": {}
+}

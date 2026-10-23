@@ -1,0 +1,8 @@
+; keys-scalar: the smallest useful score. One host target, two keys, no
+; easing keyword, no :dur. The default ease is linear; before the first key
+; the track holds 0.2, after the last it holds 0.8.
+(transport :bpm 120 :meter [4 4])
+
+(track :target radius
+  (key :at 0b :value 0.2)
+  (key :at 4b :value 0.8))

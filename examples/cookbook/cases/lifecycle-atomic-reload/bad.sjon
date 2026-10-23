@@ -1,0 +1,8 @@
+; lifecycle-atomic-reload: the bad carrier. It was packed against a join
+; that includes `ghost`, so its bytes are valid; loading it against the good
+; join (which lacks `ghost`) is a registry-identity refusal, reason 9. The
+; old score stays live, which is what the lifecycle steps pin.
+(transport :bpm 120 :meter [4 4])
+
+(track :target ghost
+  (key :at 0b :value 0.5))
