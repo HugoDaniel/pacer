@@ -1,5 +1,5 @@
 {
-  "pacer":{"version":"0.2.0","format":1},
+  "pacer":{"version":"0.1.0","format":1},
   "command":"pack",
   "source":{"path":"examples/starter.score.sjon","bytes":3385},
   "ok":true,

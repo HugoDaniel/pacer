@@ -6,9 +6,24 @@
 Ask one score a question without writing a host: what did the compiler make of
 it, and what does it write at a given time?
 
+## Build from source
+
+The CLI is a native binary, not part of the npm package. `npm install pacer`
+installs the JS/wasm runtime only. Build from the Pacer checkout with the
+pinned inputs:
+
+- Zig **0.16.0**
+- sibling SJON **1.5.0 or newer** (the 0.1.0 release pin is `v1.5.0`,
+  revision `97e12f39d9e63d028aa9b124660cc4cfed4cc726`)
+
 ```sh
+git clone https://git.hugodaniel.com/hugo/SJON.git ../SJON
+git -C ../SJON checkout 97e12f39d9e63d028aa9b124660cc4cfed4cc726
 zig build cli          # → zig-out/bin/pacer
 ```
+
+The same prerequisites and `zig build verify` are documented in the repo
+[`README.md`](../README.md).
 
 ## Verbs
 

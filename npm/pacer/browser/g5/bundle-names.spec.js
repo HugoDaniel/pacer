@@ -82,6 +82,10 @@ test('raw variant extracts the same cartridge and agrees on the oracle', async (
   await page.goto('/');
   await waitReady(page);
   await page.locator('#toggle-raw').click();
+  // `#names` and aria-pressed are already true from the initial compressed
+  // load, so waiting on them alone can read the proof before the raw load
+  // commits. Wait for the variant-specific ready banner instead.
+  await expect(page.locator('#status')).toContainText('ready — variant raw');
   await expect(page.locator('#names')).toHaveText('drop');
   await expect(page.locator('#toggle-raw')).toHaveAttribute('aria-pressed', 'true');
   const proof = await page.evaluate(() => window.__pacerProof);

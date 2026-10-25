@@ -20,7 +20,7 @@ const std = @import("std");
 const sjon = @import("sjon");
 
 /// Package version. Mirrors `build.zig.zon`.
-pub const version = "0.2.0";
+pub const version = "0.1.0";
 
 /// The pacer score schema, preloaded once per host and borrowed by every
 /// compile — the outermost ring of the lifetime nesting.

@@ -85,7 +85,9 @@ const clock = perfClock();
 
 `pacer/rt` ships `PacerRt`: the same evaluator without the compiler. Pack a
 score offline with `pacer pack`, ship the resulting `.pacb` bytes, and load
-them against the matching host registries:
+them against the matching host registries. **The npm package does not include
+the `pacer` CLI binary**; build it from the repo source with `zig build cli`
+(Zig 0.16.0 and sibling SJON 1.5.0+ — see `docs/cli.md` in the repo).
 
 ```js
 import { readFile } from 'node:fs/promises';
@@ -174,9 +176,14 @@ becomes a conformant host with an empty registry. It was published as
 ## Develop
 
 This package is the JS half of the [pacer](https://git.hugodaniel.com/hugo/pacer)
-repo; `pacer.wasm` is built from the Zig sources by Zig 0.16.
+repo; `pacer.wasm` is built from the Zig sources by Zig **0.16.0** with a
+sibling SJON **1.5.0 or newer** checkout at `../SJON` (the 0.1.0 release pin
+is `v1.5.0`, revision `97e12f39d9e63d028aa9b124660cc4cfed4cc726`).
 
 ```sh
+git clone https://git.hugodaniel.com/hugo/SJON.git ../SJON
+git -C ../SJON checkout 97e12f39d9e63d028aa9b124660cc4cfed4cc726
+npm ci             # JS dev dependencies
 npm run build      # zig build wasm + wasm-rt → copy both in → emit .d.ts (types/)
 npm run typecheck  # tsc --noEmit over the JSDoc-typed source
 npm run lint       # biome check src test browser (lint + format, read-only)

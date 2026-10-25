@@ -217,8 +217,10 @@ fails loudly if they drift.
 ## The ../SJON path dependency
 
 pacer builds ONLY next to a sibling SJON checkout (`build.zig.zon` points at
-`../SJON`). This is intentional — SJON is unpublished, consumed by path like
-pngine. pacer imports it with `.@"plugin-exec" = false` (no libwasmtime; it needs
+`../SJON`). This is intentional — the 0.1.0 release consumes SJON by path, like
+pngine, and pins **1.5.0 or newer** (`v1.5.0` /
+`97e12f39d9e63d028aa9b124660cc4cfed4cc726`). pacer imports it with
+`.@"plugin-exec" = false` (no libwasmtime; it needs
 only the parser / validator / Expr / Pattern / trig surface). The score schema
 (`schema/pacer.sjon`) is `@embedFile`'d via the `pacer_schema` build import, so
 validation works on wasm32-freestanding with no filesystem.
@@ -256,8 +258,9 @@ its `:registry` — so a score compiles, corpus-tests, and lints with no host at
 all. Declared names never cross the wire (`'PACT'`/`'PACM'` unchanged); a
 consumer reads them from source, and `CompileResult.targets` surfaces the merged
 join natively. Wave 4 is closed (hardening P1–P5, the 1.0 review, and the
-tag prereqs — see `plans/00-strategy.md`); what remains before 1.0 are release
-calls, not open plan items: publishing 0.2.0 and cutting the tag itself.
+tag prereqs — see `plans/00-strategy.md`). The **0.1.0** release candidate is
+prepared and verified (plan 15); publication waits on registry authentication
+and owner authorization, not on open code work.
 
 Alongside that, `plans/12-sjon-alignment.md` realigns pacer with SJON 1.1/1.2+.
 Wave A (preload — the schema is loaded once per host, spans are score

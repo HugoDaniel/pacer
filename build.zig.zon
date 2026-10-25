@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0x507a7d3fd872437b,
     .name = .pacer,
-    .version = "0.2.0",
+    .version = "0.1.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         // SJON: schema-driven S-expression format + validator + Expr +
@@ -12,10 +12,34 @@
             .path = "../SJON",
         },
     },
+    // The zip surface for a fetched source package. Every directory a build
+    // or gate step reads is listed explicitly; `npm` is NOT listed wholesale
+    // because that would pull in `node_modules` (Zig does not apply
+    // `.gitignore` to `.paths`). Generated wasm/types stay out: the build
+    // produces them.
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
         "schema",
+        "tools",
+        "corpus",
+        "examples",
+        "docs",
+        "sjon-project.sjon",
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE",
+        "npm/pacer/src",
+        "npm/pacer/test",
+        "npm/pacer/browser",
+        "npm/pacer/tools",
+        "npm/pacer/package.json",
+        "npm/pacer/package-lock.json",
+        "npm/pacer/tsconfig.json",
+        "npm/pacer/biome.jsonc",
+        "npm/pacer/playwright.config.js",
+        "npm/pacer/README.md",
+        "npm/pacer/LICENSE",
     },
 }

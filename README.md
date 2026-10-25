@@ -16,6 +16,14 @@ flat `TrackTable` → per-frame evaluator → packed `'PACW'` write buffer. Visu
 targets route by name into pngine uniforms (registry 0), audio targets into an
 engine's param registry (registry 1).
 
+## Release status
+
+**0.1.0** is the first public release. The npm package ships the JS glue, its
+generated `.d.ts` declarations, and both `pacer.wasm` and `pacer-rt.wasm`; it
+does **not** install the native `pacer` CLI. Build that from source with
+`zig build cli`. Install commands, the shipped API surface and known
+limitations are in [`CHANGELOG.md`](./CHANGELOG.md).
+
 The score language (all of it validated with spans by the embedded schema —
 and documented, form by form, in
 [`docs/score-language.md`](./docs/score-language.md), rendered from that same
@@ -51,12 +59,21 @@ registries at all.
 
 ## Quickstart
 
-pacer builds next to a sibling **SJON** checkout — clone it as `../SJON`
-(unpublished, consumed by path, like pngine). Then:
+pacer builds next to a sibling **SJON** checkout at **1.5.0 or newer**
+(consumed by path for this release, like pngine). The 0.1.0 release inputs
+pin SJON `v1.5.0`, revision `97e12f39d9e63d028aa9b124660cc4cfed4cc726`:
 
 ```sh
+git clone https://git.hugodaniel.com/hugo/SJON.git ../SJON
+git -C ../SJON checkout 97e12f39d9e63d028aa9b124660cc4cfed4cc726
+
+# Zig 0.16.0, Node >= 20, npm >= 10
 zig build verify   # Zig tests + native golden corpus + node/wasm parity walk
 ```
+
+For the npm package's own gates, `cd npm/pacer && npm ci` first (the verify
+verb's Node leg expects that install). The sibling pngine checkout is only
+needed for the bundle/browser proofs; it is not part of the runtime package.
 
 Other verbs: `zig build fuzz` (never-panic harnesses), `zig build
 audit-diagnostics` (every diagnostic code is tested), `zig build corpus --
@@ -80,7 +97,13 @@ pacer check score.sjon              # diagnostics, with line/col
 pacer ir    score.sjon | jq         # the compiled IR as JSON
 pacer eval  score.sjon --at 3.5     # the write frame at t, as JSON
 pacer eval  score.sjon --at 3.5 --set sway-amt=0.2   # …with a knob held
+pacer pack  score.sjon --out score.pacb              # offline playback cartridge
 ```
+
+`pacer` is a native binary built from this checkout. **`npm install pacer` does
+not install a CLI**; the npm package contains only the JS/wasm runtime. Build
+the CLI from the pinned source inputs above (Zig 0.16.0 and sibling SJON
+1.5.0+). Full reference: [`docs/cli.md`](./docs/cli.md).
 
 A score that declares its own targets with `(target …)` needs no flags at all;
 one written against host registries takes them as `--target NAME[:ncomp[:registry]]`,
@@ -114,18 +137,18 @@ section 4-CC is a breaking release — a major once 1.0 is tagged, a 0.x minor
 until then (the SemVer pre-1.0 convention). The golden corpus + `zig build
 verify` gate both kinds.
 
-## In progress: source-free scene names
+## Delivery status
 
-The metadata wave — exact scene names carried inside the compiled binary so
-playback never ships source text — is planned and its artifact-preservation
-step is done (`77d8c11`); implementation is pending. Plan of record:
-[`plans/binary/05-source-free-scene-names.md`](./plans/binary/05-source-free-scene-names.md).
-
-*(2026-10-20: the wave's implementation and acceptance are complete —
-`'SNAM'` rides the compiled binary, the reserved `'PACB'` bundle carriage
-and the full gate set are green, and the plan's Group-6 record is landed;
-see [`docs/binary-score.md`](./docs/binary-score.md). Pattern tracks and
-the full production export remain separate, open work.)*
+Source-free scene names are delivered: exact scene names ride the compiled
+binary's `'SNAM'` section and the reserved `'PACB'` bundle carriage, so
+playback never ships source text (accepted 2026-10-20; see
+[`docs/binary-score.md`](./docs/binary-score.md)). Pattern tracks are part of
+the shipped score language. The runtime-only production export closed on
+2026-10-23 with explicit QA qualifiers: real Safari, real tab-hide behaviour
+and PCM content were not verified (see
+[`plans/binary/06-production-delivery.md`](./plans/binary/06-production-delivery.md)).
+Prebuilt native CLI downloads are not part of 0.1.0; the documented path is a
+source build.
 
 ## License
 

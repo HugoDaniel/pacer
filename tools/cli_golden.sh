@@ -29,6 +29,11 @@ PACER="${1:?usage: cli_golden.sh <pacer-cli> [--update]}"
 MODE="${2:-check}"
 DIR="src/cli/testdata"
 
+# `starter-pack` writes its scratch cartridge here; the directory is
+# gitignored and absent in a fresh checkout, so create it rather than
+# making the gate depend on a previous run.
+mkdir -p .agent/control/tmp
+
 # The host registries `examples/index.html` provides, mirroring
 # `corpus/examples-starter/times.sjon` exactly — a rename on either side
 # fails here as well as there.

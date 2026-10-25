@@ -55,6 +55,7 @@ surface for it — without ever pulling per-pixel work out of WGSL.
 | 12 | [sjon-alignment](12-sjon-alignment.md) — preloaded schema, schema vocabulary, LSP, examples | pacer | — |
 | 13 | [sjon-union-arms](13-sjon-union-arms.md) — a disjoint union should report the arm, not the union | SJON (ask), pacer | 12 |
 | 14 | [cli](14-cli.md) — a native binary: score IR + eval-at-t as JSON, knobs as `--set` | pacer | — |
+| 15 | [release-0.1.0](15-release-0.1.0.md) — release preparation, gates, package checks and pre-publication review | pacer | pinned SJON / pngine inputs |
 
 Execution order, wave milestones, and the current "what's next" pointer are
 maintained in [00-strategy.md](00-strategy.md) — the "Depends on" column above only

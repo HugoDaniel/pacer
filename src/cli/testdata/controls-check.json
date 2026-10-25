@@ -1,5 +1,5 @@
 {
-  "pacer":{"version":"0.2.0","format":1},
+  "pacer":{"version":"0.1.0","format":1},
   "command":"check",
   "source":{"path":"corpus/diag-controls/doc.sjon","bytes":832},
   "ok":false,

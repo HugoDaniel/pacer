@@ -129,10 +129,20 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | — | 12 sjon-alignment · Waves A–D ALL CLOSED 2026-08-21 (preload, schema vocabulary, project file + generated reference, examples; corpus 29 → 36) | ☑ |
 | — | 13 sjon-union-arms · P1 ✓ ask filed as SJON `15` 2026-08-25, P2 ✓ SJON built it 2026-08-26 and the corpus pins it (36 → 37 cases) → plan 13 DONE | ☑ |
 | — | 14 cli · ALL phases ✓ 2026-09-01 (`pacer ir` / `eval` / `check`; `Abi` decoders, `Eval.last_tick`, JSON goldens) → plan 14 DONE | ☑ |
+| — | 15 release 0.1.0 · versions/docs/gates/tarball/source-build verified (2026-10-25); publication waits on registry auth + owner authorization | ☐ |
 
 ## What's next
 
-→ **[14](14-cli.md) is DONE — pacer has a native binary (2026-09-01).**
+→ **[15](15-release-0.1.0.md) is in release preparation (2026-10-25).**
+The candidate is version `0.1.0` across `package.json`, the lockfile,
+`build.zig.zon` and `src/root.zig`; both wasm artifacts rebuild
+byte-identically from independent caches; the npm tarball was installed and
+smoke-tested (Node, TypeScript, browser) plus a pinned-input source build of
+the CLI. Publication is deliberately **not** done: no registry authentication
+is configured here and the plan's second review requires owner authorization.
+The remaining open actions are exactly those in plan 15 §5–§6.
+
+→ **Prior — [14](14-cli.md) is DONE — pacer has a native binary (2026-09-01).**
 `zig build cli` builds `pacer`, and `ir` / `eval` / `check` answer the questions
 that previously needed a host: what did the compiler make of this score, and what
 does it write at t with a knob held. Three structural facts came out of it. (1)
