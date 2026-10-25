@@ -135,9 +135,9 @@ line to the Decision log if the plan changed any cross-plan assumption.
 
 → **[15](15-release-0.1.0.md) is RELEASED (2026-10-25).**
 `@mr_hugo/pacer@0.1.0` is live on npmjs, the `v0.1.0` tag points at the
-published source `99e6c85`, and the GitHub release carries the tarball and both
-wasm artifacts. The only open item is optional housekeeping: npm requires an
-owner OTP to unpublish the `0.0.0-stage` staged-publish placeholder.
+published source `99e6c85`, the GitHub release carries the tarball and both
+wasm artifacts, and the staged-publish placeholder has been removed. Nothing
+is open on this plan.
 
 → **Prior — [14](14-cli.md) is DONE — pacer has a native binary (2026-09-01).**
 `zig build cli` builds `pacer`, and `ir` / `eval` / `check` answer the questions

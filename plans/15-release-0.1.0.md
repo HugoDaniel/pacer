@@ -1,8 +1,8 @@
 # Pacer 0.1.0 release plan
 
-Created 2026-10-25. Status: **released and verified.** npm `@mr_hugo/pacer@0.1.0`
-and GitHub `v0.1.0` are live and aligned to source `99e6c85`. One housekeeping
-item remains: an npm OTP step to remove the `0.0.0-stage` placeholder.
+Created 2026-10-25. Status: **released and verified.** npm
+`@mr_hugo/pacer@0.1.0` and GitHub `v0.1.0` are live and aligned to source
+`99e6c85`. The staged-publish placeholder was removed; no open actions.
 
 The release target is **0.1.0**, tagged `v0.1.0`. The repository currently
 declares 0.2.0; moving those declarations to 0.1.0 is intentional, per the
@@ -290,14 +290,14 @@ Review this checklist against the final candidate, not the assessment build.
 **Released and verified.**
 Every build, test, reproducibility and installed-consumer check above is green.
 `@mr_hugo/pacer@0.1.0` is live on npmjs, the GitHub release is published, and a
-fresh registry install passes the Node, TypeScript and browser smokes. The only
-open item is the npm OTP step needed to unpublish the `0.0.0-stage` placeholder.
+fresh registry install passes the Node, TypeScript and browser smokes. The
+`0.0.0-stage` placeholder has been removed; the release has no open items.
 
 ## 6. Publish and verify
 
 Execute only after the second review is complete and publication is authorized.
-Executed on 2026-10-25: npm publication, source tag alignment, GitHub release.
-Only the npm `0.0.0-stage` cleanup needs an owner OTP step.
+Executed on 2026-10-25: npm publication, source tag alignment, GitHub
+release, and staged-placeholder cleanup.
 
 The source release remote is `release` →
 `https://github.com/HugoDaniel/pacer.git`. The npm registry is
@@ -334,10 +334,8 @@ The source release remote is `release` →
 - [ ] Record release URLs, publication time, final commit/tag and verification
   outcome here. If publication partially fails, record what succeeded before
   retrying; never reuse the version for different bytes.
-  Evidence: recorded below. `npm unpublish @mr_hugo/pacer@0.0.0-stage`
-  is blocked by npm's one-time-password challenge (`EOTP`); the placeholder is
-  not `latest` and is not part of the release. Complete the browser/OTP step
-  to remove it.
+  Evidence: recorded below. `@mr_hugo/pacer` now lists only `0.1.0`; the
+  `0.0.0-stage` placeholder has been removed.
 
 ## Evidence record
 
@@ -357,5 +355,5 @@ Fill this in as execution proceeds. An unchecked item remains outstanding.
 | Tarball filename / SHA-256 / file manifest | `mr_hugo-pacer-0.1.0.tgz` / `cba5403f…14ec96ed` / 35 entries, listed in `.agent/release/scoped-tarball-files.txt` |
 | Installed-tarball consumer checks | Node, strict TypeScript, and headless-browser smokes all pass outside the repo |
 | Documentation / limitations review | README, npm README, `docs/cli.md`, CHANGELOG and `plans/00-strategy.md` updated; Safari/tab-hide/PCM qualifiers carried |
-| Second review / exceptions / authorization | Review recorded above; npm publication, tag alignment and GitHub release complete. Open: npm OTP step to remove `0.0.0-stage` |
+| Second review / exceptions / authorization | Complete: npm publication, tag alignment, GitHub release, and `0.0.0-stage` removal |
 | Publication URLs / post-publish checks | npm `https://www.npmjs.com/package/@mr_hugo/pacer/v/0.1.0` (2026-10-25T19:51:20.078Z) and GitHub `https://github.com/HugoDaniel/pacer/releases/tag/v0.1.0` (2026-10-25T20:51:34Z). Integrity `sha512-6aTJ…87gTw==`; registry install + Node/TS/browser smokes pass. Tarball `cba5403f…14ec96ed`. |
