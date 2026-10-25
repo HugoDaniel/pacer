@@ -129,19 +129,15 @@ line to the Decision log if the plan changed any cross-plan assumption.
 | — | 12 sjon-alignment · Waves A–D ALL CLOSED 2026-08-21 (preload, schema vocabulary, project file + generated reference, examples; corpus 29 → 36) | ☑ |
 | — | 13 sjon-union-arms · P1 ✓ ask filed as SJON `15` 2026-08-25, P2 ✓ SJON built it 2026-08-26 and the corpus pins it (36 → 37 cases) → plan 13 DONE | ☑ |
 | — | 14 cli · ALL phases ✓ 2026-09-01 (`pacer ir` / `eval` / `check`; `Abi` decoders, `Eval.last_tick`, JSON goldens) → plan 14 DONE | ☑ |
-| — | 15 release 0.1.0 · versions/docs/gates/tarball/source-build verified (2026-10-25); scoped npmjs package ready; publication waits on tag + owner authorization | ☐ |
+| — | 15 release 0.1.0 · RELEASED 2026-10-25 (npm `@mr_hugo/pacer@0.1.0` + GitHub `v0.1.0`; tag aligned to `99e6c85`) | ☑ |
 
 ## What's next
 
-→ **[15](15-release-0.1.0.md) is in release preparation (2026-10-25).**
-The candidate is version `0.1.0` across `package.json`, the lockfile,
-`build.zig.zon` and `src/root.zig`; both wasm artifacts rebuild
-byte-identically from independent caches; the npm tarball was installed and
-smoke-tested (Node, TypeScript, browser) plus a pinned-input source build of
-the CLI. The npm package is scoped `@mr_hugo/pacer` and publishes publicly to
-npmjs. Publication is deliberately **not** done: the plan's second review
-requires owner authorization, and no tag has been created. The remaining open
-actions are exactly those in plan 15 §5–§6.
+→ **[15](15-release-0.1.0.md) is RELEASED (2026-10-25).**
+`@mr_hugo/pacer@0.1.0` is live on npmjs, the `v0.1.0` tag points at the
+published source `99e6c85`, and the GitHub release carries the tarball and both
+wasm artifacts. The only open item is optional housekeeping: npm requires an
+owner OTP to unpublish the `0.0.0-stage` staged-publish placeholder.
 
 → **Prior — [14](14-cli.md) is DONE — pacer has a native binary (2026-09-01).**
 `zig build cli` builds `pacer`, and `ir` / `eval` / `check` answer the questions
