@@ -1,8 +1,8 @@
 # Pacer 0.1.0 release plan
 
 Created 2026-10-25. Status: **release candidate prepared and verified;
-publication not performed** (no registry authentication is configured and the
-plan requires explicit owner authorization before §6).
+publication not performed** (the plan requires explicit owner authorization
+before §6).
 
 The release target is **0.1.0**, tagged `v0.1.0`. The repository currently
 declares 0.2.0; moving those declarations to 0.1.0 is intentional, per the
@@ -19,8 +19,9 @@ or wire-format changes are needed for this release.
 **Dependency requirement: SJON 1.5.0 or newer.** Pin an exact qualifying
 release/revision for reproducibility; do not resolve a floating latest version.
 
-Use the currently configured self-hosted npm registry:
-`https://git.hugodaniel.com/api/packages/hugo/npm/`.
+Publish the npm package publicly to the **npm registry** as the scoped name
+**`@mr_hugo/pacer`**. The unscoped `pacer` name is already taken on npmjs, so
+the scope is required; `publishConfig` sets `access: public`.
 Source publication uses `https://github.com/HugoDaniel/pacer.git` as the
 release remote (`git remote release`). Native CLI distribution defaults to
 documented source builds with pinned inputs; prebuilt native downloads can
@@ -60,13 +61,16 @@ not substitutes for checks against the final release commit:
   Evidence: `git ls-remote --tags origin` returned no tags; Gitea `main` is
   `5face6f`. The release remote `release` is
   `https://github.com/HugoDaniel/pacer.git` (public, currently empty).
-  `GET /api/packages/hugo/npm/pacer` returned 404 (unauthenticated), so no
-  published 0.1.0 or 0.2.0 is visible. No tag exists locally or remotely.
-- [ ] Confirm registry authentication and intended package visibility without
+  `npm view @mr_hugo/pacer` returns 404 on npmjs, so `@mr_hugo/pacer@0.1.0`
+  is available; the `@mr_hugo` scope is owned by npm user `mr_hugo`. No tag
+  exists locally or remotely.
+- [x] Confirm registry authentication and intended package visibility without
   printing tokens. Use the configured registry explicitly in read-only probes.
-  **Outstanding:** `npm whoami --registry=https://git.hugodaniel.com/api/packages/hugo/npm/`
-  returns `ENEEDAUTH`; the only configured token is for registry.npmjs.org.
-  Package visibility cannot be confirmed without credentials.
+  Evidence: `npm whoami` against npmjs returns `mr_hugo`; the `@mr_hugo`
+  scope owns existing packages. `publishConfig` sets `access: public` for the
+  scoped package. The Gitea package registry is no longer the target (Forgejo
+  returns 404 for npm `whoami`, and the source repo is private, so it was not
+  suitable for a public install).
 - [x] Record Pacer, SJON and pngine commit IDs and dirty status, exact Zig,
   Node and npm versions, plus the release host OS/architecture.
   Evidence: Pacer `5face6f` + the release working-tree changes; SJON
@@ -199,18 +203,19 @@ npm run test:browser
 - [x] Run a real `npm pack` from `npm/pacer`; retain the 0.1.0 tarball and its
   SHA-256 digest. Inspect its file list, version, exports, declarations,
   license and both WASM files. Exclude fixtures, credentials and local artifacts.
-  Evidence: `pacer-0.1.0.tgz`, SHA-256
-  `84031fccf619ca139bdeddf4976335b2eaa56d73fc2a2fcfa7f1986adacbbf0f`
-  (359,311 B). 35 entries: `src/*.js`, generated `types/*.d.ts` + maps,
+  Evidence: `mr_hugo-pacer-0.1.0.tgz`, SHA-256
+  `cba5403f3d67e95021c0698d014cfa2ffa3b439ca7c758edb0a866e014ec96ed`
+  (359,382 B). 35 entries: `src/*.js`, generated `types/*.d.ts` + maps,
   `pacer.wasm`, `pacer-rt.wasm`, README, LICENSE, package.json. No tests,
   fixtures, credentials or build scratch. Version/exports/license/repository
   inspected; `repository.url` is the GitHub release remote. A second
   `npm pack` run after a full `prepack` rebuild produced the same SHA-256.
 - [x] Install that tarball in a fresh directory outside the repository.
   Resolve assets using the public package subpaths, not workspace paths.
-  Evidence: fresh consumer under `$TMPDIR`; installed `pacer@0.1.0`; wasm read
-  through `import.meta.resolve('pacer/pacer.wasm')` and
-  `pacer/pacer-rt.wasm`; installed wasm digests equal the release digests.
+  Evidence: fresh consumer under `$TMPDIR`; installed `@mr_hugo/pacer@0.1.0`;
+  wasm read through `import.meta.resolve('@mr_hugo/pacer/pacer.wasm')` and
+  `@mr_hugo/pacer/pacer-rt.wasm`; installed wasm digests equal the release
+  digests.
 - [x] Node smoke: compile a small score with `Pacer`, pack the same score
   through the documented CLI, load it through `PacerRt`, and compare writes
   at explicit sample times against independently chosen expected values.
@@ -243,8 +248,8 @@ npm run test:browser
 Review this checklist against the final candidate, not the assessment build.
 
 - [x] Every item above has evidence or an explicitly accepted exception.
-  Evidence: every §1–§4 item is checked except registry authentication and
-  visibility, which is the accepted blocking exception recorded there.
+  Evidence: every §1–§4 item is checked; the npmjs scope, authentication and
+  visibility are recorded in §1.
 - [x] Version declarations, tarball version and release notes all say 0.1.0.
   Evidence: package.json / lockfile / build.zig.zon / root.zig, installed
   tarball, `npm pack` JSON and CHANGELOG all report `0.1.0`.
@@ -260,10 +265,9 @@ Review this checklist against the final candidate, not the assessment build.
   Evidence: see §3. The only skips are the two optional frozen pre-SNAM
   artifact tests.
 - [x] Fresh-build digests match and the actual tarball smoke tests pass.
-- [ ] Registry/version availability, visibility and authentication are verified.
-  **Outstanding:** availability is confirmed (no published package visible,
-  no tags); authentication and visibility are not (no token for the Gitea
-  registry).
+- [x] Registry/version availability, visibility and authentication are verified.
+  Evidence: `@mr_hugo/pacer` is absent on npmjs, the `mr_hugo` session is
+  authenticated, and `publishConfig.access` is `public`.
 - [x] Review the npm lifecycle: `prepublishOnly` runs lint/typecheck/tests;
   `prepack` rebuilds binaries/types. Ensure publication uses the reviewed
   artifact and does not substitute unchecked rebuilt bytes. Verify lifecycle
@@ -272,8 +276,8 @@ Review this checklist against the final candidate, not the assessment build.
   both wasm files and types) but **skips** `prepublishOnly`; the normal
   `npm publish` path runs it, and `npm run lint` / `npm run typecheck` /
   `npm test` were run separately and are green. A dry-run publish of the
-  reviewed tarball (`npm publish ./pacer-0.1.0.tgz --dry-run`) runs no
-  lifecycle scripts and uses those exact bytes. Recommended procedure:
+  reviewed tarball (`npm publish ./mr_hugo-pacer-0.1.0.tgz --dry-run`) runs
+  no lifecycle scripts and uses those exact bytes. Recommended procedure:
   run the three checks, publish the reviewed tarball rather than a loose
   directory, and verify the registry digest after upload.
 - [ ] Record the final review outcome and owner authorization to publish.
@@ -282,12 +286,12 @@ Review this checklist against the final candidate, not the assessment build.
 
 ### Review outcome — 2026-10-25
 
-**Technically ready; publication blocked on credentials and authorization.**
+**Technically ready; publication blocked on the tag/push and owner authorization.**
 Every build, test, reproducibility and installed-consumer check above is green
 against the prepared `0.1.0` working tree. The remaining actions are external
-to the code: configure a Gitea npm token, confirm package visibility, commit and
-tag the candidate, and obtain owner authorization. No push, tag, publish,
-merge or registry write occurred during this preparation.
+to the code: tag the candidate, push it to the GitHub release remote, and
+obtain owner authorization to publish `@mr_hugo/pacer@0.1.0` to npmjs. No push,
+tag, publish, merge or registry write occurred during this preparation.
 
 ## 6. Publish and verify
 
@@ -295,8 +299,9 @@ Execute only after the second review is complete and publication is authorized.
 Nothing in this section was executed.
 
 The source release remote is `release` →
-`https://github.com/HugoDaniel/pacer.git`. The npm registry stays
-`https://git.hugodaniel.com/api/packages/hugo/npm/`.
+`https://github.com/HugoDaniel/pacer.git`. The npm registry is
+`https://registry.npmjs.org/`; the package is the scoped, public
+`@mr_hugo/pacer`.
 
 - [x] Commit the prepared release.
   Evidence: `0cc3003` (`release: prepare pacer 0.1.0`) plus the release-remote
@@ -307,8 +312,9 @@ The source release remote is `release` →
 - [ ] Publish the GitHub release notes for `v0.1.0` with the source-build
   instructions and artifact digests. Attach standalone WASM artifacts if
   offering direct downloads.
-- [ ] Install `pacer@0.1.0` from the registry in a new consumer directory;
-  verify resolved version, dist-tag, tarball integrity and both playback paths.
+- [ ] Install `@mr_hugo/pacer@0.1.0` from the registry in a new consumer
+  directory; verify resolved version, dist-tag, tarball integrity and both
+  playback paths.
 - [ ] Record release URLs, publication time, final commit/tag and verification
   outcome here. If publication partially fails, record what succeeded before
   retrying; never reuse the version for different bytes.
@@ -324,12 +330,12 @@ Fill this in as execution proceeds. An unchecked item remains outstanding.
 | SJON version (>=1.5.0) / revision / dependency hash | 1.5.0 / `97e12f39d9e63d028aa9b124660cc4cfed4cc726` / sibling path pin; `zig fetch` source hash `pacer-0.1.0-e0Ny2EFk9QGznZaQQKpWLeGrI57aw-HEPfFtil63ijwB` |
 | pngine revision / bundle provenance | `e9aff0d`, bundle rebuilt with `node scripts/bundle.cjs`; viewer exports `payloadsOf`; four unrelated tracked edits preserved |
 | Toolchain / host | Zig 0.16.0, Node v26.12.0, npm 11.20.0, macOS 27.0.1, arm64 |
-| Remote tags / registry availability | No local/remote tags; Gitea `main` `5face6f`; GitHub release remote empty; registry package endpoint 404 (unauthenticated); no visible published 0.1.0/0.2.0 |
+| Remote tags / registry availability | No local/remote tags; Gitea `main` `5face6f`; GitHub release remote empty; `@mr_hugo/pacer` absent on npmjs; npm session is `mr_hugo` |
 | Full gate logs / test totals / skip reasons | `zig build verify` 0: native 749/749, Node 182 (180 pass, 2 skip, 0 fail), corpus 44/44, CLI goldens/docs current. `audit-diagnostics audit-rt-imports fuzz parity` 0: parity 44/44. npm lint/typecheck/test 0; g5:test 10/10; test:browser 10/10. Skips: frozen pre-SNAM artifact absent (optional historical comparison). Logs in `.agent/release/` (gitignored). |
 | Browser proof | G5 10/10; installed-tarball browser smoke: diagnostics empty, text+binary 0.25/0.5/0.75, zero console errors |
 | WASM SHA-256 / repeat-build comparison | `pacer.wasm` `5a6d5316…f365eb097a`; `pacer-rt.wasm` `34fa25a7…cba74770d8`; two independent fresh-cache builds and both shipped copies agree |
-| Tarball filename / SHA-256 / file manifest | `pacer-0.1.0.tgz` / `84031fcc…acbbf0f` / 35 entries, listed in `.agent/release/tarball-files-github.txt` |
+| Tarball filename / SHA-256 / file manifest | `mr_hugo-pacer-0.1.0.tgz` / `cba5403f…14ec96ed` / 35 entries, listed in `.agent/release/scoped-tarball-files.txt` |
 | Installed-tarball consumer checks | Node, strict TypeScript, and headless-browser smokes all pass outside the repo |
 | Documentation / limitations review | README, npm README, `docs/cli.md`, CHANGELOG and `plans/00-strategy.md` updated; Safari/tab-hide/PCM qualifiers carried |
-| Second review / exceptions / authorization | Review recorded above; blockers: registry auth/visibility, tag, owner authorization |
+| Second review / exceptions / authorization | Review recorded above; blockers: tag, owner authorization |
 | Publication URLs / post-publish checks | Not performed — intentionally stopped before §6 |

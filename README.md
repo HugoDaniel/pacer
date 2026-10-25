@@ -100,7 +100,7 @@ pacer eval  score.sjon --at 3.5 --set sway-amt=0.2   # …with a knob held
 pacer pack  score.sjon --out score.pacb              # offline playback cartridge
 ```
 
-`pacer` is a native binary built from this checkout. **`npm install pacer` does
+`pacer` is a native binary built from this checkout. **`npm install @mr_hugo/pacer` does
 not install a CLI**; the npm package contains only the JS/wasm runtime. Build
 the CLI from the pinned source inputs above (Zig 0.16.0 and sibling SJON
 1.5.0+). Full reference: [`docs/cli.md`](./docs/cli.md).

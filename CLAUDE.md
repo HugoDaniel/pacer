@@ -208,9 +208,10 @@ cd npm/pacer && npm run lint && npm run typecheck && npm test
 ```
 
 `npm test` rebuilds `pacer.wasm` first (the `pretest` hook) so the parity walk
-runs against fresh bytes. `npm publish` runs the full gate then rebuilds the wasm
-(`prepublishOnly` + `prepack`) and lands in the self-hosted Gitea registry. The
-package version is spelled by hand in three places — `package.json`,
+runs against fresh bytes. The package is published publicly to npmjs as the
+scoped `@mr_hugo/pacer` (`publishConfig.access = "public"`); the release
+procedure publishes the reviewed tarball so npm cannot substitute a rebuild.
+The package version is spelled by hand in three places — `package.json`,
 `build.zig.zon`, `src/root.zig` — and a lockstep test in `test/exports.test.js`
 fails loudly if they drift.
 

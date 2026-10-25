@@ -29,12 +29,13 @@ test('publishable: not private, ESM, ships the wasm + types + license', () => {
   assert.equal(pkg.exports['.'].types, './types/index.d.ts');
 });
 
-test('publishConfig points the publish at the self-hosted registry', () => {
+test('publishConfig publishes the scoped package publicly to npmjs', () => {
   assert.ok(pkg.publishConfig, 'has a publishConfig');
-  assert.match(
+  assert.equal(pkg.publishConfig.access, 'public', 'scoped package publishes publicly');
+  assert.equal(
     pkg.publishConfig.registry,
-    /^https:\/\/git\.hugodaniel\.com\/api\/packages\/hugo\/npm\/$/,
-    'registry is the Gitea per-owner npm endpoint (trailing slash required)',
+    'https://registry.npmjs.org/',
+    'registry is the public npm registry',
   );
 });
 
@@ -51,26 +52,26 @@ test('every exports condition points at a runtime file on disk', () => {
 });
 
 test('public API resolves through the package name (self-reference)', async () => {
-  const { Pacer } = await import('pacer');
+  const { Pacer } = await import('@mr_hugo/pacer');
   assert.equal(typeof Pacer, 'function');
   assert.equal(typeof Pacer.load, 'function');
 
-  const route = await import('pacer/route');
+  const route = await import('@mr_hugo/pacer/route');
   assert.equal(typeof route.toUniforms, 'function');
   assert.equal(typeof route.routeWrites, 'function');
 
-  const clock = await import('pacer/clock');
+  const clock = await import('@mr_hugo/pacer/clock');
   assert.equal(typeof clock.perfClock, 'function');
   assert.equal(typeof clock.masterClock, 'function');
 
-  const audio = await import('pacer/audio');
+  const audio = await import('@mr_hugo/pacer/audio');
   assert.equal(typeof audio.sointuHost, 'function');
   assert.equal(typeof audio.clockOnlyHost, 'function');
   assert.equal(audio.clockOnlyHost, audio.sointuHost); // rename-by-append alias
   assert.equal(typeof audio.paramRegistry, 'function');
   assert.equal(typeof audio.applyParams, 'function');
 
-  const hostCheck = await import('pacer/host-check');
+  const hostCheck = await import('@mr_hugo/pacer/host-check');
   assert.equal(typeof hostCheck.checkAudioTargetHost, 'function');
 });
 
@@ -121,7 +122,7 @@ test('rt surface is append-only: ./rt + pacer-rt.wasm join the old entries', asy
     assert.match(pkg.scripts.build, new RegExp(need.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 
-  const { PacerRt } = await import('pacer/rt');
+  const { PacerRt } = await import('@mr_hugo/pacer/rt');
   assert.equal(typeof PacerRt, 'function');
   assert.equal(typeof PacerRt.load, 'function');
   assert.equal(PacerRt.prototype.reload, undefined);

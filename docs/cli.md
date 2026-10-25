@@ -8,7 +8,7 @@ it, and what does it write at a given time?
 
 ## Build from source
 
-The CLI is a native binary, not part of the npm package. `npm install pacer`
+The CLI is a native binary, not part of the npm package. `npm install @mr_hugo/pacer`
 installs the JS/wasm runtime only. Build from the Pacer checkout with the
 pinned inputs:
 

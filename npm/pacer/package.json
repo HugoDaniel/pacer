@@ -1,5 +1,5 @@
 {
-  "name": "pacer",
+  "name": "@mr_hugo/pacer",
   "version": "0.1.0",
   "type": "module",
   "description": "JS glue for pacer.wasm — deterministic animation driver conducted by an SJON score",
@@ -21,7 +21,8 @@
     "directory": "npm/pacer"
   },
   "publishConfig": {
-    "registry": "https://git.hugodaniel.com/api/packages/hugo/npm/"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "engines": {
     "node": ">=20"

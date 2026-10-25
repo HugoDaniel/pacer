@@ -13,29 +13,25 @@ ESM-only. Ships JavaScript source + generated `.d.ts` types + `pacer.wasm`
 
 ## Install
 
-`pacer` publishes to a self-hosted registry, and it's unscoped (no per-scope
-route), so point npm at the registry for this install:
+`@mr_hugo/pacer` publishes publicly to npm under the `@mr_hugo` scope:
 
 ```sh
-npm install pacer --registry=https://git.hugodaniel.com/api/packages/hugo/npm/
+npm install @mr_hugo/pacer
 ```
 
-Or persist it in a project `.npmrc`:
-
-```ini
-registry=https://git.hugodaniel.com/api/packages/hugo/npm/
-```
+The unscoped name `pacer` is already taken on npmjs; the scope keeps this
+package distinct. The JS API and subpaths are otherwise unchanged.
 
 ## You supply the wasm bytes
 
 The package ships `pacer.wasm`, but the driver never fetches it for you — you
 pass the bytes (or a compiled `WebAssembly.Module`) to `Pacer.load`. Resolve the
-shipped binary via the `pacer/pacer.wasm` subpath:
+shipped binary via the `@mr_hugo/pacer/pacer.wasm` subpath:
 
 ```js
 // Browser (bundler) — import the asset URL, then fetch it. Use your
 // bundler's URL suffix/loader: Vite/webpack `?url`, esbuild `file`, …
-import wasmUrl from 'pacer/pacer.wasm?url';
+import wasmUrl from '@mr_hugo/pacer/pacer.wasm?url';
 const wasm = await fetch(wasmUrl).then((r) => r.arrayBuffer());
 ```
 
@@ -43,11 +39,11 @@ const wasm = await fetch(wasmUrl).then((r) => r.arrayBuffer());
 // Node — resolve the subpath to a file path, then read the bytes:
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-const wasm = await readFile(fileURLToPath(import.meta.resolve('pacer/pacer.wasm')));
+const wasm = await readFile(fileURLToPath(import.meta.resolve('@mr_hugo/pacer/pacer.wasm')));
 ```
 
-Without a bundler, a browser can't resolve the bare `pacer/pacer.wasm`
-specifier at runtime — `new URL('pacer/pacer.wasm', import.meta.url)` is a
+Without a bundler, a browser can't resolve the bare `@mr_hugo/pacer/pacer.wasm`
+specifier at runtime — `new URL('@mr_hugo/pacer/pacer.wasm', import.meta.url)` is a
 *relative-URL* resolution against your module's URL, **not** package
 resolution, so it points at the wrong place. Map the specifier through an
 import map, or hand `Pacer.load` an explicit URL you control.
@@ -55,9 +51,9 @@ import map, or hand `Pacer.load` an explicit URL you control.
 ## Usage
 
 ```js
-import { Pacer } from 'pacer';
-import { perfClock } from 'pacer/clock';
-import { toUniforms } from 'pacer/route';
+import { Pacer } from '@mr_hugo/pacer';
+import { perfClock } from '@mr_hugo/pacer/clock';
+import { toUniforms } from '@mr_hugo/pacer/route';
 
 const score = `(transport :bpm 120)
 (track :target radius (key :at 0b :value 0) (key :at 4b :value 1))`;
@@ -83,7 +79,7 @@ const clock = perfClock();
 
 ## Playback runtime
 
-`pacer/rt` ships `PacerRt`: the same evaluator without the compiler. Pack a
+`@mr_hugo/pacer/rt` ships `PacerRt`: the same evaluator without the compiler. Pack a
 score offline with `pacer pack`, ship the resulting `.pacb` bytes, and load
 them against the matching host registries. **The npm package does not include
 the `pacer` CLI binary**; build it from the repo source with `zig build cli`
@@ -92,10 +88,10 @@ the `pacer` CLI binary**; build it from the repo source with `zig build cli`
 ```js
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { perfClock } from 'pacer/clock';
-import { PacerRt } from 'pacer/rt';
+import { perfClock } from '@mr_hugo/pacer/clock';
+import { PacerRt } from '@mr_hugo/pacer/rt';
 
-const wasm = await readFile(fileURLToPath(import.meta.resolve('pacer/pacer-rt.wasm')));
+const wasm = await readFile(fileURLToPath(import.meta.resolve('@mr_hugo/pacer/pacer-rt.wasm')));
 const pacb = await readFile('score.pacb');
 const player = await PacerRt.load(wasm, pacb);
 
@@ -119,19 +115,19 @@ names. Route those writes by `registry`.
 
 | Import | Provides |
 |---|---|
-| `pacer` | `Pacer` — `load`, `reload`, `eval` / `evalTicks` / `evalBytes`, `meta`, `setControl` / `clearControl` / `registerControl`, `setBpm`, `exprFailures` |
-| `pacer/rt` | `PacerRt` — `load` (packed `.pacb` only), `eval` / `evalTicks` / `evalBytes`, `meta`, controls, `setBpm`, `exprFailures`, `status` / `reason` |
-| `pacer/route` | `toUniforms`, `routeWrites` — split write entries across registries |
-| `pacer/clock` | `perfClock`, `masterClock` — sample the master clock (audio masters when playing) |
-| `pacer/audio` | `clockOnlyHost` (alias `sointuHost`), `paramRegistry`, `applyParams` — the `AudioTargetHost` boundary |
-| `pacer/host-check` | `checkAudioTargetHost` — the host conformance kit, for consumers' test suites |
-| `pacer/pacer.wasm` | the score-text driver binary asset |
-| `pacer/pacer-rt.wasm` | the playback runtime binary asset |
+| `@mr_hugo/pacer` | `Pacer` — `load`, `reload`, `eval` / `evalTicks` / `evalBytes`, `meta`, `setControl` / `clearControl` / `registerControl`, `setBpm`, `exprFailures` |
+| `@mr_hugo/pacer/rt` | `PacerRt` — `load` (packed `.pacb` only), `eval` / `evalTicks` / `evalBytes`, `meta`, controls, `setBpm`, `exprFailures`, `status` / `reason` |
+| `@mr_hugo/pacer/route` | `toUniforms`, `routeWrites` — split write entries across registries |
+| `@mr_hugo/pacer/clock` | `perfClock`, `masterClock` — sample the master clock (audio masters when playing) |
+| `@mr_hugo/pacer/audio` | `clockOnlyHost` (alias `sointuHost`), `paramRegistry`, `applyParams` — the `AudioTargetHost` boundary |
+| `@mr_hugo/pacer/host-check` | `checkAudioTargetHost` — the host conformance kit, for consumers' test suites |
+| `@mr_hugo/pacer/pacer.wasm` | the score-text driver binary asset |
+| `@mr_hugo/pacer/pacer-rt.wasm` | the playback runtime binary asset |
 
 ## The audio engine contract
 
 pacer knows **registries, params, and one clock — never engines.** An audio
-host is exactly three methods (`pacer/audio`'s `AudioTargetHost`):
+host is exactly three methods (`@mr_hugo/pacer/audio`'s `AudioTargetHost`):
 
 ```
 params()   → [{ name, ncomp?, min?, max?, default? }]   // the animatable surface
@@ -147,7 +143,7 @@ exposes what it honestly controls, a score is engine-relative by construction
 (its registry-1 targets resolve against whatever the active host declares;
 unresolved names are the ordinary `unknown_target` diagnostic).
 
-`checkAudioTargetHost(host, { expectClock }) → findings[]` (`pacer/host-check`)
+`checkAudioTargetHost(host, { expectClock }) → findings[]` (`@mr_hugo/pacer/host-check`)
 is the executable statement of that contract — pure, never throws, empty array
 = conformant. Run it inside your host's own test suite.
 
@@ -168,7 +164,7 @@ becomes a conformant host with an empty registry. It was published as
 
 | Host | `params()` | `clock()` | Master | Where |
 |---|---|---|---|---|
-| `clockOnlyHost` (alias `sointuHost`) | empty — the asset is pre-rendered (Sointu `pNGa` song, batida/audzio bounce PCM) | player time | audio | `pacer/audio` (shipped) |
+| `clockOnlyHost` (alias `sointuHost`) | empty — the asset is pre-rendered (Sointu `pNGa` song, batida/audzio bounce PCM) | player time | audio | `@mr_hugo/pacer/audio` (shipped) |
 | `chiptuneHost` | volume/tempo/pitch (`ch<N>.*` blocked upstream) | null | rAF (studio) | pngine studio (shipped) |
 | `batidaHost` | `gain`, `ch<N>.gain/mute`, `separation` — no tempo/pitch by batida's timeline-invariance rule | frames/rate | audio | batida glue (planned) |
 | audzio graph | every AudioParam in the loaded `(audio-graph …)` | context time | audio | future (audzio set) |
@@ -218,8 +214,10 @@ and playwright's default testMatch never pick them up.
 `npm publish` rebuilds `pacer.wasm` fresh and runs the full gate before it
 packs: `prepublishOnly` runs `lint` + `typecheck` + `test`, then `prepack` runs
 `build` (so the published `pacer.wasm` is always freshly compiled from source).
-`publishConfig.registry` targets the self-hosted Gitea registry, so a bare
-`npm publish` from `npm/pacer/` lands in the right place.
+`publishConfig` targets the public npm registry with `access: public`, so a
+bare `npm publish` from `npm/pacer/` publishes the scoped package publicly.
+The release procedure publishes the reviewed tarball instead, so npm cannot
+substitute a fresh rebuild.
 
 ## License
 
