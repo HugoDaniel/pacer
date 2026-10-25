@@ -17,7 +17,7 @@
   "license": "CC0-1.0",
   "repository": {
     "type": "git",
-    "url": "git+https://git.hugodaniel.com/hugo/pacer.git",
+    "url": "git+https://github.com/HugoDaniel/pacer.git",
     "directory": "npm/pacer"
   },
   "publishConfig": {

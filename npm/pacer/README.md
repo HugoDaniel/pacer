@@ -175,7 +175,7 @@ becomes a conformant host with an empty registry. It was published as
 
 ## Develop
 
-This package is the JS half of the [pacer](https://git.hugodaniel.com/hugo/pacer)
+This package is the JS half of the [pacer](https://github.com/HugoDaniel/pacer)
 repo; `pacer.wasm` is built from the Zig sources by Zig **0.16.0** with a
 sibling SJON **1.5.0 or newer** checkout at `../SJON` (the 0.1.0 release pin
 is `v1.5.0`, revision `97e12f39d9e63d028aa9b124660cc4cfed4cc726`).

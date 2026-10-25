@@ -55,8 +55,9 @@ compiled `WebAssembly.Module`.
 
 ### Building the CLI from source
 
-`npm install pacer` does **not** install the native `pacer` CLI. Build it from
-a Pacer checkout with:
+`npm install pacer` does **not** install the native `pacer` CLI. The source
+release lives at <https://github.com/HugoDaniel/pacer>. Build it from a Pacer
+checkout with:
 
 - Zig **0.16.0**
 - sibling SJON **1.5.0 or newer** (release pin: `v1.5.0`, revision

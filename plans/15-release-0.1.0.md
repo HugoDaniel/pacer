@@ -200,12 +200,12 @@ npm run test:browser
   SHA-256 digest. Inspect its file list, version, exports, declarations,
   license and both WASM files. Exclude fixtures, credentials and local artifacts.
   Evidence: `pacer-0.1.0.tgz`, SHA-256
-  `158fe6e8b84452003df7b32b69d96dcb4a7aa3cf0bcc099d4d7429af9ee661c9`
-  (359,302 B). 35 entries: `src/*.js`, generated `types/*.d.ts` + maps,
+  `84031fccf619ca139bdeddf4976335b2eaa56d73fc2a2fcfa7f1986adacbbf0f`
+  (359,311 B). 35 entries: `src/*.js`, generated `types/*.d.ts` + maps,
   `pacer.wasm`, `pacer-rt.wasm`, README, LICENSE, package.json. No tests,
-  fixtures, credentials or build scratch. Version/exports/license inspected.
-  A second `npm pack` run after a full `prepack` rebuild produced the same
-  SHA-256.
+  fixtures, credentials or build scratch. Version/exports/license/repository
+  inspected; `repository.url` is the GitHub release remote. A second
+  `npm pack` run after a full `prepack` rebuild produced the same SHA-256.
 - [x] Install that tarball in a fresh directory outside the repository.
   Resolve assets using the public package subpaths, not workspace paths.
   Evidence: fresh consumer under `$TMPDIR`; installed `pacer@0.1.0`; wasm read
@@ -299,7 +299,8 @@ The source release remote is `release` →
 `https://git.hugodaniel.com/api/packages/hugo/npm/`.
 
 - [x] Commit the prepared release.
-  Evidence: commit `0cc3003` (`release: prepare pacer 0.1.0`).
+  Evidence: `0cc3003` (`release: prepare pacer 0.1.0`) plus the release-remote
+  and repository-metadata follow-ups.
 - [ ] Tag that exact commit `v0.1.0`.
 - [ ] Push the reviewed commit/tag to `release` and publish the verified npm
   artifact to the configured registry using the procedure established above.
@@ -318,7 +319,7 @@ Fill this in as execution proceeds. An unchecked item remains outstanding.
 
 | Item | Result / evidence |
 |---|---|
-| Candidate Pacer commit / tag | Release commit (`0cc3003`) plus this release-remote note on top of `5face6f`; no tag yet |
+| Candidate Pacer commit / tag | Release commits on top of `5face6f` (see `git log`); no tag yet |
 | Release remote | `release` → `https://github.com/HugoDaniel/pacer.git` (public, empty at preparation time) |
 | SJON version (>=1.5.0) / revision / dependency hash | 1.5.0 / `97e12f39d9e63d028aa9b124660cc4cfed4cc726` / sibling path pin; `zig fetch` source hash `pacer-0.1.0-e0Ny2EFk9QGznZaQQKpWLeGrI57aw-HEPfFtil63ijwB` |
 | pngine revision / bundle provenance | `e9aff0d`, bundle rebuilt with `node scripts/bundle.cjs`; viewer exports `payloadsOf`; four unrelated tracked edits preserved |
@@ -327,7 +328,7 @@ Fill this in as execution proceeds. An unchecked item remains outstanding.
 | Full gate logs / test totals / skip reasons | `zig build verify` 0: native 749/749, Node 182 (180 pass, 2 skip, 0 fail), corpus 44/44, CLI goldens/docs current. `audit-diagnostics audit-rt-imports fuzz parity` 0: parity 44/44. npm lint/typecheck/test 0; g5:test 10/10; test:browser 10/10. Skips: frozen pre-SNAM artifact absent (optional historical comparison). Logs in `.agent/release/` (gitignored). |
 | Browser proof | G5 10/10; installed-tarball browser smoke: diagnostics empty, text+binary 0.25/0.5/0.75, zero console errors |
 | WASM SHA-256 / repeat-build comparison | `pacer.wasm` `5a6d5316…f365eb097a`; `pacer-rt.wasm` `34fa25a7…cba74770d8`; two independent fresh-cache builds and both shipped copies agree |
-| Tarball filename / SHA-256 / file manifest | `pacer-0.1.0.tgz` / `158fe6e8…9ee661c9` / 35 entries, listed in `.agent/release/tarball-files.txt` |
+| Tarball filename / SHA-256 / file manifest | `pacer-0.1.0.tgz` / `84031fcc…acbbf0f` / 35 entries, listed in `.agent/release/tarball-files-github.txt` |
 | Installed-tarball consumer checks | Node, strict TypeScript, and headless-browser smokes all pass outside the repo |
 | Documentation / limitations review | README, npm README, `docs/cli.md`, CHANGELOG and `plans/00-strategy.md` updated; Safari/tab-hide/PCM qualifiers carried |
 | Second review / exceptions / authorization | Review recorded above; blockers: registry auth/visibility, tag, owner authorization |
