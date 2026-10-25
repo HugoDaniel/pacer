@@ -83,4 +83,4 @@ Prebuilt native CLI downloads are not part of this release.
 
 The repository previously carried `0.2.0` version declarations. This release
 moves the declarations, lockfile and package metadata to `0.1.0` together.
-The release registry probe returned no published `0.1.0` or `0.2.0` package.
+At preparation time, the release registry probe returned no published `0.1.0` or `0.2.0` package.

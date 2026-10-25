@@ -1,7 +1,8 @@
 # Pacer 0.1.0 release plan
 
-Created 2026-10-25. Status: **npm release published and verified; source tag
-alignment and the GitHub release remain open.**
+Created 2026-10-25. Status: **released and verified.** npm `@mr_hugo/pacer@0.1.0`
+and GitHub `v0.1.0` are live and aligned to source `99e6c85`. One housekeeping
+item remains: an npm OTP step to remove the `0.0.0-stage` placeholder.
 
 The release target is **0.1.0**, tagged `v0.1.0`. The repository currently
 declares 0.2.0; moving those declarations to 0.1.0 is intentional, per the
@@ -286,18 +287,17 @@ Review this checklist against the final candidate, not the assessment build.
 
 ### Review outcome — 2026-10-25
 
-**Published to npm; source tag alignment is open.**
+**Released and verified.**
 Every build, test, reproducibility and installed-consumer check above is green.
-`@mr_hugo/pacer@0.1.0` is live on npmjs and a fresh registry install passes the
-Node, TypeScript and browser smokes. The remaining actions are source-release
-hygiene: align `v0.1.0` with the published source commit, push `main`, create
-the GitHub release, and decide whether to remove the `0.0.0-stage` placeholder.
+`@mr_hugo/pacer@0.1.0` is live on npmjs, the GitHub release is published, and a
+fresh registry install passes the Node, TypeScript and browser smokes. The only
+open item is the npm OTP step needed to unpublish the `0.0.0-stage` placeholder.
 
 ## 6. Publish and verify
 
 Execute only after the second review is complete and publication is authorized.
-The npm publication below was executed on 2026-10-25; the source tag/push
-alignment and the GitHub release remain outstanding.
+Executed on 2026-10-25: npm publication, source tag alignment, GitHub release.
+Only the npm `0.0.0-stage` cleanup needs an owner OTP step.
 
 The source release remote is `release` →
 `https://github.com/HugoDaniel/pacer.git`. The npm registry is
@@ -307,21 +307,24 @@ The source release remote is `release` →
 - [x] Commit the prepared release.
   Evidence: `0cc3003` (`release: prepare pacer 0.1.0`) plus the release-remote
   and scoped-package follow-ups, ending at `99e6c85` for the published bytes.
-- [ ] Tag the published source commit `v0.1.0`.
-  **Outstanding:** the existing tag points at `678af2d`, before the scoped-name
-  and repository changes. The published package was built from `99e6c85`.
-  Move the tag only with an explicit force-tag decision.
-- [ ] Push the aligned `main` and `v0.1.0` to `release`.
-  **Outstanding:** `release/main` and the tag are at `678af2d`; local `main`
-  is at `99e6c85`.
+- [x] Tag the published source commit `v0.1.0`.
+  Evidence: force-updated the tag from the pre-scope `678af2d` to `99e6c85`
+  at the owner's explicit request. The old tag object was `bd7a2ba`; the new
+  annotated tag object is `1ccefcb`, peeled to `99e6c85`.
+- [x] Push the aligned `main` and `v0.1.0` to `release`.
+  Evidence: `release/main` fast-forwarded `678af2d..0c4433c`; the tag was
+  force-pushed. Remote peel: `v0.1.0^{}` = `99e6c85`.
 - [x] Publish the verified npm artifact to the configured registry.
   Evidence: `@mr_hugo/pacer@0.1.0` published to npmjs at
   `2026-10-25T19:51:20.078Z`; integrity
   `sha512-6aTJ9h2mth9eYRk4UmeAZjDrQKuXiu7adkbkFqEqW2I4fhA2c4nOwc5PpIILbqA7oQG2cd0ana66GKg5g87gTw==`,
   tarball `https://registry.npmjs.org/@mr_hugo/pacer/-/pacer-0.1.0.tgz`.
-- [ ] Publish the GitHub release notes for `v0.1.0` with the source-build
+- [x] Publish the GitHub release notes for `v0.1.0` with the source-build
   instructions and artifact digests. Attach standalone WASM artifacts if
   offering direct downloads.
+  Evidence: https://github.com/HugoDaniel/pacer/releases/tag/v0.1.0,
+  published `2026-10-25T20:51:34Z`, with the tarball and both wasm files
+  attached.
 - [x] Install `@mr_hugo/pacer@0.1.0` from the registry in a new consumer
   directory; verify resolved version, dist-tag, tarball integrity and both
   playback paths.
@@ -331,9 +334,10 @@ The source release remote is `release` →
 - [ ] Record release URLs, publication time, final commit/tag and verification
   outcome here. If publication partially fails, record what succeeded before
   retrying; never reuse the version for different bytes.
-  **Partially recorded below.** Tag alignment and the GitHub release are open.
-  A `0.0.0-stage` placeholder version also exists from npm staged publishing;
-  it is not `latest` and is not part of the release.
+  Evidence: recorded below. `npm unpublish @mr_hugo/pacer@0.0.0-stage`
+  is blocked by npm's one-time-password challenge (`EOTP`); the placeholder is
+  not `latest` and is not part of the release. Complete the browser/OTP step
+  to remove it.
 
 ## Evidence record
 
@@ -341,7 +345,7 @@ Fill this in as execution proceeds. An unchecked item remains outstanding.
 
 | Item | Result / evidence |
 |---|---|
-| Candidate Pacer commit / tag | Published source `99e6c85`; tag `v0.1.0` currently at `678af2d` (pre-scope), alignment pending |
+| Candidate Pacer commit / tag | `99e6c85`; annotated tag `v0.1.0` -> `1ccefcb` -> `99e6c85`; `release/main` carries the release record (see `git ls-remote release`) |
 | Release remote | `release` → `https://github.com/HugoDaniel/pacer.git` (public, empty at preparation time) |
 | SJON version (>=1.5.0) / revision / dependency hash | 1.5.0 / `97e12f39d9e63d028aa9b124660cc4cfed4cc726` / sibling path pin; `zig fetch` source hash `pacer-0.1.0-e0Ny2EFk9QGznZaQQKpWLeGrI57aw-HEPfFtil63ijwB` |
 | pngine revision / bundle provenance | `e9aff0d`, bundle rebuilt with `node scripts/bundle.cjs`; viewer exports `payloadsOf`; four unrelated tracked edits preserved |
@@ -353,5 +357,5 @@ Fill this in as execution proceeds. An unchecked item remains outstanding.
 | Tarball filename / SHA-256 / file manifest | `mr_hugo-pacer-0.1.0.tgz` / `cba5403f…14ec96ed` / 35 entries, listed in `.agent/release/scoped-tarball-files.txt` |
 | Installed-tarball consumer checks | Node, strict TypeScript, and headless-browser smokes all pass outside the repo |
 | Documentation / limitations review | README, npm README, `docs/cli.md`, CHANGELOG and `plans/00-strategy.md` updated; Safari/tab-hide/PCM qualifiers carried |
-| Second review / exceptions / authorization | Review recorded above; npm publication authorized and complete. Open: tag alignment, GitHub release, `0.0.0-stage` cleanup decision |
-| Publication URLs / post-publish checks | npm `https://www.npmjs.com/package/@mr_hugo/pacer/v/0.1.0`; published 2026-10-25T19:51:20.078Z; integrity `sha512-6aTJ…87gTw==`; registry install + Node/TS/browser smokes pass. Tarball still `cba5403f…14ec96ed`. |
+| Second review / exceptions / authorization | Review recorded above; npm publication, tag alignment and GitHub release complete. Open: npm OTP step to remove `0.0.0-stage` |
+| Publication URLs / post-publish checks | npm `https://www.npmjs.com/package/@mr_hugo/pacer/v/0.1.0` (2026-10-25T19:51:20.078Z) and GitHub `https://github.com/HugoDaniel/pacer/releases/tag/v0.1.0` (2026-10-25T20:51:34Z). Integrity `sha512-6aTJ…87gTw==`; registry install + Node/TS/browser smokes pass. Tarball `cba5403f…14ec96ed`. |
