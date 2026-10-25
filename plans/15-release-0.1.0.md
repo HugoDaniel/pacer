@@ -21,8 +21,10 @@ release/revision for reproducibility; do not resolve a floating latest version.
 
 Use the currently configured self-hosted npm registry:
 `https://git.hugodaniel.com/api/packages/hugo/npm/`.
-Native CLI distribution defaults to documented source builds with pinned
-inputs; prebuilt native downloads can follow separately.
+Source publication uses `https://github.com/HugoDaniel/pacer.git` as the
+release remote (`git remote release`). Native CLI distribution defaults to
+documented source builds with pinned inputs; prebuilt native downloads can
+follow separately.
 
 ## Baseline findings
 
@@ -55,9 +57,11 @@ not substitutes for checks against the final release commit:
 - [x] Check remote tags and registry versions. Confirm 0.1.0 is available;
   record any existing 0.2.0 publication and its dist-tag before making changes.
   Do not overwrite a published version or silently move an existing tag.
-  Evidence: `git ls-remote --tags origin` returned no tags; remote `main` is
-  `5face6f`. `GET /api/packages/hugo/npm/pacer` returned 404 (unauthenticated),
-  so no published 0.1.0 or 0.2.0 is visible. No tag exists locally or remotely.
+  Evidence: `git ls-remote --tags origin` returned no tags; Gitea `main` is
+  `5face6f`. The release remote `release` is
+  `https://github.com/HugoDaniel/pacer.git` (public, currently empty).
+  `GET /api/packages/hugo/npm/pacer` returned 404 (unauthenticated), so no
+  published 0.1.0 or 0.2.0 is visible. No tag exists locally or remotely.
 - [ ] Confirm registry authentication and intended package visibility without
   printing tokens. Use the configured registry explicitly in read-only probes.
   **Outstanding:** `npm whoami --registry=https://git.hugodaniel.com/api/packages/hugo/npm/`
@@ -290,11 +294,18 @@ merge or registry write occurred during this preparation.
 Execute only after the second review is complete and publication is authorized.
 Nothing in this section was executed.
 
-- [ ] Commit the prepared release and tag that exact commit `v0.1.0`.
-- [ ] Push the reviewed commit/tag and publish the verified npm artifact to
-  the configured registry using the procedure established above.
-- [ ] Publish release notes with the source-build instructions and artifact
-  digests. Attach standalone WASM artifacts if offering direct downloads.
+The source release remote is `release` →
+`https://github.com/HugoDaniel/pacer.git`. The npm registry stays
+`https://git.hugodaniel.com/api/packages/hugo/npm/`.
+
+- [x] Commit the prepared release.
+  Evidence: commit `0cc3003` (`release: prepare pacer 0.1.0`).
+- [ ] Tag that exact commit `v0.1.0`.
+- [ ] Push the reviewed commit/tag to `release` and publish the verified npm
+  artifact to the configured registry using the procedure established above.
+- [ ] Publish the GitHub release notes for `v0.1.0` with the source-build
+  instructions and artifact digests. Attach standalone WASM artifacts if
+  offering direct downloads.
 - [ ] Install `pacer@0.1.0` from the registry in a new consumer directory;
   verify resolved version, dist-tag, tarball integrity and both playback paths.
 - [ ] Record release URLs, publication time, final commit/tag and verification
@@ -307,16 +318,17 @@ Fill this in as execution proceeds. An unchecked item remains outstanding.
 
 | Item | Result / evidence |
 |---|---|
-| Candidate Pacer commit / tag | Release commit on top of `5face6f` (see `git log -1`); no tag yet |
+| Candidate Pacer commit / tag | Release commit (`0cc3003`) plus this release-remote note on top of `5face6f`; no tag yet |
+| Release remote | `release` → `https://github.com/HugoDaniel/pacer.git` (public, empty at preparation time) |
 | SJON version (>=1.5.0) / revision / dependency hash | 1.5.0 / `97e12f39d9e63d028aa9b124660cc4cfed4cc726` / sibling path pin; `zig fetch` source hash `pacer-0.1.0-e0Ny2EFk9QGznZaQQKpWLeGrI57aw-HEPfFtil63ijwB` |
 | pngine revision / bundle provenance | `e9aff0d`, bundle rebuilt with `node scripts/bundle.cjs`; viewer exports `payloadsOf`; four unrelated tracked edits preserved |
 | Toolchain / host | Zig 0.16.0, Node v26.12.0, npm 11.20.0, macOS 27.0.1, arm64 |
-| Remote tags / registry availability | No local/remote tags; remote `main` `5face6f`; registry package endpoint 404 (unauthenticated); no visible published 0.1.0/0.2.0 |
+| Remote tags / registry availability | No local/remote tags; Gitea `main` `5face6f`; GitHub release remote empty; registry package endpoint 404 (unauthenticated); no visible published 0.1.0/0.2.0 |
 | Full gate logs / test totals / skip reasons | `zig build verify` 0: native 749/749, Node 182 (180 pass, 2 skip, 0 fail), corpus 44/44, CLI goldens/docs current. `audit-diagnostics audit-rt-imports fuzz parity` 0: parity 44/44. npm lint/typecheck/test 0; g5:test 10/10; test:browser 10/10. Skips: frozen pre-SNAM artifact absent (optional historical comparison). Logs in `.agent/release/` (gitignored). |
 | Browser proof | G5 10/10; installed-tarball browser smoke: diagnostics empty, text+binary 0.25/0.5/0.75, zero console errors |
 | WASM SHA-256 / repeat-build comparison | `pacer.wasm` `5a6d5316…f365eb097a`; `pacer-rt.wasm` `34fa25a7…cba74770d8`; two independent fresh-cache builds and both shipped copies agree |
 | Tarball filename / SHA-256 / file manifest | `pacer-0.1.0.tgz` / `158fe6e8…9ee661c9` / 35 entries, listed in `.agent/release/tarball-files.txt` |
 | Installed-tarball consumer checks | Node, strict TypeScript, and headless-browser smokes all pass outside the repo |
 | Documentation / limitations review | README, npm README, `docs/cli.md`, CHANGELOG and `plans/00-strategy.md` updated; Safari/tab-hide/PCM qualifiers carried |
-| Second review / exceptions / authorization | Review recorded above; blockers: registry auth/visibility, candidate commit/tag, owner authorization |
+| Second review / exceptions / authorization | Review recorded above; blockers: registry auth/visibility, tag, owner authorization |
 | Publication URLs / post-publish checks | Not performed — intentionally stopped before §6 |
